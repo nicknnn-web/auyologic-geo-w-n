@@ -100,9 +100,17 @@
 
             <!-- GEO检测 -->
             <div v-if="!isCollapse" class="px-4 py-0.5 text-xs text-gray-400">GEO检测</div>
-            <el-menu-item index="/website-optimization">
+            <el-menu-item index="/geo-detection">
               <el-icon><Aim /></el-icon>
+              <template #title>可见度检测</template>
+            </el-menu-item>
+            <el-menu-item index="/website-optimization">
+              <el-icon><Monitor /></el-icon>
               <template #title>网站优化检测</template>
+            </el-menu-item>
+            <el-menu-item index="/geo-report">
+              <el-icon><DataAnalysis /></el-icon>
+              <template #title>改进方案报告</template>
             </el-menu-item>
           </el-menu>
         </el-aside>
@@ -118,7 +126,7 @@
 
 <script setup>
 import { ref } from 'vue'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis } from '@element-plus/icons-vue'
 
 const isCollapse = ref(false)
 </script>

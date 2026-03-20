@@ -256,6 +256,7 @@ import {
   WarnTriangleFilled, CircleCheckFilled, Key, CircleCheck, FolderOpened, ArrowLeft
 } from '@element-plus/icons-vue'
 import { getData, saveData } from '../utils/storage'
+import { analyzeWebsite } from '../utils/websiteAnalyzer'
 
 // ===== 常量 =====
 const dimLabels = {
@@ -459,22 +460,75 @@ const gradeDesc = computed(() => {
 })
 
 // ===== 方法 =====
+// 进度更新回调
+const updateProgress = (progress, dimension) => {
+  if (!dimension || dimension === 'complete') {
+    dimensions.value.forEach(d => { d.done = true; d.active = false })
+    return
+  }
+  const dimMap = { tech: 0, structure: 1, schema: 2, aiFriendly: 3 }
+  const dimIndex = dimMap[dimension]
+  if (dimIndex !== undefined) {
+    dimensions.value.forEach((d, i) => {
+      if (i < dimIndex) { d.done = true; d.active = false }
+      else if (i === dimIndex) { d.active = true; d.done = false }
+      else { d.done = false; d.active = false }
+    })
+  }
+}
+
+// 根据检测项获取维度
+const getDimByItem = (itemName) => {
+  const dimMap = {
+    'HTTPS 协议': '技术基础', 'robots.txt': '技术基础', 'Canonical 标签': '技术基础',
+    'Title 标签': '页面结构', 'Meta Description': '页面结构', 'H1 标签': '页面结构',
+    'H2-H6层级': '页面结构', '内容长度': '页面结构', '图片Alt标签': '页面结构',
+    'JSON-LD Schema': '结构化数据', 'OpenGraph标签': '结构化数据',
+    '服务端渲染': 'AI亲和性', 'FAQ内容': 'AI亲和性', 'AI爬虫权限': 'AI亲和性'
+  }
+  return dimMap[itemName] || ''
+}
+
 const handleStartCheck = async () => {
   if (!inputUrl.value.trim()) return
-
-  // 重置状态
   report.value = null
   dimensions.value.forEach(d => { d.done = false; d.active = false })
-
   checking.value = true
 
-  await runMockCheck(inputUrl.value)
-
-  report.value = generateReport(inputUrl.value)
+  try {
+    // 执行真正的网站检测
+    const result = await analyzeWebsite(inputUrl.value, updateProgress)
+    const totalScore = result.dimensions.tech.score + result.dimensions.structure.score + result.dimensions.schema.score + result.dimensions.aiFriendly.score
+    
+    // 转换数据格式以匹配现有UI
+    report.value = {
+      url: result.url,
+      score: totalScore,
+      items: result.dimensions,
+      issues: result.issues,
+      checkedAt: result.checkedAt,
+      details: result.details.map(d => ({
+        dimension: '',
+        item: d.name,
+        result: d.result,
+        value: d.value,
+        suggestion: d.result === 'pass' ? '保持现状' : '建议优化'
+      }))
+    }
+    // 更新维度标签
+    report.value.details = report.value.details.map(d => {
+      const item = result.dimensions.tech.items.find(i => i.name === d.item)
+        || result.dimensions.structure.items.find(i => i.name === d.item)
+        || result.dimensions.schema.items.find(i => i.name === d.item)
+        || result.dimensions.aiFriendly.items.find(i => i.name === d.item)
+      return { ...d, dimension: item ? getDimByItem(item.name) : '' }
+    })
+  } catch (error) {
+    console.error('检测失败:', error)
+    ElMessage.error({ message: '检测失败: ' + error.message, offset: 80 })
+  }
   checking.value = false
-
-  // 同步到控制台数据
-  syncToDashboard()
+  if (report.value) syncToDashboard()
 }
 
 const handleNewCheck = () => {

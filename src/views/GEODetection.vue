@@ -112,22 +112,78 @@
 
     <!-- 步骤4：结果 -->
     <div v-if="currentStep === 3" class="gd-content gd-result-panel">
+      <!-- 顶部概览卡片 -->
+      <div class="result-overview">
+        <div class="overview-left">
+          <div class="overview-main-score" :class="overallGradeClass">
+            <div class="main-score-num">{{ overallScore }}</div>
+            <div class="main-score-label">综合得分</div>
+            <div class="main-grade-badge" :class="overallGradeClass">{{ overallGrade }}级</div>
+          </div>
+          <div class="overview-stats">
+            <div class="stat-item success">
+              <div class="stat-num">{{ visibleCount }}</div>
+              <div class="stat-label">品牌可见</div>
+            </div>
+            <div class="stat-item danger">
+              <div class="stat-num">{{ missingCount }}</div>
+              <div class="stat-label">品牌缺失</div>
+            </div>
+            <div class="stat-item info">
+              <div class="stat-num">{{ detectionPlatforms.length }}</div>
+              <div class="stat-label">检测平台</div>
+            </div>
+          </div>
+        </div>
+        <!-- 雷达图 -->
+        <div class="overview-radar">
+          <div class="radar-title">关键词得分分布</div>
+          <RadarChart :data="radarChartData" />
+        </div>
+      </div>
+
+      <!-- 工具栏 -->
       <div class="result-toolbar">
         <el-button text @click="resetDetection"><el-icon class="mr-1"><RefreshLeft /></el-icon>重新检测</el-button>
+        <el-button type="primary" @click="handleGenerateReport"><el-icon class="mr-1"><Document /></el-icon>生成详细报告</el-button>
         <el-button text @click="handleExportResult"><el-icon class="mr-1"><Download /></el-icon>导出报告</el-button>
       </div>
+
+      <!-- 问题类型筛选 -->
+      <div class="result-filter-bar">
+        <el-radio-group v-model="categoryFilter" size="small">
+          <el-radio-button label="">全部 ({{ detectionResults.length }})</el-radio-button>
+          <el-radio-button label="品牌">品牌 ({{ categoryCounts['品牌'] || 0 }})</el-radio-button>
+          <el-radio-button label="产品">产品 ({{ categoryCounts['产品'] || 0 }})</el-radio-button>
+          <el-radio-button label="场景">场景 ({{ categoryCounts['场景'] || 0 }})</el-radio-button>
+        </el-radio-group>
+      </div>
+
       <div class="result-tabs">
-        <button :class="['result-tab', { active: resultTab === 'visible' }]" @click="resultTab = 'visible'"><el-icon color="#67c23a"><SuccessFilled /></el-icon>品牌可见 <el-badge :value="visibleCount" type="success" /></button>
-        <button :class="['result-tab', { active: resultTab === 'missing' }]" @click="resultTab = 'missing'"><el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon>品牌缺失 <el-badge :value="missingCount" type="danger" /></button>
+        <button :class="['result-tab', { active: resultTab === 'visible' }]" @click="resultTab = 'visible'"><el-icon color="#67c23a"><SuccessFilled /></el-icon>品牌可见 <el-badge :value="filteredVisibleCount" type="success" /></button>
+        <button :class="['result-tab', { active: resultTab === 'missing' }]" @click="resultTab = 'missing'"><el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon>品牌缺失 <el-badge :value="filteredMissingCount" type="danger" /></button>
       </div>
 
       <!-- 品牌可见 -->
       <div v-if="resultTab === 'visible'" class="result-list">
-        <div v-if="visibleQuestions.length === 0" class="result-empty"><el-icon size="40" color="#dcdfe6"><SuccessFilled /></el-icon><p>暂无数据</p></div>
-        <div v-for="item in visibleQuestions" :key="item.questionId" class="result-card visible">
+        <div v-if="filteredVisibleQuestions.length === 0" class="result-empty"><el-icon size="40" color="#dcdfe6"><SuccessFilled /></el-icon><p>暂无数据</p></div>
+        <div v-for="item in filteredVisibleQuestions" :key="item.questionId" class="result-card visible" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">
+          <div class="result-card-header">
+            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">{{ item.category }}</el-tag>
+            <div class="result-score" :class="getScoreClass(item.avgScore)">
+              <span class="score-num">{{ item.avgScore }}</span>
+              <span class="score-label">分</span>
+            </div>
+          </div>
           <div class="result-card-main">
             <div class="result-question">{{ item.question }}</div>
-            <div class="result-meta"><el-tag size="small" type="info">{{ item.category }}</el-tag><span class="result-source">来源：{{ item.sourceKeyword }}</span></div>
+            <div class="result-meta"><span class="result-source">关键词：{{ item.sourceKeyword }}</span></div>
+          </div>
+          <!-- 得分明细 -->
+          <div class="result-score-detail">
+            <div class="score-item"><span class="score-item-label">提及率</span><el-progress :percentage="getMentionRate(item)" :stroke-width="6" :show-text="false" /><span class="score-item-val">{{ getMentionRate(item) }}%</span></div>
+            <div class="score-item"><span class="score-item-label">位置得分</span><el-progress :percentage="getPositionScore(item)" :stroke-width="6" :show-text="false" /><span class="score-item-val">{{ getPositionScore(item) }}</span></div>
+            <div class="score-item"><span class="score-item-label">情感倾向</span><el-progress :percentage="getSentimentScore(item)" :stroke-width="6" :show-text="false" :color="getSentimentColor(item)" /><span class="score-item-val" :style="{ color: getSentimentColor(item) }">{{ getSentimentLabel(item) }}</span></div>
           </div>
           <div class="result-card-platforms">
             <div v-for="p in item.platforms" :key="p.name" class="platform-badge" :class="{ mentioned: p.mentioned, 'not-mentioned': !p.mentioned }">
@@ -142,12 +198,19 @@
 
       <!-- 品牌缺失 -->
       <div v-if="resultTab === 'missing'" class="result-list">
-        <div v-if="missingCount > 0" class="missing-header"><div class="missing-info"><el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon><span>共 <strong>{{ missingCount }}</strong> 个问题中您的品牌未被提及，这些是需要重点覆盖的内容缺口</span></div></div>
-        <div v-if="missingQuestions.length === 0" class="result-empty"><el-icon size="40" color="#67c23a"><SuccessFilled /></el-icon><p>太棒了！所有问题中您的品牌都已被提及</p></div>
-        <div v-for="item in missingQuestions" :key="item.questionId" class="result-card missing">
+        <div v-if="filteredMissingCount > 0" class="missing-header"><div class="missing-info"><el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon><span>共 <strong>{{ filteredMissingCount }}</strong> 个问题中您的品牌未被提及，这些是需要重点覆盖的内容缺口</span></div></div>
+        <div v-if="filteredMissingQuestions.length === 0" class="result-empty"><el-icon size="40" color="#67c23a"><SuccessFilled /></el-icon><p>太棒了！该类型问题中您的品牌都已被提及</p></div>
+        <div v-for="item in filteredMissingQuestions" :key="item.questionId" class="result-card missing" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">
+          <div class="result-card-header">
+            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">{{ item.category }}</el-tag>
+            <div class="result-score missing-score">
+              <span class="score-num">0</span>
+              <span class="score-label">分</span>
+            </div>
+          </div>
           <div class="result-card-main">
             <div class="result-question">{{ item.question }}</div>
-            <div class="result-meta"><el-tag size="small" type="info">{{ item.category }}</el-tag><span class="result-source">来源：{{ item.sourceKeyword }}</span></div>
+            <div class="result-meta"><span class="result-source">关键词：{{ item.sourceKeyword }}</span></div>
           </div>
           <div class="result-card-platforms">
             <div v-for="p in item.platforms" :key="p.name" class="platform-badge not-mentioned">
@@ -167,11 +230,125 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock, Document } from '@element-plus/icons-vue'
 import { getList, getData, saveData } from '../utils/storage'
+
+/**
+ * 雷达图组件 - 用SVG实现
+ * 显示4个维度：提及率、位置得分、情感得分、相关性得分
+ * 按关键词类型配色：品牌=紫色、产品=绿色、场景=橙色
+ */
+const RadarChart = {
+  props: {
+    data: {
+      type: Object,
+      default: () => ({})
+    }
+  },
+  setup(props) {
+    const size = 180
+    const center = size / 2
+    const maxRadius = 70
+    const levels = 4
+    
+    // 计算点的位置
+    const getPointPosition = (angle, value) => {
+      const radian = (angle - 90) * Math.PI / 180
+      const radius = (value / 100) * maxRadius
+      return {
+        x: center + radius * Math.cos(radian),
+        y: center + radius * Math.sin(radian)
+      }
+    }
+    
+    // 获取多边形路径
+    const getPolygonPath = (values) => {
+      const angles = [0, 90, 180, 270]
+      const points = angles.map((angle, idx) => {
+        const pos = getPointPosition(angle, values[idx] || 0)
+        return `${pos.x},${pos.y}`
+      })
+      return `M ${points.join(' L ')} Z`
+    }
+    
+    // 标签位置
+    const getLabelPosition = (angle) => {
+      const radian = (angle - 90) * Math.PI / 180
+      const labelRadius = maxRadius + 20
+      return {
+        x: center + labelRadius * Math.cos(radian),
+        y: center + labelRadius * Math.sin(radian)
+      }
+    }
+    
+    const labels = ['提及率', '位置得分', '情感得分', '相关性']
+    const angles = [0, 90, 180, 270]
+    
+    return () => h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}` }, [
+      // 背景网格
+      h('g', { class: 'radar-grid' }, [
+        // 层级圆
+        ...Array.from({ length: levels }, (_, i) => {
+          const r = ((i + 1) / levels) * maxRadius
+          return h('circle', {
+            cx: center, cy: center, r,
+            fill: 'none', stroke: '#e4e7ed', 'stroke-dasharray': '3,3'
+          })
+        }),
+        // 轴线
+        ...angles.map(angle => {
+          const pos = getPointPosition(angle, 100)
+          return h('line', {
+            x1: center, y1: center, x2: pos.x, y2: pos.y,
+            stroke: '#e4e7ed'
+          })
+        })
+      ]),
+      // 数据多边形
+      h('polygon', {
+        points: getPolygonPath([
+          props.data.mention || 0,
+          props.data.position || 0,
+          props.data.sentiment || 0,
+          props.data.relevance || 0
+        ]),
+        fill: 'rgba(64, 158, 255, 0.2)',
+        stroke: '#409eff',
+        'stroke-width': 2
+      }),
+      // 数据点
+      ...angles.map((angle, idx) => {
+        const values = [props.data.mention || 0, props.data.position || 0, props.data.sentiment || 0, props.data.relevance || 0]
+        const pos = getPointPosition(angle, values[idx])
+        return h('circle', {
+          cx: pos.x, cy: pos.y, r: 4,
+          fill: '#409eff'
+        })
+      }),
+      // 标签
+      ...labels.map((label, idx) => {
+        const pos = getLabelPosition(angles[idx])
+        return h('text', {
+          x: pos.x, y: pos.y + 4,
+          'text-anchor': 'middle',
+          fill: '#606266',
+          'font-size': '11'
+        }, label)
+      }),
+      // 鼠标悬停提示区域（透明）
+      h('g', { class: 'radar-tooltip' }, [
+        ...angles.map((angle, idx) => {
+          const values = [props.data.mention || 0, props.data.position || 0, props.data.sentiment || 0, props.data.relevance || 0]
+          const pos = getPointPosition(angle, values[idx])
+          return h('title', {}, `${labels[idx]}: ${values[idx]}`)
+        })
+      ])
+    ])
+  }
+}
 
 // ==================== DeepSeek API 配置 ====================
 const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
@@ -394,6 +571,126 @@ const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '�
 const currentStep = ref(0)
 const detectionDone = computed(() => currentStep.value === 3)
 const resultTab = ref('missing')
+const categoryFilter = ref('')
+
+// 关键词类型颜色配置
+const categoryColors = {
+  '品牌': { tag: '#722ed1', bg: '#f3e8ff', border: '#b37feb' },  // 紫色
+  '产品': { tag: '#52c41a', bg: '#f6ffed', border: '#95de64' },   // 绿色
+  '场景': { tag: '#fa8c16', bg: '#fff7e6', border: '#ffd591' }    // 橙色
+}
+
+// 计算雷达图数据（按类型聚合）
+const radarChartData = computed(() => {
+  if (detectionResults.value.length === 0) return { mention: 0, position: 0, sentiment: 0, relevance: 0 }
+  
+  let totalMention = 0, totalPosition = 0, totalSentiment = 0, totalRelevance = 0
+  let count = 0
+  
+  detectionResults.value.forEach(item => {
+    item.platforms.forEach(p => {
+      if (p.mentioned) {
+        totalMention += 100
+        // 位置得分
+        totalPosition += p.semanticRelevance ? 70 : 40
+        // 情感得分
+        if (p.sentiment === 'positive') totalSentiment += 100
+        else if (p.sentiment === 'neutral') totalSentiment += 50
+        else totalSentiment += 20
+        // 相关性得分
+        totalRelevance += (p.semanticRelevance || 0) * 100
+        count++
+      }
+    })
+  })
+  
+  if (count === 0) return { mention: 0, position: 0, sentiment: 0, relevance: 0 }
+  
+  return {
+    mention: Math.round(totalMention / count),
+    position: Math.round(totalPosition / count),
+    sentiment: Math.round(totalSentiment / count),
+    relevance: Math.round(totalRelevance / count)
+  }
+})
+
+// 按类型统计数量
+const categoryCounts = computed(() => {
+  const counts = {}
+  detectionResults.value.forEach(item => {
+    counts[item.category] = (counts[item.category] || 0) + 1
+  })
+  return counts
+})
+
+// 筛选后的可见问题
+const filteredVisibleQuestions = computed(() => {
+  let list = visibleQuestions.value
+  if (categoryFilter.value) {
+    list = list.filter(item => item.category === categoryFilter.value)
+  }
+  return list
+})
+
+// 筛选后的缺失问题
+const filteredMissingQuestions = computed(() => {
+  let list = missingQuestions.value
+  if (categoryFilter.value) {
+    list = list.filter(item => item.category === categoryFilter.value)
+  }
+  return list
+})
+
+const filteredVisibleCount = computed(() => filteredVisibleQuestions.value.length)
+const filteredMissingCount = computed(() => filteredMissingQuestions.value.length)
+
+// 计算提及率
+const getMentionRate = (item) => {
+  const mentioned = item.platforms.filter(p => p.mentioned).length
+  return Math.round((mentioned / item.platforms.length) * 100)
+}
+
+// 计算位置得分
+const getPositionScore = (item) => {
+  const scores = item.platforms.filter(p => p.mentioned).map(p => p.semanticRelevance ? 70 : 40)
+  return scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0
+}
+
+// 计算情感得分
+const getSentimentScore = (item) => {
+  const sentiments = item.platforms.filter(p => p.mentioned).map(p => {
+    if (p.sentiment === 'positive') return 100
+    if (p.sentiment === 'neutral') return 50
+    return 20
+  })
+  return sentiments.length > 0 ? Math.round(sentiments.reduce((a, b) => a + b, 0) / sentiments.length) : 50
+}
+
+// 获取情感标签
+const getSentimentLabel = (item) => {
+  const sentiments = item.platforms.filter(p => p.mentioned).map(p => p.sentiment)
+  if (sentiments.length === 0) return '未知'
+  const positive = sentiments.filter(s => s === 'positive').length
+  if (positive > sentiments.length / 2) return '正面'
+  const negative = sentiments.filter(s => s === 'negative').length
+  if (negative > sentiments.length / 2) return '负面'
+  return '中性'
+}
+
+// 获取情感颜色
+const getSentimentColor = (item) => {
+  const label = getSentimentLabel(item)
+  if (label === '正面') return '#67c23a'
+  if (label === '负面') return '#f56c6c'
+  return '#909399'
+}
+
+// 获取得分样式类
+const getScoreClass = (score) => {
+  if (score >= 80) return 'score-high'
+  if (score >= 60) return 'score-mid'
+  return 'score-low'
+}
 
 const questions = ref([])
 const selectedQuestions = ref([])
@@ -721,6 +1018,33 @@ const handleGenerateContent = (question) => {
   router.push({ path: '/content-create', query: { topic: question } })
 }
 
+/**
+ * 生成详细报告 - 跳转到Dashboard展示
+ */
+const handleGenerateReport = () => {
+  // 保存完整报告数据到storage
+  const allData = getData()
+  allData['geo-full-report'] = {
+    overallScore: overallScore.value,
+    overallGrade: overallGrade.value,
+    visibleCount: visibleQuestions.value.length,
+    missingCount: missingQuestions.value.length,
+    platformCount: selectedPlatforms.value.length,
+    categoryCounts: categoryCounts.value,
+    radarData: radarChartData.value,
+    results: detectionResults.value,
+    checkedAt: new Date().toISOString()
+  }
+  saveData(allData)
+  
+  // 跳转到Dashboard
+  router.push('/dashboard')
+  ElMessage.success({
+    message: '报告已生成，正在跳转到Dashboard',
+    offset: 80
+  })
+}
+
 const handleExportResult = () => {
   const data = {
     exportedAt: new Date().toISOString(),
@@ -770,6 +1094,92 @@ onMounted(() => {
 .gd-header-icon{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#7070f0,#9090f5);display:flex;align-items:center;justify-content:center;color:white;font-size:22px;box-shadow:0 4px 12px rgba(112,112,240,0.3)}
 .gd-title{font-size:20px;font-weight:700;color:#1a1a1a;margin:0 0 4px}
 .gd-subtitle{font-size:13px;color:#909399;margin:0}
+
+/* 结果页顶部概览 */
+.result-overview{display:flex;gap:24px;margin-bottom:20px;padding:20px;background:linear-gradient(135deg,#f8f9fc,#fff);border-radius:14px;border:1px solid #ebeef5}
+.overview-left{flex:1;display:flex;flex-direction:column;gap:16px}
+.overview-main-score{display:flex;align-items:center;gap:16px;padding:20px;background:white;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06)}
+.main-score-num{font-size:48px;font-weight:900;line-height:1}
+.main-score-label{font-size:14px;color:#909399}
+.main-grade-badge{font-size:16px;font-weight:800;padding:4px 16px;border-radius:20px}
+.overview-main-score.grade-green .main-score-num{color:#67c23a}
+.overview-main-score.grade-green .main-grade-badge{background:#e1f3d8;color:#67c23a}
+.overview-main-score.grade-yellow .main-score-num{color:#e6a23c}
+.overview-main-score.grade-yellow .main-grade-badge{background:#faecd8;color:#e6a23c}
+.overview-main-score.grade-red .main-score-num{color:#f56c6c}
+.overview-main-score.grade-red .main-grade-badge{background:#fde2e2;color:#f56c6c}
+.overview-stats{display:flex;gap:12px}
+.stat-item{flex:1;padding:14px;background:white;border-radius:10px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.stat-num{font-size:26px;font-weight:800;line-height:1}
+.stat-label{font-size:12px;color:#909399;margin-top:4px}
+.stat-item.success .stat-num{color:#67c23a}
+.stat-item.danger .stat-num{color:#f56c6c}
+.stat-item.info .stat-num{color:#409eff}
+
+/* 雷达图区域 */
+.overview-radar{width:220px;padding:16px;background:white;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.radar-title{font-size:13px;font-weight:600;color:#303133;text-align:center;margin-bottom:8px}
+
+/* 工具栏 */
+.result-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #ebeef5}
+
+/* 筛选栏 */
+.result-filter-bar{margin-bottom:12px}
+
+.result-tabs{display:flex;gap:4px;background:#f5f7fa;border-radius:10px;padding:4px;margin-bottom:16px}
+.result-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 16px;background:transparent;border:none;border-radius:7px;font-size:13px;font-weight:500;color:#909399;cursor:pointer;transition:all .2s}
+.result-tab.active{background:white;color:#303133;box-shadow:0 1px 4px rgba(0,0,0,0.08)}
+
+.result-list{display:flex;flex-direction:column;gap:12px}
+.result-empty{text-align:center;padding:48px 0;color:#909399}
+.result-empty p{margin-top:12px;font-size:14px}
+
+/* 改进的结果卡片 */
+.result-card{background:#fafbfc;border:1px solid #ebeef5;border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:12px;transition:all .2s}
+.result-card:hover{box-shadow:0 4px 12px rgba(0,0,0,0.08)}
+.result-card.missing{border-left:3px solid #f56c6c;background:#fef9f9}
+.result-card.visible{border-left:3px solid #67c23a}
+
+/* 按类型的差异化样式 */
+.result-card.cat-brand{border-left-color:#b37feb}
+.result-card.cat-product{border-left-color:#52c41a}
+.result-card.cat-scene{border-left-color:#fa8c16}
+
+/* 卡片头部 */
+.result-card-header{display:flex;justify-content:space-between;align-items:center}
+.cat-tag-brand{background:#f3e8ff;color:#722ed1;border-color:#b37feb}
+.cat-tag-product{background:#f6ffed;color:#52c41a;border-color:#95de64}
+.cat-tag-scene{background:#fff7e6;color:#fa8c16;border-color:#ffd591}
+
+/* 得分显示 */
+.result-score{display:flex;align-items:baseline;gap:2px;padding:4px 12px;border-radius:20px;background:#f0f9eb}
+.result-score .score-num{font-size:20px;font-weight:800}
+.result-score .score-label{font-size:12px;color:#909399}
+.result-score.score-high{background:#e1f3d8;color:#67c23a}
+.result-score.score-mid{background:#faecd8;color:#e6a23c}
+.result-score.score-low{background:#fde2e2;color:#f56c6c}
+.result-score.missing-score{background:#f5f7fa;color:#909399}
+
+.result-question{font-size:15px;font-weight:600;color:#303133;line-height:1.5}
+.result-meta{display:flex;align-items:center;gap:10px}
+.result-source{font-size:12px;color:#909399}
+
+/* 得分明细 */
+.result-score-detail{display:flex;gap:16px;padding:10px;background:white;border-radius:8px}
+.result-score-detail .score-item{flex:1;display:flex;flex-direction:column;gap:4px}
+.result-score-detail .score-item-label{font-size:11px;color:#909399}
+.result-score-detail .score-item-val{font-size:12px;font-weight:600;text-align:right}
+
+.result-card-platforms{display:flex;flex-wrap:wrap;gap:8px}
+.platform-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;border:1px solid #e4e7ed;background:white}
+.platform-badge.mentioned{border-color:#67c23a;background:#f0f9eb;color:#67c23a}
+.platform-badge.not-mentioned{color:#c0c4cc}
+.platform-badge-icon{font-size:13px}
+.platform-badge-name{font-size:12px}
+.result-card-action{display:flex;justify-content:flex-end}
+
+.missing-header{background:#fef0f0;border:1px solid #fde2e2;border-radius:10px;padding:12px 16px;margin-bottom:4px}
+.missing-info{display:flex;align-items:center;gap:8px;font-size:13px;color:#f56c6c}
 .gd-overview-grid{display:grid;grid-template-columns:160px 1fr 1fr 1fr;gap:14px;margin-bottom:24px}
 .overview-score-card{border-radius:14px;padding:20px;text-align:center;background:#fafbfc;border:1px solid #ebeef5}
 .overview-score-card.grade-green{background:linear-gradient(135deg,#f0f9eb,#fff);border-color:#c2e7b0}
