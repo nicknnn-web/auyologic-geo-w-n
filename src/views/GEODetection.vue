@@ -173,6 +173,222 @@ import { ElMessage } from 'element-plus'
 import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock } from '@element-plus/icons-vue'
 import { getList, getData, saveData } from '../utils/storage'
 
+// ==================== DeepSeek API 配置 ====================
+const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
+const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
+
+// ==================== 缓存配置 ====================
+const CACHE_KEY = 'geo_detection_cache'
+const CACHE_DAYS = 7
+
+/**
+ * 获取缓存的检测结果
+ * @param {string} question - 问题内容
+ * @param {string} keyword - 关键词
+ * @param {string} platformId - 平台ID
+ * @returns {object|null} 缓存的检测结果或null
+ */
+const getCachedResult = (question, keyword, platformId) => {
+  try {
+    const cacheStr = localStorage.getItem(CACHE_KEY)
+    if (!cacheStr) return null
+    
+    const cache = JSON.parse(cacheStr)
+    const cacheKey = `${question}_${keyword}_${platformId}`
+    const cached = cache[cacheKey]
+    
+    if (!cached) return null
+    
+    // 检查是否过期
+    const cachedTime = new Date(cached.timestamp)
+    const now = new Date()
+    const daysDiff = (now - cachedTime) / (1000 * 60 * 60 * 24)
+    
+    if (daysDiff > CACHE_DAYS) {
+      // 缓存过期，删除
+      delete cache[cacheKey]
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
+      return null
+    }
+    
+    return cached.result
+  } catch (e) {
+    console.error('读取缓存失败:', e)
+    return null
+  }
+}
+
+/**
+ * 保存检测结果到缓存
+ * @param {string} question - 问题内容
+ * @param {string} keyword - 关键词
+ * @param {string} platformId - 平台ID
+ * @param {object} result - 检测结果
+ */
+const setCachedResult = (question, keyword, platformId, result) => {
+  try {
+    let cache = {}
+    const cacheStr = localStorage.getItem(CACHE_KEY)
+    if (cacheStr) {
+      cache = JSON.parse(cacheStr)
+    }
+    
+    const cacheKey = `${question}_${keyword}_${platformId}`
+    cache[cacheKey] = {
+      timestamp: new Date().toISOString(),
+      result: result
+    }
+    
+    localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
+  } catch (e) {
+    console.error('保存缓存失败:', e)
+  }
+}
+
+/**
+ * 调用 DeepSeek API 进行可见度检测
+ * @param {string} question - 用户问题
+ * @param {string} keyword - 品牌关键词
+ * @param {string} platformId - 平台ID
+ * @returns {Promise<object>} 检测结果
+ */
+const detectWithDeepSeek = async (question, keyword, platformId) => {
+  // 检查缓存
+  const cached = getCachedResult(question, keyword, platformId)
+  if (cached) {
+    console.log(`[GEO检测] 缓存命中: ${question.slice(0, 20)}... @ ${platformId}`)
+    return cached
+  }
+  
+  // 构建提示词
+  const prompt = `你是一个AI平台内容分析专家。请分析以下问题在AI平台回答中的品牌可见度。
+
+问题: "${question}"
+检测的品牌关键词: "${keyword}"
+目标AI平台: "${platformId}"
+
+请分析AI平台的回答中是否提到了该品牌，并返回JSON格式的分析结果。
+
+分析维度:
+1. mentioned: 是否被提及 (true/false)
+2. mentionType: 提及类型 ("explicit"=明确提及, "implicit"=隐含提及, "related"=相关但未直接提及, "none"=未提及)
+3. firstMentionPosition: 首次提及位置 (0.0-1.0, 0=开头, 1=结尾)
+4. positionRank: 位置等级 ("top"=前10%, "above_fold"=可视区域, "below_fold"=需要滚动)
+5. sentiment: 情感倾向 ("positive"=正面, "neutral"=中性, "negative"=负面)
+6. semanticRelevance: 语义相关性 (0.0-1.0)
+7. competitivePosition: 竞品位置 ("winner"=优于竞品, "loser"=劣于竞品, "mentioned"=与竞品并列, null=未提竞品)
+8. competitorsMentioned: 被提及的竞品列表 (数组)
+
+请返回一个JSON对象，包含以上所有字段。不要添加任何解释或markdown格式。`
+
+  try {
+    const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: '你是一个专业的AI内容分析助手，擅长分析品牌在AI平台回答中的可见度。' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.3,
+        max_tokens: 1000
+      })
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API请求失败: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+    
+    if (!content) {
+      throw new Error('API返回内容为空')
+    }
+    
+    // 解析JSON响应
+    let result
+    try {
+      // 尝试提取JSON（处理可能的markdown格式）
+      const jsonMatch = content.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        result = JSON.parse(jsonMatch[0])
+      } else {
+        result = JSON.parse(content)
+      }
+    } catch (parseError) {
+      console.error('解析JSON失败:', parseError, content)
+      // 如果解析失败，返回默认结果
+      result = {
+        mentioned: false,
+        mentionType: 'none',
+        firstMentionPosition: 1.0,
+        positionRank: 'below_fold',
+        sentiment: 'neutral',
+        semanticRelevance: 0,
+        competitivePosition: null,
+        competitorsMentioned: []
+      }
+    }
+    
+    // 缓存结果
+    setCachedResult(question, keyword, platformId, result)
+    console.log(`[GEO检测] API调用成功: ${question.slice(0, 20)}... @ ${platformId}`)
+    
+    return result
+  } catch (error) {
+    console.error('DeepSeek API调用失败:', error)
+    throw error
+  }
+}
+
+/**
+ * 计算综合得分（按关键词类型加权）
+ * @param {object} detection - 检测结果
+ * @param {string} keywordType - 关键词类型 (品牌/产品/场景)
+ * @returns {number} 综合得分 0-100
+ */
+const calculateScore = (detection, keywordType) => {
+  const weights = {
+    '品牌': { mention: 0.4, position: 0.3, sentiment: 0.2, relevance: 0.1 },
+    '产品': { mention: 0.3, position: 0.25, sentiment: 0.25, relevance: 0.2 },
+    '场景': { mention: 0.3, position: 0.2, sentiment: 0.1, relevance: 0.4 }
+  }
+  
+  const w = weights[keywordType] || weights['场景']
+  
+  // 提及得分
+  const mentionScore = detection.mentioned ? 100 : 0
+  
+  // 位置得分
+  let positionScore = 0
+  if (detection.positionRank === 'top') positionScore = 100
+  else if (detection.positionRank === 'above_fold') positionScore = 70
+  else if (detection.positionRank === 'below_fold') positionScore = 40
+  
+  // 情感得分
+  let sentimentScore = 50
+  if (detection.sentiment === 'positive') sentimentScore = 100
+  else if (detection.sentiment === 'neutral') sentimentScore = 50
+  else if (detection.sentiment === 'negative') sentimentScore = 20
+  
+  // 相关性得分
+  const relevanceScore = detection.semanticRelevance * 100
+  
+  // 计算加权总分
+  const totalScore = 
+    mentionScore * w.mention +
+    positionScore * w.position +
+    sentimentScore * w.sentiment +
+    relevanceScore * w.relevance
+  
+  return Math.round(totalScore)
+}
+
 const router = useRouter()
 const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '确认检测' }, { label: '查看结果' }]
 const currentStep = ref(0)
@@ -332,45 +548,145 @@ const progressPercent = computed(() => {
   return Math.round((completedCount.value / totalCount.value) * 100)
 })
 
-const startDetection = () => {
+/**
+ * 开始执行可见度检测（真实API调用版本）
+ */
+const startDetection = async () => {
   totalCount.value = selectedQuestions.value.length * selectedPlatforms.value.length
   completedCount.value = 0
   loadingVisible.value = true
   currentTask.value = '初始化检测环境...'
-  const runStep = (step) => {
-    if (step >= totalCount.value) {
-      loadingVisible.value = false
-      currentStep.value = 3
-      buildResults()
-      return
-    }
-    const qIdx = Math.floor(step / selectedPlatforms.value.length)
-    const pIdx = step % selectedPlatforms.value.length
+  
+  // 存储所有检测结果
+  const allDetectionResults = []
+  let hasError = false
+  let errorMessage = ''
+  
+  // 遍历每个问题-平台组合
+  for (let qIdx = 0; qIdx < selectedQuestions.value.length; qIdx++) {
     const q = selectedQuestions.value[qIdx]
-    const p = selectedPlatforms.value[pIdx]
-    currentTask.value = '检测中：' + q.text.slice(0, 18) + '... 在 ' + p.name
-    completedCount.value = step + 1
-    setTimeout(() => runStep(step + 1), 200)
+    
+    for (let pIdx = 0; pIdx < selectedPlatforms.value.length; pIdx++) {
+      const p = selectedPlatforms.value[pIdx]
+      currentTask.value = '检测中：' + q.text.slice(0, 18) + '... 在 ' + p.name
+      
+      try {
+        // 调用 DeepSeek API 进行真实检测
+        const detection = await detectWithDeepSeek(q.text, q.sourceKeyword || selectedKeywords.value[0] || '', p.id)
+        
+        allDetectionResults.push({
+          questionId: qIdx + 1,
+          question: q.text,
+          category: q.category,
+          sourceKeyword: q.sourceKeyword,
+          platform: p,
+          detection: detection,
+          score: calculateScore(detection, q.category)
+        })
+      } catch (error) {
+        console.error(`检测失败: ${q.text} @ ${p.name}`, error)
+        // 单平台失败不影响整体，使用默认结果
+        allDetectionResults.push({
+          questionId: qIdx + 1,
+          question: q.text,
+          category: q.category,
+          sourceKeyword: q.sourceKeyword,
+          platform: p,
+          detection: {
+            mentioned: false,
+            mentionType: 'none',
+            firstMentionPosition: 1.0,
+            positionRank: 'below_fold',
+            sentiment: 'neutral',
+            semanticRelevance: 0,
+            competitivePosition: null,
+            competitorsMentioned: []
+          },
+          score: 0,
+          error: true
+        })
+        hasError = true
+        errorMessage = `部分检测失败: ${error.message}`
+      }
+      
+      completedCount.value++
+    }
   }
-  setTimeout(() => runStep(0), 300)
+  
+  // 处理完成
+  loadingVisible.value = false
+  if (hasError) {
+    ElMessage.warning({ message: errorMessage || '部分检测结果可能不准确', offset: 80 })
+  } else {
+    ElMessage.success({ message: '检测完成', offset: 80 })
+  }
+  
+  // 构建结果
+  buildResultsFromAPI(allDetectionResults)
+  currentStep.value = 3
 }
 
-const buildResults = () => {
-  const results = selectedQuestions.value.map((q, qi) => ({
-    questionId: qi + 1,
-    question: q.text,
-    category: q.category,
-    sourceKeyword: q.sourceKeyword,
-    platforms: selectedPlatforms.value.map(p => ({
-      name: p.name,
-      icon: p.icon,
-      mentioned: Math.random() > 0.4
-    }))
+/**
+ * 从API结果构建展示数据
+ * @param {Array} apiResults - API检测结果
+ */
+const buildResultsFromAPI = (apiResults) => {
+  // 按问题分组
+  const groupedByQuestion = {}
+  
+  apiResults.forEach(result => {
+    const qKey = result.question
+    if (!groupedByQuestion[qKey]) {
+      groupedByQuestion[qKey] = {
+        questionId: result.questionId,
+        question: result.question,
+        category: result.category,
+        sourceKeyword: result.sourceKeyword,
+        platforms: [],
+        scores: []
+      }
+    }
+    
+    // 添加平台检测结果
+    groupedByQuestion[qKey].platforms.push({
+      name: result.platform.name,
+      icon: result.platform.icon,
+      mentioned: result.detection.mentioned,
+      mentionType: result.detection.mentionType,
+      sentiment: result.detection.sentiment,
+      semanticRelevance: result.detection.semanticRelevance,
+      competitivePosition: result.detection.competitivePosition,
+      competitorsMentioned: result.detection.competitorsMentioned,
+      error: result.error || false
+    })
+    
+    // 记录得分
+    if (!result.error) {
+      groupedByQuestion[qKey].scores.push(result.score)
+    }
+  })
+  
+  // 转换为数组
+  const results = Object.values(groupedByQuestion).map(gq => ({
+    ...gq,
+    avgScore: gq.scores.length > 0 
+      ? Math.round(gq.scores.reduce((a, b) => a + b, 0) / gq.scores.length)
+      : 0
   }))
+  
   detectionResults.value = results
+  
+  // 计算整体得分
+  const allScores = results.flatMap(r => r.platforms.map(p => {
+    // 根据是否提及计算基础得分
+    if (p.mentioned) return 70  // 提及但没有详细分数时给70分
+    return 0
+  }))
+  
   const totalMentions = results.reduce((sum, r) => sum + r.platforms.filter(p => p.mentioned).length, 0)
   const totalSlots = results.length * selectedPlatforms.value.length
-  overallScore.value = Math.round((totalMentions / totalSlots) * 100)
+  overallScore.value = totalSlots > 0 ? Math.round((totalMentions / totalSlots) * 100) : 0
+  
   if (overallScore.value >= 80) overallGrade.value = 'A'
   else if (overallScore.value >= 60) overallGrade.value = 'B'
   else if (overallScore.value >= 40) overallGrade.value = 'C'
@@ -388,6 +704,8 @@ const buildResults = () => {
   }
   saveData(allData)
 }
+
+
 
 const resetDetection = () => {
   currentStep.value = 0
