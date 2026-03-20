@@ -1,0 +1,1216 @@
+<template>
+  <div class="wo-page">
+    <!-- 顶部标题 -->
+    <div class="wo-header">
+      <div class="wo-header-icon">
+        <el-icon><Monitor /></el-icon>
+      </div>
+      <div>
+        <h1 class="wo-title">网站优化检测</h1>
+        <p class="wo-subtitle">分析网站技术 SEO 与 AI 抓取友好度，获取可执行的改进建议</p>
+      </div>
+    </div>
+
+    <!-- ===== 检测模式 ===== -->
+    <div v-if="!report" class="wo-check-card">
+      <div class="wo-check-intro">
+        <h2 class="section-title">输入网站地址</h2>
+        <p class="section-desc">系统将从 4 个维度分析您的网站，评估其被 AI 搜索引擎收录的友好程度</p>
+      </div>
+
+      <div class="wo-input-row">
+        <el-input
+          v-model="inputUrl"
+          placeholder="输入网址，如 www.yoursite.com"
+          size="large"
+          class="wo-url-input"
+          @keyup.enter="handleStartCheck"
+          :disabled="checking"
+        >
+          <template #prepend>
+            <span class="input-scheme">https://</span>
+          </template>
+        </el-input>
+        <el-button
+          type="primary"
+          size="large"
+          class="wo-check-btn"
+          @click="handleStartCheck"
+          :loading="checking"
+          :disabled="!inputUrl.trim()"
+        >
+          {{ checking ? '检测中...' : '开始检测' }}
+        </el-button>
+      </div>
+
+      <!-- 检测维度说明 -->
+      <div class="wo-dimensions">
+        <div
+          v-for="dim in dimensions"
+          :key="dim.key"
+          class="wo-dim-item"
+          :class="{ done: dim.done, active: dim.active }"
+        >
+          <div class="wo-dim-icon">
+            <el-icon v-if="dim.done"><Check /></el-icon>
+            <el-icon v-else-if="dim.active"><Loading /></el-icon>
+            <span v-else>{{ dim.index + 1 }}</span>
+          </div>
+          <div class="wo-dim-text">
+            <div class="wo-dim-name">{{ dim.name }}</div>
+            <div class="wo-dim-desc">{{ dim.desc }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 历史报告 -->
+      <div v-if="reportHistory.length > 0" class="wo-history">
+        <div class="wo-history-header">
+          <div class="section-title">历史报告</div>
+          <div class="wo-history-actions">
+            <el-button
+              size="small"
+              type="danger"
+              :disabled="selectedHistory.length === 0"
+              @click="handleBatchDelete"
+            >
+              删除选中 ({{ selectedHistory.length }})
+            </el-button>
+            <el-button size="small" @click="handleClearHistory">清空全部</el-button>
+          </div>
+        </div>
+        <div class="wo-history-list">
+          <div
+            v-for="(r, idx) in reportHistory"
+            :key="idx"
+            class="wo-history-item"
+            :class="{ selected: selectedHistory.includes(idx) }"
+            @click="handleViewReport(r)"
+          >
+            <el-checkbox
+              :model-value="selectedHistory.includes(idx)"
+              @click.stop
+              @change="toggleSelect(idx)"
+              class="history-checkbox"
+            />
+            <div class="wo-history-score" :class="getScoreClass(r.score)">
+              {{ r.score }}
+            </div>
+            <div class="wo-history-info">
+              <div class="wo-history-url">{{ r.url }}</div>
+              <div class="wo-history-time">{{ formatTime(r.checkedAt) }}</div>
+            </div>
+            <div class="wo-history-grade">
+              <el-tag size="small" :type="getGradeTagType(r.score)" round>
+                {{ getGradeName(r.score) }}
+              </el-tag>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 报告模式 ===== -->
+    <div v-else class="wo-report">
+      <!-- 操作栏 -->
+      <div class="wo-report-toolbar">
+        <el-button text @click="handleNewCheck" class="back-btn">
+          <el-icon><ArrowLeft /></el-icon>
+          返回
+        </el-button>
+        <div class="wo-report-url">
+          <el-icon><Link /></el-icon>
+          <span>{{ report.url }}</span>
+        </div>
+        <div class="wo-report-time">
+          <el-icon><Clock /></el-icon>
+          <span>{{ formatTime(report.checkedAt) }}</span>
+        </div>
+        <div class="wo-report-actions">
+          <el-button @click="handleExportReport">
+            <el-icon class="mr-1"><Download /></el-icon>
+            导出报告
+          </el-button>
+          <el-button type="primary" @click="handleSaveReport">
+            <el-icon class="mr-1"><FolderOpened /></el-icon>
+            保存报告
+          </el-button>
+        </div>
+      </div>
+
+      <!-- 综合得分 -->
+      <div class="wo-score-section">
+        <div class="wo-score-circle" :class="scoreClass">
+          <svg viewBox="0 0 120 120" class="score-ring">
+            <circle cx="60" cy="60" r="52" class="ring-bg" />
+            <circle
+              cx="60" cy="60" r="52"
+              class="ring-fill"
+              :stroke-dasharray="`${report.score * 3.27} 327`"
+              transform="rotate(-90 60 60)"
+            />
+          </svg>
+          <div class="score-inner">
+            <div class="score-number">{{ report.score }}</div>
+            <div class="score-total">/100</div>
+          </div>
+        </div>
+        <div class="wo-score-grade">
+          <div class="grade-label">综合评级</div>
+          <div class="grade-name" :class="gradeClass">{{ gradeName }}</div>
+          <div class="grade-desc">{{ gradeDesc }}</div>
+        </div>
+
+        <!-- 维度得分 -->
+        <div class="wo-dim-scores">
+          <div
+            v-for="(item, key) in report.items"
+            :key="key"
+            class="wo-dim-score-card"
+            :style="{ '--accent': dimColors[key] }"
+          >
+            <div class="dim-score-num">{{ item.score }}</div>
+            <div class="dim-score-label">{{ dimLabels[key] }}</div>
+            <div class="dim-score-bar">
+              <div class="dim-score-fill" :style="{ width: item.score + '%' }" />
+            </div>
+            <div class="dim-score-detail">{{ item.checked }} / {{ item.total }} 项通过</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 问题与建议 -->
+      <div class="wo-issues-section">
+        <div class="issues-tabs">
+          <button
+            v-for="tab in issueTabs"
+            :key="tab.key"
+            :class="['issue-tab', { active: activeIssueTab === tab.key }]"
+            @click="activeIssueTab = tab.key"
+          >
+            <el-icon :class="'tab-icon-' + tab.key"><component :is="tab.icon" /></el-icon>
+            {{ tab.label }}
+            <el-badge :value="report.issues[tab.key].length" :type="tab.key === 'warn' ? 'warning' : 'success'" />
+          </button>
+        </div>
+
+        <div class="issues-list">
+          <div
+            v-for="(issue, idx) in report.issues[activeIssueTab]"
+            :key="idx"
+            class="issue-card"
+            :class="'issue-' + issue.level"
+          >
+            <div class="issue-icon">
+              <el-icon v-if="issue.level === 'warn'"><WarnTriangleFilled /></el-icon>
+              <el-icon v-else><CircleCheckFilled /></el-icon>
+            </div>
+            <div class="issue-body">
+              <div class="issue-title">{{ issue.title }}</div>
+              <div class="issue-desc">{{ issue.desc }}</div>
+              <div class="issue-fix" v-if="issue.fix">
+                <el-icon><Key /></el-icon>
+                {{ issue.fix }}
+              </div>
+            </div>
+            <div class="issue-score-impact">
+              <span :class="'impact-badge impact-' + issue.level">
+                {{ issue.level === 'warn' ? '-' + issue.impact : '+' + issue.impact }}分
+              </span>
+            </div>
+          </div>
+
+          <div v-if="report.issues[activeIssueTab].length === 0" class="issues-empty">
+            <el-icon size="36" class="text-gray-300 mb-2"><CircleCheck /></el-icon>
+            <p>该维度暂无问题，继续保持</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 维度详细数据 -->
+      <div class="wo-details-section">
+        <div class="details-title">检测明细</div>
+        <el-table :data="detailTableData" stripe class="wo-details-table">
+          <el-table-column prop="dimension" label="检测维度" width="140" />
+          <el-table-column prop="item" label="检测项" />
+          <el-table-column prop="result" label="检测结果" width="120">
+            <template #default="{ row }">
+              <el-tag :type="row.result === 'pass' ? 'success' : 'danger'" size="small" round>
+                {{ row.result === 'pass' ? '通过' : '未通过' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="value" label="实际值" width="180" />
+          <el-table-column prop="suggestion" label="建议" />
+        </el-table>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import {
+  Monitor, Check, Loading, Link, Clock, RefreshRight, Download,
+  WarnTriangleFilled, CircleCheckFilled, Key, CircleCheck, FolderOpened, ArrowLeft
+} from '@element-plus/icons-vue'
+import { getData, saveData } from '../utils/storage'
+
+// ===== 常量 =====
+const dimLabels = {
+  tech: '技术基础',
+  structure: '页面结构',
+  schema: '结构化数据',
+  aiFriendly: 'AI亲和性'
+}
+
+const dimColors = {
+  tech: '#409eff',
+  structure: '#67c23a',
+  schema: '#e6a23c',
+  aiFriendly: '#7070f0'
+}
+
+// ===== 状态 =====
+const inputUrl = ref('')
+const checking = ref(false)
+const report = ref(null)
+const activeIssueTab = ref('warn')
+const reportHistory = ref([])
+const selectedHistory = ref([])
+
+const issueTabs = [
+  { key: 'warn', label: '待改进', icon: 'WarnTriangleFilled' },
+  { key: 'pass', label: '已通过', icon: 'CircleCheckFilled' }
+]
+
+// ===== 检测进度维度 =====
+const dimensions = ref([
+  { key: 'tech', name: '技术基础', desc: 'HTTPS / robots.txt / 加载速度', index: 0, done: false, active: false },
+  { key: 'structure', name: '页面结构', desc: 'H标签 / Meta / 内容质量', index: 1, done: false, active: false },
+  { key: 'schema', name: '结构化数据', desc: 'JSON-LD / OpenGraph / Schema', index: 2, done: false, active: false },
+  { key: 'ai', name: 'AI亲和性', desc: '爬虫友好度 / FAQ内容', index: 3, done: false, active: false }
+])
+
+// ===== 模拟检测逻辑 =====
+const runMockCheck = async (url) => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+  // 步骤1: 技术基础
+  dimensions.value[0].active = true
+  await sleep(600)
+  dimensions.value[0].done = true
+  dimensions.value[0].active = false
+
+  // 步骤2: 页面结构
+  dimensions.value[1].active = true
+  await sleep(800)
+  dimensions.value[1].done = true
+  dimensions.value[1].active = false
+
+  // 步骤3: 结构化数据
+  dimensions.value[2].active = true
+  await sleep(500)
+  dimensions.value[2].done = true
+  dimensions.value[2].active = false
+
+  // 步骤4: AI亲和性
+  dimensions.value[3].active = true
+  await sleep(700)
+  dimensions.value[3].done = true
+  dimensions.value[3].active = false
+  await sleep(200)
+}
+
+// ===== 生成报告 =====
+const generateReport = (url) => {
+  const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min
+
+  const items = {
+    tech:    { score: rand(15, 24), checked: rand(2, 4), total: 5 },
+    structure: { score: rand(14, 23), checked: rand(2, 4), total: 5 },
+    schema:  { score: rand(8, 18), checked: rand(1, 3), total: 5 },
+    aiFriendly: { score: rand(10, 20), checked: rand(2, 4), total: 5 }
+  }
+
+  const total = items.tech.score + items.structure.score + items.schema.score + items.aiFriendly.score
+
+  const issues = {
+    warn: [
+      {
+        title: 'robots.txt 未检测到或配置缺失',
+        desc: '未找到 robots.txt 文件，AI 爬虫无法了解您的抓取偏好。',
+        fix: '在网站根目录创建 robots.txt，建议允许 AI 爬虫访问重要内容。',
+        level: 'warn',
+        impact: rand(5, 12)
+      },
+      {
+        title: '缺少 FAQ Schema 结构化数据',
+        desc: '页面未包含 FAQ JSON-LD schema，无法向搜索引擎明确表达问答内容。',
+        fix: '在页面 <head> 中添加 FAQPage schema，标注常见问题与答案。',
+        level: 'warn',
+        impact: rand(5, 10)
+      },
+      {
+        title: '页面加载速度偏慢（预估 3.5s）',
+        desc: '首屏加载时间超过 3 秒，影响搜索引擎抓取效率。',
+        fix: '启用 Gzip 压缩、优化图片大小、启用浏览器缓存。',
+        level: 'warn',
+        impact: rand(5, 8)
+      },
+      {
+        title: '缺少 Twitter Card Meta 标签',
+        desc: '页面未配置 Twitter Card，影响社交平台分享预览效果。',
+        fix: '添加 <meta name="twitter:card" content="summary_large_image" />',
+        level: 'warn',
+        impact: rand(3, 5)
+      }
+    ],
+    pass: [
+      {
+        title: '使用 HTTPS 加密协议',
+        desc: '网站全程使用 HTTPS 加密，安全性达标。',
+        level: 'pass',
+        impact: 8
+      },
+      {
+        title: '页面包含有效的 Title 和 Meta Description',
+        desc: '每个页面都有唯一的标题和描述，利于搜索引擎理解内容。',
+        level: 'pass',
+        impact: 6
+      },
+      {
+        title: '内容字数充足（预估 1200 字）',
+        desc: '页面内容充实，提供足够上下文供 AI 分析理解。',
+        level: 'pass',
+        impact: 5
+      }
+    ]
+  }
+
+  return {
+    url,
+    score: total,
+    items,
+    issues,
+    checkedAt: new Date().toISOString(),
+    details: buildDetails(items)
+  }
+}
+
+const buildDetails = (items) => {
+  return [
+    { dimension: '技术基础', item: 'HTTPS 协议', result: 'pass', value: 'https://', suggestion: '保持现状' },
+    { dimension: '技术基础', item: 'robots.txt 存在', result: 'fail', value: '未找到', suggestion: '在根目录创建 robots.txt' },
+    { dimension: '技术基础', item: '页面加载速度', result: 'pass', value: '2.8s', suggestion: '可进一步优化到 2s 以内' },
+    { dimension: '技术基础', item: 'Canonical 标签', result: 'pass', value: '已设置', suggestion: '保持现状' },
+    { dimension: '技术基础', item: '移动端适配', result: 'pass', value: '已适配', suggestion: '保持现状' },
+    { dimension: '页面结构', item: 'H1 标签存在', result: 'pass', value: '1个', suggestion: '保持现状' },
+    { dimension: '页面结构', item: 'H2-H6 层级结构', result: 'pass', value: '5个', suggestion: '保持现状' },
+    { dimension: '页面结构', item: 'Meta Description', result: 'pass', value: '已设置', suggestion: '保持现状' },
+    { dimension: '页面结构', item: '图片 Alt 标签', result: 'fail', value: '缺失率 40%', suggestion: '为所有图片添加 alt 属性' },
+    { dimension: '页面结构', item: '内部链接数量', result: 'pass', value: '12个', suggestion: '可适当增加相关内容链接' },
+    { dimension: '结构化数据', item: 'JSON-LD Schema', result: 'fail', value: '未检测到', suggestion: '添加 Article 或 FAQ Schema' },
+    { dimension: '结构化数据', item: 'OpenGraph 标签', result: 'pass', value: '已设置', suggestion: '保持现状' },
+    { dimension: '结构化数据', item: 'Twitter Card', result: 'fail', value: '未设置', suggestion: '添加 Twitter Card Meta' },
+    { dimension: '结构化数据', item: '面包屑导航 Schema', result: 'fail', value: '未检测到', suggestion: '添加 BreadcrumbList Schema' },
+    { dimension: 'AI亲和性', item: 'AI 爬虫访问权限', result: 'pass', value: '允许', suggestion: '保持现状' },
+    { dimension: 'AI亲和性', item: 'JS 渲染难度', result: 'pass', value: '低（SSR）', suggestion: '保持现状' },
+    { dimension: 'AI亲和性', item: 'FAQ 内容存在', result: 'fail', value: '未检测到', suggestion: '增加 FAQ 版块内容' },
+    { dimension: 'AI亲和性', item: '内容原创度', result: 'pass', value: '高', suggestion: '保持原创内容策略' },
+  ]
+}
+
+// ===== 计算属性 =====
+const detailTableData = computed(() => {
+  if (!report.value) return []
+  return report.value.details
+})
+
+const scoreClass = computed(() => {
+  if (!report.value) return ''
+  if (report.value.score >= 80) return 'score-green'
+  if (report.value.score >= 60) return 'score-yellow'
+  return 'score-red'
+})
+
+const gradeClass = computed(() => {
+  if (!report.value) return ''
+  if (report.value.score >= 80) return 'grade-green'
+  if (report.value.score >= 60) return 'grade-yellow'
+  return 'grade-red'
+})
+
+const gradeName = computed(() => {
+  if (!report.value) return ''
+  if (report.value.score >= 80) return '优秀'
+  if (report.value.score >= 70) return '良好'
+  if (report.value.score >= 60) return '及格'
+  return '需改进'
+})
+
+const gradeDesc = computed(() => {
+  if (!report.value) return ''
+  if (report.value.score >= 80) return '您的网站技术 SEO 基础扎实，AI 抓取友好度较高'
+  if (report.value.score >= 70) return '网站整体表现不错，部分细节有优化空间'
+  if (report.value.score >= 60) return '网站基础合格，建议针对提示项进行针对性优化'
+  return '网站存在较多问题，建议优先处理高权重扣分项'
+})
+
+// ===== 方法 =====
+const handleStartCheck = async () => {
+  if (!inputUrl.value.trim()) return
+
+  // 重置状态
+  report.value = null
+  dimensions.value.forEach(d => { d.done = false; d.active = false })
+
+  checking.value = true
+
+  await runMockCheck(inputUrl.value)
+
+  report.value = generateReport(inputUrl.value)
+  checking.value = false
+
+  // 同步到控制台数据
+  syncToDashboard()
+}
+
+const handleNewCheck = () => {
+  report.value = null
+  inputUrl.value = ''
+  selectedHistory.value = []
+}
+
+const handleSaveReport = () => {
+  const allData = getData()
+
+  // 保存到历史记录
+  if (!allData['website-reports']) allData['website-reports'] = []
+  allData['website-reports'].unshift({ ...report.value })
+  if (allData['website-reports'].length > 20) allData['website-reports'].pop()
+
+  // 同步最新得分到 Dashboard
+  allData['dashboard-site-score'] = {
+    score: report.value.score,
+    url: report.value.url,
+    updatedAt: report.value.checkedAt
+  }
+
+  saveData(allData)
+  loadHistory()
+  ElMessage.success({ message: '报告已保存', offset: 80 })
+}
+
+const handleExportReport = () => {
+  const data = JSON.stringify(report.value, null, 2)
+  const blob = new Blob([data], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `网站优化检测_${report.value.url}_${new Date().toISOString().slice(0, 10)}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success({ message: '报告已导出', offset: 80 })
+}
+
+const handleViewReport = (r) => {
+  report.value = r
+  inputUrl.value = r.url
+  selectedHistory.value = []
+}
+
+const handleClearHistory = () => {
+  const allData = getData()
+  allData['website-reports'] = []
+  saveData(allData)
+  selectedHistory.value = []
+  loadHistory()
+  ElMessage.success({ message: '历史已清空', offset: 80 })
+}
+
+const loadHistory = () => {
+  const allData = getData()
+  reportHistory.value = allData['website-reports'] || []
+}
+
+const toggleSelect = (idx) => {
+  const pos = selectedHistory.value.indexOf(idx)
+  if (pos === -1) {
+    selectedHistory.value.push(idx)
+  } else {
+    selectedHistory.value.splice(pos, 1)
+  }
+}
+
+const handleBatchDelete = () => {
+  const allData = getData()
+  const filtered = allData['website-reports'].filter((_, i) => !selectedHistory.value.includes(i))
+  allData['website-reports'] = filtered
+  saveData(allData)
+  selectedHistory.value = []
+  loadHistory()
+  ElMessage.success({ message: '已删除选中的报告', offset: 80 })
+}
+
+const getScoreClass = (score) => {
+  if (score >= 80) return 'score-green'
+  if (score >= 60) return 'score-yellow'
+  return 'score-red'
+}
+
+const getGradeName = (score) => {
+  if (score >= 80) return '优秀'
+  if (score >= 70) return '良好'
+  if (score >= 60) return '及格'
+  return '需改进'
+}
+
+const getGradeTagType = (score) => {
+  if (score >= 70) return 'success'
+  if (score >= 60) return 'warning'
+  return 'danger'
+}
+
+const syncToDashboard = () => {
+  const allData = getData()
+  allData['dashboard-site-score'] = {
+    score: report.value.score,
+    url: report.value.url,
+    updatedAt: report.value.checkedAt
+  }
+  saveData(allData)
+}
+
+const formatTime = (isoString) => {
+  const d = new Date(isoString)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// ===== 初始化 =====
+onMounted(() => {
+  loadHistory()
+})
+</script>
+
+<style scoped>
+/* ===== 页面 ===== */
+.wo-page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 32px;
+  font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* ===== 标题 ===== */
+.wo-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.wo-header-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #409eff, #667eea);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 24px;
+  box-shadow: 0 4px 14px rgba(64, 158, 255, 0.35);
+}
+
+.wo-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 0 0 4px 0;
+}
+
+.wo-subtitle {
+  font-size: 13px;
+  color: #909399;
+  margin: 0;
+}
+
+/* ===== 历史报告 ===== */
+.wo-history {
+  margin-top: 24px;
+  background: white;
+  border: 1px solid #ebeef5;
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.wo-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.wo-history-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.wo-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.wo-history-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: #f9f9f9;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.wo-history-item:hover {
+  background: #f0f7ff;
+  border-color: #409eff;
+}
+
+.wo-history-item.selected {
+  background: #ecf5ff;
+  border-color: #409eff;
+}
+
+.history-checkbox {
+  margin-right: 10px;
+  flex-shrink: 0;
+}
+
+.wo-history-score {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  font-weight: 800;
+  color: white;
+  flex-shrink: 0;
+}
+
+.wo-history-score.score-green { background: linear-gradient(135deg, #67c23a, #85ce61); }
+.wo-history-score.score-yellow { background: linear-gradient(135deg, #e6a23c, #f5c97c); }
+.wo-history-score.score-red { background: linear-gradient(135deg, #f56c6c, #f78989); }
+
+.wo-history-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.wo-history-url {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wo-history-time {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+/* ===== 检测卡片 ===== */
+.wo-check-card {
+  background: white;
+  border: 1px solid #ebeef5;
+  border-radius: 16px;
+  padding: 32px;
+}
+
+.section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0 0 8px 0;
+}
+
+.section-desc {
+  font-size: 13px;
+  color: #909399;
+  margin: 0 0 24px 0;
+}
+
+.wo-input-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.wo-url-input {
+  flex: 1;
+}
+
+:deep(.wo-url-input .el-input__wrapper) {
+  border-radius: 10px 0 0 10px;
+  border: 1.5px solid #e4e7ed;
+  box-shadow: none;
+  font-size: 15px;
+}
+
+:deep(.wo-url-input .el-input__wrapper:hover) {
+  border-color: #c0c4cc;
+}
+
+:deep(.wo-url-input .el-input__wrapper.is-focus) {
+  border-color: #409eff;
+  box-shadow: 0 0 0 3px rgba(64, 158, 255, 0.1);
+}
+
+.input-scheme {
+  font-size: 13px;
+  color: #909399;
+}
+
+.wo-check-btn {
+  border-radius: 10px;
+  font-size: 15px;
+  padding: 0 28px;
+  background: linear-gradient(135deg, #409eff, #3a8bff);
+  border: none;
+  height: 42px;
+}
+
+:deep(.wo-check-btn:hover) {
+  background: linear-gradient(135deg, #66b1ff, #3a8bff);
+}
+
+/* ===== 维度进度 ===== */
+.wo-dimensions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.wo-dim-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #f5f7fa;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: all 0.3s;
+}
+
+.wo-dim-item.active {
+  background: #ecf5ff;
+  border-color: #409eff;
+}
+
+.wo-dim-item.done {
+  background: #f0f9eb;
+  border-color: #67c23a;
+}
+
+.wo-dim-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: white;
+  border: 2px solid #dcdfe6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: #909399;
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+
+.wo-dim-item.active .wo-dim-icon {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.wo-dim-item.done .wo-dim-icon {
+  background: #67c23a;
+  border-color: #67c23a;
+  color: white;
+}
+
+.wo-dim-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 2px;
+}
+
+.wo-dim-desc {
+  font-size: 11px;
+  color: #909399;
+}
+
+/* ===== 报告 ===== */
+.wo-report-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: white;
+  border: 1px solid #ebeef5;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.back-btn {
+  color: #409eff;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.back-btn:hover {
+  background: #ecf5ff;
+}
+
+.wo-report-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #409eff;
+}
+
+.wo-report-time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #909399;
+  margin-left: auto;
+}
+
+.wo-report-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* ===== 得分区 ===== */
+.wo-score-section {
+  background: white;
+  border: 1px solid #ebeef5;
+  border-radius: 16px;
+  padding: 28px 32px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+.wo-score-circle {
+  position: relative;
+  width: 140px;
+  height: 140px;
+  flex-shrink: 0;
+}
+
+.score-ring {
+  width: 140px;
+  height: 140px;
+}
+
+.ring-bg {
+  fill: none;
+  stroke: #f0f0f0;
+  stroke-width: 10;
+}
+
+.ring-fill {
+  fill: none;
+  stroke: #409eff;
+  stroke-width: 10;
+  stroke-linecap: round;
+  transition: stroke-dasharray 1s ease;
+}
+
+.wo-score-circle.score-green .ring-fill { stroke: #67c23a; }
+.wo-score-circle.score-yellow .ring-fill { stroke: #e6a23c; }
+.wo-score-circle.score-red .ring-fill { stroke: #f56c6c; }
+
+.score-inner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.score-number {
+  font-size: 36px;
+  font-weight: 800;
+  color: #1a1a1a;
+  line-height: 1;
+}
+
+.score-total {
+  font-size: 14px;
+  color: #909399;
+  margin-top: 2px;
+}
+
+.wo-score-grade {
+  flex: 1;
+}
+
+.grade-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 6px;
+}
+
+.grade-name {
+  font-size: 28px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.grade-name.grade-green { color: #67c23a; }
+.grade-name.grade-yellow { color: #e6a23c; }
+.grade-name.grade-red { color: #f56c6c; }
+
+.grade-desc {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.5;
+}
+
+/* 维度得分卡 */
+.wo-dim-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 280px;
+}
+
+.wo-dim-score-card {
+  background: #f9f9f9;
+  border-radius: 10px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--accent);
+}
+
+.dim-score-num {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--accent);
+  display: inline-block;
+}
+
+.dim-score-label {
+  font-size: 12px;
+  color: #606266;
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.dim-score-bar {
+  height: 4px;
+  background: #e4e7ed;
+  border-radius: 2px;
+  margin: 6px 0 4px;
+}
+
+.dim-score-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 1s ease;
+}
+
+.dim-score-detail {
+  font-size: 11px;
+  color: #909399;
+}
+
+/* ===== 问题区 ===== */
+.wo-issues-section {
+  background: white;
+  border: 1px solid #ebeef5;
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.issues-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  background: #f5f7fa;
+  border-radius: 10px;
+  padding: 4px;
+}
+
+.issue-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #909399;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.issue-tab.active {
+  background: white;
+  color: #303133;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.issues-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.issue-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid #ebeef5;
+  background: #fafafa;
+  transition: box-shadow 0.2s;
+}
+
+.issue-card:hover {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.issue-warn {
+  border-left: 3px solid #e6a23c;
+  background: #fdf6ec;
+}
+
+.issue-pass {
+  border-left: 3px solid #67c23a;
+  background: #f0f9eb;
+}
+
+.issue-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.issue-warn .issue-icon { color: #e6a23c; }
+.issue-pass .issue-icon { color: #67c23a; }
+
+.issue-body {
+  flex: 1;
+}
+
+.issue-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+
+.issue-desc {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+
+.issue-fix {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #409eff;
+  background: #ecf5ff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-flex;
+}
+
+.impact-badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+
+.impact-warn {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.impact-pass {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.issues-empty {
+  text-align: center;
+  padding: 32px 0;
+  color: #909399;
+  font-size: 13px;
+}
+
+/* ===== 明细表 ===== */
+.wo-details-section {
+  background: white;
+  border: 1px solid #ebeef5;
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.details-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 16px;
+}
+
+:deep(.wo-details-table) {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+:deep(.wo-details-table .el-table__header-wrapper th) {
+  background: #f5f7fa;
+  color: #606266;
+  font-weight: 600;
+  font-size: 13px;
+}
+</style>
