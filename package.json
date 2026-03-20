@@ -14,7 +14,9 @@
     "dompurify": "^3.3.3",
     "echarts": "^5.5.0",
     "element-plus": "^2.5.0",
+    "jieba": "^1.0.0",
     "marked": "^17.0.5",
+    "pdf-parse": "^2.4.5",
     "vue": "^3.4.0",
     "vue-echarts": "^6.6.0",
     "vue-router": "^4.2.0"

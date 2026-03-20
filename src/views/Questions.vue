@@ -21,10 +21,20 @@
         <el-button
           type="danger"
           class="ml-0"
-          :disabled="selectedRows.length === 0"
+          :disabled="selectedRows.length === 0 || isLoading"
           @click="handleBatchDelete"
         >
           批量删除 ({{ selectedRows.length }})
+        </el-button>
+        <el-button
+          type="success"
+          class="ml-0"
+          @click="handleAIExpand"
+          :loading="isLoading"
+          :disabled="isLoading"
+        >
+          <el-icon class="mr-1" v-if="!isLoading"><MagicStick /></el-icon>
+          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : 'AI拓展问题') }}
         </el-button>
         <el-button type="primary" class="ml-0" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>
@@ -104,24 +114,25 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Plus, MagicStick } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
-import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
+import { getData, getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
 const tableData = ref([])
 
 // 正序（ oldest first / newest last）+ 筛选
 const sortedData = computed(() => {
   let data = [...tableData.value]
-  
+
   if (filterKeywordType.value) {
     data = data.filter(item => item.keywordType === filterKeywordType.value)
   }
   if (filterStatus.value) {
     data = data.filter(item => item.status === filterStatus.value)
   }
-  
+
   return data
 })
 
@@ -156,7 +167,228 @@ const getStatusType = (status) => {
   return map[status] || 'info'
 }
 
-const handleAIExpand = () => {
+// DeepSeek API 配置
+const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
+const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions'
+
+// ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
+const analyzeEnterpriseProfileForQuestions = async (name, industry, description) => {
+  try {
+    const response = await fetch(DEEPSEEK_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'user',
+            content: `你是一个企业业务分析师。请根据以下企业信息，提取出该企业核心从事的业务领域的专业词汇。
+
+企业名称：${name}
+所属行业：${industry}
+企业描述：${description || '无'}
+
+要求：
+- 只输出业务关键词，每行一个
+- 必须是该企业实际从事的业务领域的专业词汇
+- 包含中英文（如SEO、GEO、SaaS、跨境电商等）
+- 不要输出"公司"、"服务"等泛泛的词
+- 如果企业描述中提到了具体业务词，必须包含进去
+
+直接输出关键词列表，不要解释。`
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 300
+      })
+    })
+
+    if (!response.ok) return null
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content || ''
+
+    const keywords = content
+      .split('\n')
+      .map(l => l.trim().replace(/^[0-9a-zA-Z.、]+/, '').trim())
+      .filter(l => l.length >= 2 && l.length <= 10)
+
+    return keywords.length > 0 ? keywords : null
+  } catch (error) {
+    console.error('AI分析企业画像失败:', error)
+    return null
+  }
+}
+
+// 从 storage 读取企业设置
+const getEnterpriseSettings = () => {
+  const allData = getData()
+  return allData['enterprise-settings'] || {}
+}
+
+// 从企业描述中提取核心业务词（如SEO、GEO、数字化营销等专业术语）
+// 这些词是企业自己描述的核心业务，生成问题时必须纳入考虑
+const extractCoreBusinessWordsForQuestions = (description) => {
+  if (!description) return []
+
+  const coreWords = []
+
+  // 常见业务词根（包含SEO、GEO等专业术语）
+  const businessPatterns = [
+    // SEO/GEO相关
+    'SEO', 'GEO', '搜索优化', '搜索引擎优化', '谷歌优化', '百度优化',
+    // 数字化营销
+    '数字化', '数字化营销', '营销', '品牌营销', '内容营销', '社交媒体营销',
+    '广告投放', 'SEM', '信息流', '竞价', '投放',
+    // 技术服务
+    '软件开发', '小程序', 'APP开发', '网站开发', '系统开发', 'API',
+    'SaaS', '云服务', '云计算', 'AI', '人工智能', '大数据', '数据分析',
+    // 电商
+    '电商', '跨境电商', 'Shopify', '独立站', '亚马逊', '跨境出海',
+    // 其他专业术语
+    '企业服务', 'B2B', 'B2C', 'SaaS平台', '管理系统', 'CRM', 'ERP',
+    '品牌策划', '文案', '创意', '设计', 'VI', 'logo', '视觉设计'
+  ]
+
+  // 检查描述中是否包含这些业务词
+  const descUpper = description.toUpperCase()
+  businessPatterns.forEach(pattern => {
+    if (descUpper.includes(pattern.toUpperCase())) {
+      coreWords.push(pattern)
+    }
+  })
+
+  return coreWords
+}
+
+// 构建企业上下文（给 AI 用的企业画像）
+// 关键改进：明确提取并传递企业描述中的核心业务词 + 搜索结果
+const buildEnterpriseContext = (searchKeywords = []) => {
+  const enterprise = getEnterpriseSettings()
+  const name = enterprise.name || '未设置'
+  const industry = enterprise.industry || '未设置'
+  const description = enterprise.description || '未设置'
+  const targetAudience = enterprise.targetAudience || '未设置'
+
+  // 【关键改进】从企业描述中提取核心业务词
+  const coreBusinessWords = extractCoreBusinessWordsForQuestions(description)
+  const coreBusinessWordsStr = coreBusinessWords.length > 0
+    ? `\n【核心业务词】（企业描述中明确提到的业务，必须在生成的问题中体现）：${coreBusinessWords.join('、')}`
+    : ''
+
+  // 【新增】加入Web搜索识别的企业业务关键词
+  const searchKeywordsStr = searchKeywords && searchKeywords.length > 0
+    ? `\n【搜索识别业务】（通过搜索识别出的企业业务范围）：${searchKeywords.join('、')}`
+    : ''
+
+  // 业务范围根据行业默认
+  const businessScopeMap = {
+    '科技/互联网': '提供软件开发、互联网服务、技术解决方案',
+    '消费品/零售': '生产和销售消费品，提供零售服务',
+    '金融/保险': '提供金融理财、保险服务',
+    '医疗/健康': '提供医疗、健康管理服务',
+    '教育/培训': '提供教育培训服务',
+    '制造业': '从事产品制造和生产',
+    '房地产/建筑': '房地产开发和建筑服务',
+    '传媒/文化': '提供媒体、文化创意服务',
+    '其他': '提供专业服务'
+  }
+  const businessScope = businessScopeMap[industry] || '提供专业服务'
+
+  return `【企业背景】
+企业名称：${name}
+所属行业：${industry}
+品牌描述：${description}
+目标受众：${targetAudience}
+业务范围：${businessScope}${coreBusinessWordsStr}${searchKeywordsStr}
+
+请基于以上企业信息生成问题，问题要符合该企业的业务范围。生成的问题中必须体现【核心业务词】和【搜索识别业务】中提到的业务。`
+}
+
+// 根据关键词类型生成对应的 prompt（加入企业上下文）
+const generatePrompt = (keyword, type, enterpriseContext) => {
+  const typePrompts = {
+    '品牌': `请基于以下企业背景，针对品牌"${keyword}"生成用户真实会搜索的问题。
+
+${enterpriseContext}
+
+要求：
+- 问题要像真实用户写的，口语化
+- 3-5个问题，每个不超过25个字
+- 侧重品牌口碑、对比、推荐
+直接输出问题列表，每行一个，不要编号。`,
+
+    '产品': `请基于以下企业背景，针对产品/服务"${keyword}"生成用户真实会搜索的问题。
+
+${enterpriseContext}
+
+要求：
+- 问题要像真实用户写的，口语化
+- 3-5个问题，每个不超过25个字
+- 侧重产品性能、选购建议、决策
+直接输出问题列表，每行一个，不要编号。`,
+
+    '场景': `请基于以下企业背景，针对使用场景"${keyword}"生成用户真实会搜索的问题。
+
+${enterpriseContext}
+
+要求：
+- 问题要像真实用户写的，口语化
+- 3-5个问题，每个不超过25个字
+- 侧重使用场景、解决问题、用户需求
+直接输出问题列表，每行一个，不要编号。`
+  }
+
+  return typePrompts[type] || typePrompts['产品']
+}
+
+// 调用 DeepSeek API 生成问题（加入企业上下文 + 搜索结果）
+const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
+  // 先读取企业信息，构建上下文
+  const enterpriseContext = buildEnterpriseContext(searchKeywords)
+  const prompt = generatePrompt(keyword, type, enterpriseContext)
+
+  const response = await fetch(DEEPSEEK_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 500
+    })
+  })
+
+  if (!response.ok) {
+    throw new Error(`API请求失败: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const content = data.choices[0].message.content
+
+  // 解析返回的问题列表
+  const questions = content
+    .split('\n')
+    .map(q => q.trim())
+    .filter(q => q.length > 0 && q.length <= 30)
+    .slice(0, 5) // 最多5个问题
+
+  return questions
+}
+
+const isLoading = ref(false)
+const isSearching = ref(false)
+const searchStatusText = ref('')
+
+const handleAIExpand = async () => {
   // 获取选中的关键词ID
   let keywords
   if (route.query.keywordIds) {
@@ -166,38 +398,91 @@ const handleAIExpand = () => {
   } else {
     keywords = getList('keywords')
   }
-  
+
   if (keywords.length === 0) {
     ElMessage.warning('请先在蒸馏词页面添加关键词')
     return
   }
+
+  // ===== Step 1: AI分析企业画像 =====
+  const enterprise = getEnterpriseSettings()
+  let searchKeywords = []
   
-  // 为每个关键词生成问题
-  let count = 0
-  keywords.forEach(kw => {
-    // 每个关键词生成2个问题
-    const questions = [
-      `关于${kw.keyword}，哪个品牌最好？`,
-      `${kw.keyword}品牌推荐`,
-    ]
-    
-    questions.forEach(q => {
-      tableData.value = addItem('questions', {
-        question: q,
-        keywordType: kw.type,
-        sourceKeyword: kw.keyword,
-        status: '待审核'
-      })
-      count++
-    })
-  })
+  isLoading.value = true
+  isSearching.value = true
+  searchStatusText.value = '🔍 正在分析企业属性（预计5-10秒）...'
   
-  // 清除URL参数
-  if (route.query.keywordIds) {
-    router.replace({ path: '/questions' })
+  try {
+    searchKeywords = await Promise.race([
+      analyzeEnterpriseProfileForQuestions(
+        enterprise.name || '',
+        enterprise.industry || '',
+        enterprise.description || ''
+      ),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('AI分析超时')), 10000))
+    ])
+    if (searchKeywords && searchKeywords.length > 0) {
+      console.log('🔍 AI识别到企业业务关键词:', searchKeywords)
+      searchStatusText.value = `✅ 已识别企业业务：${searchKeywords.slice(0, 5).join('、')}... 正在生成问题`
+    } else {
+      searchStatusText.value = '⚠️ 未能深度识别，将基于表单描述生成问题'
+    }
+  } catch (error) {
+    console.error('AI分析失败:', error)
+    searchStatusText.value = '⚠️ AI分析失败，将基于表单描述生成问题'
+    searchKeywords = []
   }
   
-  ElMessage.success(`已为 ${keywords.length} 个关键词生成 ${count} 个问题`)
+  // 等待一下让用户看到分析状态
+  await new Promise(r => setTimeout(r, 800))
+  isSearching.value = false
+
+  // ===== Step 2: AI生成问题 =====
+  let successCount = 0
+  let failCount = 0
+
+  try {
+    // 为每个关键词生成问题（每个最多等15秒，超时跳过）
+    for (const kw of keywords) {
+      try {
+        const questions = await Promise.race([
+          generateQuestionsFromAI(kw.keyword, kw.type, searchKeywords),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('单关键词生成超时')), 15000))
+        ])
+
+        if (questions.length === 0) {
+          failCount++
+          continue
+        }
+
+        questions.forEach(q => {
+          tableData.value = addItem('questions', {
+            question: q,
+            keywordType: kw.type,
+            sourceKeyword: kw.keyword,
+            status: '待审核'
+          })
+          successCount++
+        })
+      } catch (error) {
+        console.error(`生成关键词"${kw.keyword}"的问题失败:`, error)
+        failCount++
+      }
+    }
+
+    // 清除URL参数
+    if (route.query.keywordIds) {
+      router.replace({ path: '/questions' })
+    }
+
+    if (successCount > 0) {
+      ElMessage.success(`成功生成 ${successCount} 个问题${failCount > 0 ? `，${failCount} 个失败` : ''}`)
+    } else {
+      ElMessage.error('生成问题失败，请检查网络或API配置')
+    }
+  } finally {
+    isLoading.value = false
+  }
 }
 
 const cycleStatus = (row) => {
