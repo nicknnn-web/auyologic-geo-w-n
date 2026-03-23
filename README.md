@@ -128,7 +128,7 @@ npm run dev
 ---
 
 ## 技术栈
-
+Frontend deployed
 - **前端**：Vue 3 + Vite + Element Plus + Tailwind CSS + ECharts
 - **后端**：Express.js + Node.js 20
 - **数据库**：PostgreSQL
