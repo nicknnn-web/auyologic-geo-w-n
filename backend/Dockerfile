@@ -2,7 +2,7 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# 创建 uploads 目录（修正路径问题）
+# 创建 uploads 目录
 RUN mkdir -p /app/uploads
 
 COPY package*.json ./
