@@ -74,14 +74,24 @@
     <div v-if="tableData.length > 0">
       <div class="flex justify-between items-center mb-3">
         <div class="text-sm font-medium text-gray-600">知识库文档 ({{ tableData.length }})</div>
-        <el-button 
-          v-if="selectedDocs.length > 0" 
-          type="danger" 
-          size="small"
-          @click="handleBatchDelete"
-        >
-          批量删除 ({{ selectedDocs.length }})
-        </el-button>
+        <div class="flex gap-2">
+          <el-button 
+            type="success" 
+            size="small"
+            :loading="batchAnalyzing"
+            @click="handleBatchAIAnalyze"
+          >
+            {{ batchAnalyzing ? '分析中...' : '批量AI分析' }}
+          </el-button>
+          <el-button 
+            v-if="selectedDocs.length > 0" 
+            type="danger" 
+            size="small"
+            @click="handleBatchDelete"
+          >
+            批量删除 ({{ selectedDocs.length }})
+          </el-button>
+        </div>
       </div>
       <el-table :data="tableData" style="width: 100%" @selection-change="handleSelectionChange">
         <el-table-column type="selection" width="50" />
@@ -108,16 +118,61 @@
         <el-table-column prop="words" label="字数" width="100" align="center" />
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
-            <el-tag :type="row.status === '已处理' ? 'success' : 'warning'" size="small">
-              {{ row.status }}
+            <el-tag :type="row.analyzedAt ? 'success' : 'warning'" size="small">
+              {{ row.analyzedAt ? '已分析' : '未分析' }}
             </el-tag>
+            <!-- 关键词 tooltip -->
+            <el-tooltip 
+              v-if="row.keywords && row.keywords.length > 0" 
+              placement="top"
+              effect="light"
+            >
+              <template #content>
+                <div class="max-w-xs">
+                  <div class="font-medium mb-1">关键词:</div>
+                  <div class="flex flex-wrap gap-1">
+                    <el-tag 
+                      v-for="kw in row.keywords.slice(0, 10)" 
+                      :key="kw" 
+                      size="small" 
+                      type="info"
+                      class="mb-1"
+                    >
+                      {{ kw }}
+                    </el-tag>
+                  </div>
+                  <div v-if="row.summary" class="mt-2 pt-2 border-t border-gray-200">
+                    <div class="font-medium mb-1">摘要:</div>
+                    <div class="text-sm">{{ row.summary }}</div>
+                  </div>
+                  <div v-if="row.keyPoints && row.keyPoints.length > 0" class="mt-2 pt-2 border-t border-gray-200">
+                    <div class="font-medium mb-1">核心要点:</div>
+                    <ul class="text-sm list-disc list-inside">
+                      <li v-for="(point, idx) in row.keyPoints" :key="idx">{{ point }}</li>
+                    </ul>
+                  </div>
+                </div>
+              </template>
+              <el-icon class="ml-1 text-gray-400 cursor-help"><InfoFilled /></el-icon>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="上传时间" width="180" />
-        <el-table-column label="操作" width="180" align="center">
+        <el-table-column label="操作" width="220" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="handlePreview(row)">查看</el-button>
             <el-button link type="success" size="small" @click="handleDownload(row)">下载</el-button>
+            <!-- AI 分析按钮 -->
+            <el-button 
+              link 
+              type="warning" 
+              size="small"
+              :loading="analyzingIds.has(row.id)"
+              :disabled="!!row.analyzedAt"
+              @click="handleAIAnalyze(row)"
+            >
+              {{ row.analyzedAt ? '已分析' : 'AI分析' }}
+            </el-button>
             <el-popconfirm title="确定删除吗?" @confirm="handleDelete(row.id)">
               <template #reference>
                 <el-button link type="danger" size="small">删除</el-button>
@@ -148,7 +203,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled, Document } from '@element-plus/icons-vue'
+import { UploadFilled, Document, InfoFilled } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 
 const fileInput = ref(null)
@@ -334,6 +389,225 @@ const formatFileSize = (bytes) => {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+// ==================== AI 分析功能 ====================
+// DeepSeek API 配置
+const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
+const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
+const DEEPSEEK_MODEL = 'deepseek-chat'
+
+// AI 分析状态
+const analyzingIds = ref(new Set()) // 正在分析的文档ID集合
+const batchAnalyzing = ref(false) // 批量分析中
+
+/**
+ * 调用 DeepSeek API 分析文档内容
+ * @param {string} content - 文档全文
+ * @returns {Promise<{keywords: string[], summary: string, keyPoints: string[]}>}
+ */
+const analyzeWithDeepSeek = async (content) => {
+  const prompt = `你是一个内容分析专家。请分析以下文档，提取用于AI创作的知识素材。
+
+文档内容：
+${content}
+
+请以JSON格式返回：
+{
+  "keywords": ["关键词1", "关键词2", ...],  // 5-10个可用于GEO创作的关键词
+  "summary": "100字内的摘要",  // 文档核心内容概述
+  "keyPoints": ["要点1", "要点2", ...]  // 3-5个核心观点
+}
+
+要求：
+- keywords 要能直接用于prompt匹配，覆盖品牌词、产品词、场景词、问题词
+- summary 要包含品牌/产品的核心卖点
+- keyPoints 是用户真正关心的价值点`
+
+  const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+    },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      messages: [
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 1000
+    })
+  })
+
+  if (!response.ok) {
+    throw new Error(`API 请求失败: ${response.status}`)
+  }
+
+  const data = await response.json()
+  const resultText = data.choices?.[0]?.message?.content || ''
+  
+  // 解析 JSON 响应
+  try {
+    // 尝试提取 JSON 部分
+    const jsonMatch = resultText.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      return JSON.parse(jsonMatch[0])
+    }
+    throw new Error('无法解析API响应')
+  } catch (e) {
+    console.error('解析分析结果失败:', e, resultText)
+    throw new Error('解析分析结果失败')
+  }
+}
+
+/**
+ * 单个文档 AI 分析
+ * @param {Object} row - 文档记录
+ */
+const handleAIAnalyze = async (row) => {
+  // 检查是否已有分析结果
+  if (row.analyzedAt) {
+    ElMessage.info('该文档已分析过')
+    return
+  }
+  
+  // 获取文档内容
+  const content = row.content || ''
+  if (!content || content.length < 10) {
+    ElMessage.warning('文档内容为空或过短，无法分析')
+    return
+  }
+  
+  // 设置 loading 状态
+  analyzingIds.value.add(row.id)
+  
+  try {
+    const result = await analyzeWithDeepSeek(content)
+    
+    // 更新记录
+    const index = tableData.value.findIndex(item => item.id === row.id)
+    if (index !== -1) {
+      tableData.value[index] = {
+        ...tableData.value[index],
+        keywords: result.keywords || [],
+        summary: result.summary || '',
+        keyPoints: result.keyPoints || [],
+        analyzedAt: new Date().toISOString()
+      }
+      saveToStorage()
+      ElMessage.success('AI 分析完成')
+    }
+  } catch (error) {
+    console.error('AI 分析失败:', error)
+    ElMessage.error(`AI 分析失败: ${error.message}`)
+  } finally {
+    analyzingIds.value.delete(row.id)
+  }
+}
+
+/**
+ * 批量 AI 分析
+ */
+const handleBatchAIAnalyze = async () => {
+  // 获取未分析的文档
+  const docsToAnalyze = tableData.value.filter(doc => !doc.analyzedAt)
+  
+  if (docsToAnalyze.length === 0) {
+    ElMessage.warning('所有文档都已分析完成')
+    return
+  }
+  
+  // 检查是否有选中的文档
+  if (selectedDocs.value.length > 0) {
+    // 只分析选中的未分析文档
+    const selectedIds = selectedDocs.value.map(d => d.id)
+    const selectedToAnalyze = tableData.value.filter(doc => 
+      selectedIds.includes(doc.id) && !doc.analyzedAt
+    )
+    
+    if (selectedToAnalyze.length === 0) {
+      ElMessage.warning('所选文档都已分析完成')
+      return
+    }
+    
+    batchAnalyzing.value = true
+    let successCount = 0
+    
+    for (const doc of selectedToAnalyze) {
+      analyzingIds.value.add(doc.id)
+      
+      try {
+        const content = doc.content || ''
+        if (content && content.length >= 10) {
+          const result = await analyzeWithDeepSeek(content)
+          
+          const index = tableData.value.findIndex(item => item.id === doc.id)
+          if (index !== -1) {
+            tableData.value[index] = {
+              ...tableData.value[index],
+              keywords: result.keywords || [],
+              summary: result.summary || '',
+              keyPoints: result.keyPoints || [],
+              analyzedAt: new Date().toISOString()
+            }
+            successCount++
+          }
+        }
+        
+        // 间隔 2 秒避免 API 限流
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      } catch (error) {
+        console.error(`分析 ${doc.name} 失败:`, error)
+      } finally {
+        analyzingIds.value.delete(doc.id)
+      }
+    }
+    
+    saveToStorage()
+    batchAnalyzing.value = false
+    ElMessage.success(`批量分析完成，成功分析 ${successCount} 个文档`)
+    selectedDocs.value = [] // 清空选择
+  } else {
+    // 分析所有未分析的文档
+    batchAnalyzing.value = true
+    let successCount = 0
+    
+    for (const doc of docsToAnalyze) {
+      analyzingIds.value.add(doc.id)
+      
+      try {
+        const content = doc.content || ''
+        if (content && content.length >= 10) {
+          const result = await analyzeWithDeepSeek(content)
+          
+          const index = tableData.value.findIndex(item => item.id === doc.id)
+          if (index !== -1) {
+            tableData.value[index] = {
+              ...tableData.value[index],
+              keywords: result.keywords || [],
+              summary: result.summary || '',
+              keyPoints: result.keyPoints || [],
+              analyzedAt: new Date().toISOString()
+            }
+            successCount++
+          }
+        }
+        
+        // 间隔 2 秒避免 API 限流
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      } catch (error) {
+        console.error(`分析 ${doc.name} 失败:`, error)
+      } finally {
+        analyzingIds.value.delete(doc.id)
+      }
+    }
+    
+    saveToStorage()
+    batchAnalyzing.value = false
+    ElMessage.success(`批量分析完成，成功分析 ${successCount} 个文档`)
+  }
+}
+
+// ==================== 原有功能 ====================
 const previewHtml = ref('')
 
 const handlePreview = async (row) => {

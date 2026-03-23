@@ -25,6 +25,15 @@
           <el-tag :type="getTypeColor(row.type)">{{ row.type }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="Prompt 预览" min-width="200">
+        <template #default="{ row }">
+          <el-tooltip :content="row.prompt" placement="top" :max-width="600" show-after="300">
+            <span class="cursor-pointer text-blue-500 hover:underline">
+              {{ row.prompt.length > 50 ? row.prompt.substring(0, 50) + '...' : row.prompt }}
+            </span>
+          </el-tooltip>
+        </template>
+      </el-table-column>
       <el-table-column prop="createdAt" label="创建时间" width="180" />
       <el-table-column label="操作" width="150" align="center">
         <template #default="{ row }">
@@ -40,35 +49,33 @@
 
     <el-empty v-if="tableData.length === 0" description="暂无创作指令，请添加" />
 
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑指令' : '添加指令'" width="600px">
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="指令名称">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑指令' : '添加指令'" width="500px">
+      <el-form :model="form" :rules="formRules" ref="formRef" label-width="100px">
+        <el-form-item label="指令名称" prop="name">
           <el-input v-model="form.name" placeholder="请输入指令名称" />
         </el-form-item>
-        <el-form-item label="创作类型">
+        <el-form-item label="创作类型" prop="type">
           <el-select v-model="form.type" placeholder="请选择类型">
-            <el-option label="文章创作" value="文章创作" />
-            <el-option label="短视频文案" value="短视频文案" />
-            <el-option label="社交媒体" value="社交媒体" />
+            <el-option v-for="item in PROMPT_TYPES" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="提示词内容">
+        <el-form-item label="提示词内容" prop="prompt">
           <el-input v-model="form.prompt" type="textarea" :rows="6" placeholder="请输入AI提示词" />
           <div class="text-xs text-gray-400 mt-1">
-            支持变量: 
-            <el-tag size="small" class="mx-1">{brand}</el-tag>
-            <el-tag size="small" class="mx-1">{keyword}</el-tag>
-            <el-tag size="small" class="mx-1">{audience}</el-tag>
-            <el-tag size="small" class="mx-1">{platforms}</el-tag>
-            <el-tag size="small" class="mx-1">{extra}</el-tag>
-            <el-tag size="small" class="mx-1">{images}</el-tag>
-            <el-tag size="small" class="mx-1">{knowledge}</el-tag>
+            支持变量:
+            <el-tooltip content="品牌名称，例：苹果、华为" placement="top"><el-tag size="small" class="mx-1 cursor-help">{brand}</el-tag></el-tooltip>
+            <el-tooltip content="关键词，例：手机、耳机" placement="top"><el-tag size="small" class="mx-1 cursor-help">{keyword}</el-tag></el-tooltip>
+            <el-tooltip content="目标受众群体" placement="top"><el-tag size="small" class="mx-1 cursor-help">{audience}</el-tag></el-tooltip>
+            <el-tooltip content="投放平台，例：微信公众号、抖音" placement="top"><el-tag size="small" class="mx-1 cursor-help">{platforms}</el-tag></el-tooltip>
+            <el-tooltip content="补充说明或特殊要求" placement="top"><el-tag size="small" class="mx-1 cursor-help">{extra}</el-tag></el-tooltip>
+            <el-tooltip content="参考图片描述或URL" placement="top"><el-tag size="small" class="mx-1 cursor-help">{images}</el-tag></el-tooltip>
+            <el-tooltip content="参考知识库内容" placement="top"><el-tag size="small" class="mx-1 cursor-help">{knowledge}</el-tag></el-tooltip>
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit">确定</el-button>
+        <el-button type="primary" :disabled="!form.prompt || !form.name || !form.type" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -79,10 +86,25 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
+// P3: 创作类型常量
+const PROMPT_TYPES = [
+  { label: '文章创作', value: '文章创作' },
+  { label: '短视频文案', value: '短视频文案' },
+  { label: '社交媒体', value: '社交媒体' }
+]
+
 const tableData = ref([])
 const dialogVisible = ref(false)
 const isEdit = ref(false)
+const formRef = ref(null)
 const form = ref({ name: '', type: '', prompt: '' })
+
+// P2: 表单校验规则
+const formRules = {
+  name: [{ required: true, message: '请输入指令名称', trigger: 'blur' }],
+  type: [{ required: true, message: '请选择创作类型', trigger: 'change' }],
+  prompt: [{ required: true, message: '请输入 Prompt 内容', trigger: 'blur' }]
+}
 
 // 正序排列（新添加的在最后）
 const sortedData = computed(() => {
@@ -239,13 +261,16 @@ const handleDelete = (id) => {
 }
 
 const handleSubmit = () => {
-  if (isEdit.value) {
-    tableData.value = updateItem('commands', form.value.id, form.value)
-    ElMessage.success('编辑成功')
-  } else {
-    tableData.value = addItem('commands', form.value)
-    ElMessage.success('添加成功')
-  }
-  dialogVisible.value = false
+  formRef.value.validate((valid) => {
+    if (!valid) return
+    if (isEdit.value) {
+      tableData.value = updateItem('commands', form.value.id, form.value)
+      ElMessage.success('编辑成功')
+    } else {
+      tableData.value = addItem('commands', form.value)
+      ElMessage.success('添加成功')
+    }
+    dialogVisible.value = false
+  })
 }
 </script>

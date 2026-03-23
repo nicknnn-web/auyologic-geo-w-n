@@ -14,7 +14,7 @@
         <div class="quick-card quick-orange">
           <div class="quick-icon"><el-icon size="22"><Monitor /></el-icon></div>
           <div class="quick-name">网站优化检测</div>
-          <div class="quick-desc">SEO友好度分析</div>
+          <div class="quick-desc">GEO友好度分析</div>
         </div>
       </router-link>
       <router-link to="/keywords" class="block">
@@ -38,6 +38,34 @@
           <div class="quick-desc">发布内容到平台</div>
         </div>
       </router-link>
+    </div>
+
+    <!-- GEO可见度检测历史摘要 -->
+    <div class="geo-history-section" v-if="geoHistory.length > 0">
+      <div class="section-title-bar">
+        <span class="section-title-text">最近可见度检测</span>
+        <router-link to="/geo-detection" class="dash-card-more">前往检测 <el-icon><ArrowRight /></el-icon></router-link>
+      </div>
+      <div class="geo-history-cards">
+        <div
+          v-for="record in geoHistory.slice(0, 3)"
+          :key="record.id"
+          class="geo-history-card"
+          @click="$router.push('/geo-detection?historyId=' + record.id)"
+        >
+          <div class="geo-history-score">{{ record.overallScore }}</div>
+          <div class="geo-history-grade">{{ record.overallGrade }}级</div>
+          <div class="geo-history-date">{{ formatHistoryDate(record.checkedAt) }}</div>
+          <div class="geo-history-stats">
+            <span>可见 {{ record.visibleCount }}</span>
+            <span>缺失 {{ record.missingCount }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-else class="geo-history-empty">
+      <span>暂无检测记录</span>
+      <router-link to="/geo-detection">去检测 →</router-link>
     </div>
 
     <!-- 第二行：网站健康度 + GEO收录 -->
@@ -209,11 +237,14 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   Monitor, Search, EditPen, Promotion, ArrowRight,
   ChatDotRound, Document, Histogram, Link
 } from '@element-plus/icons-vue'
 import { getData } from '../utils/storage'
+
+const router = useRouter()
 
 // ===== 网站健康度 =====
 const siteScore = ref('--')
@@ -279,6 +310,15 @@ const contentStats = ref({
   published: 0,
 })
 
+// ===== GEO可见度检测历史 =====
+const geoHistory = ref([])
+
+const formatHistoryDate = (dateStr) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+}
+
 // ===== 初始化 =====
 onMounted(() => {
   const allData = getData()
@@ -323,6 +363,10 @@ onMounted(() => {
   // 发布历史
   const history = allData['publishHistory'] || []
   contentStats.value.published = history.length
+
+  // GEO检测历史
+  const geoHistoryData = allData['geo-detection-history'] || []
+  geoHistory.value = geoHistoryData.slice(-10).reverse()
 })
 </script>
 
@@ -641,4 +685,15 @@ onMounted(() => {
   border-radius: 8px;
   font-size: 11px;
 }
+
+/* GEO可见度检测历史 */
+.geo-history-section { margin-bottom: 20px; }
+.geo-history-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 12px; }
+.geo-history-card { background: #f5f7fa; border-radius: 10px; padding: 14px; cursor: pointer; border: 1px solid #e4e7ed; }
+.geo-history-card:hover { border-color: #409eff; }
+.geo-history-score { font-size: 28px; font-weight: 900; color: #303133; }
+.geo-history-grade { font-size: 12px; color: #909399; }
+.geo-history-date { font-size: 12px; color: #909399; margin-top: 4px; }
+.geo-history-stats { display: flex; gap: 10px; margin-top: 6px; font-size: 12px; }
+.geo-history-empty { text-align: center; padding: 24px; color: #909399; }
 </style>

@@ -3,7 +3,7 @@
     <div class="flex items-center mb-4">
       <div>
         <div class="text-lg font-bold">拓展问题</div>
-        <div class="text-sm text-gray-500">AI扩展的检测问题列表</div>
+        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ tableData.length }} 条）</div>
       </div>
       <div class="flex items-center filter-actions gap-4 ml-auto">
         <el-select v-model="filterKeywordType" placeholder="全部类型" class="w-28" clearable>
@@ -50,7 +50,16 @@
           {{ tableData.findIndex(t => t.id === row.id) + 1 }}
         </template>
       </el-table-column>
-      <el-table-column prop="question" label="问题内容" />
+      <el-table-column prop="question" label="问题内容" sortable :sort-by="(row) => row.question">
+        <template #header>
+          <span @click="toggleQuestionSort" style="cursor:pointer;user-select:none;">
+            问题内容
+            <el-icon v-if="questionSortOrder === 'asc'" style="color:#409eff"><SortUp /></el-icon>
+            <el-icon v-else-if="questionSortOrder === 'desc'" style="color:#409eff"><SortDown /></el-icon>
+            <el-icon v-else style="color:#c0c4cc"><Rank /></el-icon>
+          </span>
+        </template>
+      </el-table-column>
       <el-table-column prop="keywordType" label="关键词类型" width="120">
         <template #default="{ row }">
           <el-tag :type="getTypeColor(row.keywordType)" @click="cycleKeywordType(row)" style="cursor:pointer">
@@ -114,7 +123,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, MagicStick } from '@element-plus/icons-vue'
+import { Plus, MagicStick, SortUp, SortDown, Rank } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -123,6 +132,11 @@ import { getData, getList, addItem, deleteItem, updateItem } from '../utils/stor
 const tableData = ref([])
 
 // 正序（ oldest first / newest last）+ 筛选
+const normalize = (s) => {
+  if (!s) return ''
+  return s.replace(/[^\w\u4e00-\u9fa5]/g, '').toLowerCase().trim()
+}
+
 const sortedData = computed(() => {
   let data = [...tableData.value]
 
@@ -133,6 +147,15 @@ const sortedData = computed(() => {
     data = data.filter(item => item.status === filterStatus.value)
   }
 
+  // 去重：保留最早添加的那条
+  const seen = new Set()
+  data = data.filter(item => {
+    const norm = normalize(item.question)
+    if (seen.has(norm)) return false
+    seen.add(norm)
+    return true
+  })
+
   return data
 })
 
@@ -141,6 +164,7 @@ const form = ref({ question: '', keywordType: '' })
 const filterKeywordType = ref('')
 const filterStatus = ref('')
 const selectedRows = ref([])
+const questionSortOrder = ref('') // '' | 'asc' | 'desc'
 
 // 加载数据
 const loadData = () => {

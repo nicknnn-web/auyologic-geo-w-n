@@ -5,6 +5,35 @@
       <div><h1 class="gd-title">GEO 可见度检测</h1><p class="gd-subtitle">检测品牌在各AI平台的可见度，发现内容缺口并驱动创作</p></div>
     </div>
 
+    <!-- 历史检测记录 - 横向滚动卡片 -->
+    <div class="gd-history-section" v-if="geoDetectionHistory.length > 0 && currentStep !== 3">
+      <div class="gd-history-header">
+        <span class="gd-history-title">历史检测</span>
+        <router-link to="/dashboard" class="gd-history-more">查看全部</router-link>
+      </div>
+      <div class="gd-history-scroll">
+        <div
+          v-for="(record, idx) in geoDetectionHistory.slice(0, 5)"
+          :key="record.id"
+          class="gd-history-card"
+          :class="getHistoryGradeClass(record.overallGrade)"
+          @click="handleHistoryCardClick(record.id)"
+        >
+          <div class="gd-history-card-top">
+            <span class="gd-history-score">{{ record.overallScore }}</span>
+            <span class="gd-history-grade" :class="getHistoryGradeClass(record.overallGrade)">{{ record.overallGrade }}</span>
+          </div>
+          <div class="gd-history-date">{{ formatHistoryDate(record.checkedAt) }}</div>
+          <div class="gd-history-meta">
+            <span class="gd-history-stat visible">{{ record.visibleCount }} 可见</span>
+            <span class="gd-history-stat missing">{{ record.missingCount }} 缺失</span>
+          </div>
+          <div class="gd-history-platforms">{{ record.platformNames.join('、') }}</div>
+          <div v-if="idx === 0" class="gd-history-new-tag">最新</div>
+        </div>
+      </div>
+    </div>
+
     <div class="gd-overview-grid" v-if="detectionDone">
       <div class="overview-score-card" :class="overallGradeClass">
         <div class="overview-score-num">{{ overallScore }}</div>
@@ -41,7 +70,9 @@
                 <span class="question-text">{{ q.text }}</span>
                 <el-tag size="small" :type="getCategoryColor(q.category)">{{ q.category }}</el-tag>
               </div>
-              <div v-if="filteredQuestions.length === 0" class="empty-hint">暂无问题，请先在拓展问题页面添加</div>
+              <div v-if="filteredQuestions.length === 0" class="empty-hint" style="color:#e6a23c;background:#fdf6ec;border:1px solid #f5dab1;border-radius:8px;padding:12px;">
+                暂无已审核的问题可检测，请先前往「<b>拓展问题</b>」页面添加并审核问题后再来
+              </div>
             </div>
           </div>
           <div class="question-right">
@@ -192,7 +223,7 @@
               <el-icon v-else color="#dcdfe6"><Close /></el-icon>
             </div>
           </div>
-          <div class="result-card-action"><el-button size="small" type="primary" plain @click="handleGenerateContent(item.question)"><el-icon class="mr-1"><EditPen /></el-icon>继续优化</el-button></div>
+          <div class="result-card-action"><el-button size="small" type="primary" plain @click="handleGenerateContent(item.question)"><el-icon class="mr-1"><EditPen /></el-icon>继续优化</el-button><el-button v-if="item.platforms.some(p => p.name === 'DeepSeek')" size="small" plain @click="openRawAnswer(item.platforms.find(p => p.name === 'DeepSeek').rawAnswer)"><el-icon class="mr-1"><Document /></el-icon>查看 DeepSeek 原文</el-button></div>
         </div>
       </div>
 
@@ -223,17 +254,21 @@
       </div>
     </div>
 
-    <el-dialog v-model="loadingVisible" title="正在检测..." width="380px" :close-on-click-modal="false" :show-close="false">
-      <div class="detecting-dialog"><el-progress type="circle" :percentage="progressPercent" :width="100" class="mb-4" /><div class="detecting-task">{{ currentTask }}</div><div class="detecting-count">已完成 {{ completedCount }} / {{ totalCount }} 次</div></div>
+    <el-dialog v-model="loadingVisible" title="正在检测" width="380px" :close-on-click-modal="false" :show-close="false">
+      <div class="detecting-dialog"><el-icon class="is-loading" style="font-size: 64px; color: #409eff; margin-bottom: 16px;"><Loading /></el-icon><div class="detecting-task">检测中，请稍候...</div><div class="detecting-task" style="font-size:13px;color:#909399;margin-top:6px">{{ currentTask }}</div><div class="detecting-count">已完成 {{ completedCount }} / {{ totalCount }} 次</div></div>
+    </el-dialog>
+
+    <el-dialog v-model="rawAnswerDialogVisible" title="DeepSeek 原始回答" width="600px">
+      <div style="font-size:14px;color:#303133;line-height:1.8;white-space:pre-wrap;max-height:60vh;overflow-y:auto;">{{ currentRawAnswer }}</div>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, h } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock, Document } from '@element-plus/icons-vue'
+import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock, Document, Loading } from '@element-plus/icons-vue'
 import { getList, getData, saveData } from '../utils/storage'
 
 /**
@@ -354,6 +389,124 @@ const RadarChart = {
 const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
 
+// ==================== 权威网站白名单 ====================
+// 这些是行业知名品牌官网，检测时有额外加权
+const AUTHORIZED_WEBSITES = {
+  // 手机/科技行业
+  'apple.com': { name: 'Apple', brand: '苹果', weight: 25 },
+  'huawei.com': { name: 'Huawei', brand: '华为', weight: 22 },
+  'xiaomi.com': { name: 'Xiaomi', brand: '小米', weight: 20 },
+  'samsung.com': { name: 'Samsung', brand: '三星', weight: 22 },
+  'oppo.com': { name: 'OPPO', brand: 'OPPO', weight: 18 },
+  'vivo.com': { name: 'vivo', brand: 'vivo', weight: 18 },
+  'oneplus.com': { name: 'OnePlus', brand: '一加', weight: 15 },
+  'google.com': { name: 'Google', brand: '谷歌', weight: 25 },
+  'microsoft.com': { name: 'Microsoft', brand: '微软', weight: 25 },
+  
+  // 汽车行业
+  'tesla.com': { name: 'Tesla', brand: '特斯拉', weight: 23 },
+  'byd.com': { name: 'BYD', brand: '比亚迪', weight: 20 },
+  'nio.com': { name: 'NIO', brand: '蔚来', weight: 18 },
+  'xpeng.com': { name: 'XPeng', brand: '小鹏', weight: 17 },
+  'li-auto.com': { name: 'Li Auto', brand: '理想', weight: 17 },
+  'bmw.com': { name: 'BMW', brand: '宝马', weight: 22 },
+  'mercedes-benz.com': { name: 'Mercedes-Benz', brand: '奔驰', weight: 22 },
+  'audi.com': { name: 'Audi', brand: '奥迪', weight: 21 },
+  
+  // 电商/互联网
+  'amazon.com': { name: 'Amazon', brand: '亚马逊', weight: 25 },
+  'taobao.com': { name: 'Taobao', brand: '淘宝', weight: 22 },
+  'jd.com': { name: 'JD', brand: '京东', weight: 22 },
+  'pinduoduo.com': { name: 'Pinduoduo', brand: '拼多多', weight: 18 },
+  'alibaba.com': { name: 'Alibaba', brand: '阿里巴巴', weight: 23 },
+  'tmall.com': { name: 'Tmall', brand: '天猫', weight: 22 },
+  
+  // 社交/内容平台
+  'facebook.com': { name: 'Facebook', brand: 'Facebook', weight: 24 },
+  'twitter.com': { name: 'Twitter', brand: 'Twitter', weight: 22 },
+  'instagram.com': { name: 'Instagram', brand: 'Instagram', weight: 22 },
+  'youtube.com': { name: 'YouTube', brand: 'YouTube', weight: 24 },
+  'tiktok.com': { name: 'TikTok', brand: 'TikTok', weight: 23 },
+  'douyin.com': { name: 'Douyin', brand: '抖音', weight: 22 },
+  'bilibili.com': { name: 'Bilibili', brand: 'B站', weight: 20 },
+  'xiaohongshu.com': { name: 'Xiaohongshu', brand: '小红书', weight: 20 },
+  
+  // 中国本土品牌
+  'baidu.com': { name: 'Baidu', brand: '百度', weight: 23 },
+  'tencent.com': { name: 'Tencent', brand: '腾讯', weight: 24 },
+  'alipay.com': { name: 'Alipay', brand: '支付宝', weight: 22 },
+  'weibo.com': { name: 'Weibo', brand: '微博', weight: 20 },
+  'zhihu.com': { name: 'Zhihu', brand: '知乎', weight: 18 },
+  
+  // 更多科技品牌
+  'nvidia.com': { name: 'NVIDIA', brand: '英伟达', weight: 24 },
+  'intel.com': { name: 'Intel', brand: '英特尔', weight: 22 },
+  'amd.com': { name: 'AMD', brand: 'AMD', weight: 21 },
+  'sony.com': { name: 'Sony', brand: '索尼', weight: 22 },
+  'canon.com': { name: 'Canon', brand: '佳能', weight: 20 },
+  'nikon.com': { name: 'Nikon', brand: '尼康', weight: 20 },
+  
+  // 运动/时尚
+  'nike.com': { name: 'Nike', brand: '耐克', weight: 22 },
+  'adidas.com': { name: 'Adidas', brand: '阿迪达斯', weight: 21 },
+  'lululemon.com': { name: 'Lululemon', brand: 'Lululemon', weight: 18 },
+  
+  // 食品/饮料
+  'coca-cola.com': { name: 'Coca-Cola', brand: '可口可乐', weight: 20 },
+  'pepsi.com': { name: 'Pepsi', brand: '百事', weight: 18 },
+  'starbucks.com': { name: 'Starbucks', brand: '星巴克', weight: 20 },
+  'mcdonalds.com': { name: 'McDonalds', brand: '麦当劳', weight: 18 },
+  'kfc.com': { name: 'KFC', brand: '肯德基', weight: 17 },
+}
+
+/**
+ * 获取网站知名度权重
+ * @param {string} url - 网站URL
+ * @returns {object|null} 匹配的品牌信息或null
+ */
+const getWebsiteAuthority = (url) => {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase()
+    // 精确匹配或域名后缀匹配
+    for (const [domain, info] of Object.entries(AUTHORIZED_WEBSITES)) {
+      if (hostname === domain || hostname.endsWith('.' + domain)) {
+        return info
+      }
+    }
+    return null
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 计算带知名度的调整得分
+ * @param {number} baseScore - 基础得分
+ * @param {string} url - 相关网站URL（如果有）
+ * @param {object} detection - 检测结果
+ * @returns {number} 调整后的得分
+ */
+const calculateScoreWithAuthority = (baseScore, url, detection) => {
+  // 如果基础得分已经很高，不需要额外加权
+  if (baseScore >= 70) return baseScore
+  
+  // 检查是否是权威网站
+  const authority = getWebsiteAuthority(url)
+  if (!authority) return baseScore
+  
+  // 如果关键词未被提及，但网站是权威网站
+  if (!detection.mentioned) {
+    // 保底分数 = 基础权重 * 0.4（确保至少有保底分）
+    const floorScore = Math.round(authority.weight * 0.4)
+    return Math.max(baseScore, floorScore)
+  }
+  
+  // 如果关键词被提及，给予额外加权
+  // 额外加分 = 权重 * 0.5，但最高不超过100
+  const bonus = Math.round(authority.weight * 0.5)
+  return Math.min(100, baseScore + bonus)
+}
+
 // ==================== 缓存配置 ====================
 const CACHE_KEY = 'geo_detection_cache'
 const CACHE_DAYS = 7
@@ -423,6 +576,156 @@ const setCachedResult = (question, keyword, platformId, result) => {
 }
 
 /**
+ * 真实检测：直接将问题发给 DeepSeek，从真实回答中分析关键词可见度
+ * @param {string} question - 用户问题
+ * @param {string} keyword - 品牌关键词
+ * @returns {Promise<object>} 检测结果
+ */
+const detectDeepseekReal = async (question, keyword) => {
+  try {
+    // 直接将用户问题发给 DeepSeek，不做任何分析指令
+    const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'user', content: question }
+        ],
+        temperature: 0.7,
+        max_tokens: 800
+      })
+    })
+
+    if (!response.ok) {
+      throw new Error(`DeepSeek API请求失败: ${response.status}`)
+    }
+
+    const data = await response.json()
+    const answerText = data.choices?.[0]?.message?.content
+
+    if (!answerText) {
+      throw new Error('DeepSeek 返回内容为空')
+    }
+
+    console.log(`[GEO真实检测] DeepSeek 回答: ${answerText.slice(0, 80)}...`)
+
+    // ===== 纯前端文本分析 =====
+    const text = answerText
+    const lowerText = text.toLowerCase()
+    const lowerKeyword = keyword.toLowerCase()
+
+    // 1. mentioned - 是否提及
+    const mentioned = lowerText.includes(lowerKeyword)
+
+    // 2. mentionType - 提及类型
+    let mentionType = 'none'
+    if (mentioned) {
+      // 检查是完整词匹配还是部分词匹配（手动转义特殊字符）
+      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const exactPattern = new RegExp(`\\b${escaped}\\b`, 'i')
+      if (exactPattern.test(text)) {
+        mentionType = 'explicit'
+      } else {
+        mentionType = 'implicit'
+      }
+    }
+
+    // 3. firstMentionPosition - 首次提及位置（0=开头，1=结尾）
+    let firstMentionPosition = 1.0
+    if (mentioned) {
+      const idx = lowerText.indexOf(lowerKeyword)
+      firstMentionPosition = idx / text.length
+    }
+
+    // 4. positionRank - 位置等级
+    let positionRank = 'below_fold'
+    if (mentioned) {
+      if (firstMentionPosition < 0.1) positionRank = 'top'
+      else if (firstMentionPosition < 0.5) positionRank = 'above_fold'
+      else positionRank = 'below_fold'
+    }
+
+    // 5. sentiment - 情感分析（基于关键词周围的上下文）
+    let sentiment = 'neutral'
+    if (mentioned) {
+      const idx = lowerText.indexOf(lowerKeyword)
+      // 取关键词前后50个字符作为上下文
+      const contextStart = Math.max(0, idx - 50)
+      const contextEnd = Math.min(text.length, idx + keyword.length + 50)
+      const context = text.slice(contextStart, contextEnd)
+
+      const positiveWords = ['推荐', '优秀', '最好', '领先', '强大', '创新', '值得', '赞', '好', '棒', '不错', '出色', '优质', '信赖', '喜欢', '支持', '首选', '推荐', '最佳', '第一']
+      const negativeWords = ['差', '问题', '坑', '烂', '失望', '后悔', '不推荐', '避雷', '骗局', '垃圾', '缺点', '失败', '糟糕', '差劲', '投诉']
+
+      const posCount = positiveWords.filter(w => context.includes(w)).length
+      const negCount = negativeWords.filter(w => context.includes(w)).length
+
+      if (posCount > negCount) sentiment = 'positive'
+      else if (negCount > posCount) sentiment = 'negative'
+      else sentiment = 'neutral'
+    }
+
+    // 6. semanticRelevance - 语义相关性（基于关键词在文本中的分布密度）
+    let semanticRelevance = 0
+    if (mentioned) {
+      // 计算关键词出现次数占总字数的比例
+      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const count = (lowerText.match(new RegExp(escaped, 'g')) || []).length
+      // 归一化：出现1次/100字 = 0.5, 出现1次/50字 = 0.7, 出现1次/20字 = 0.9
+      const density = count / (text.length / 100)
+      semanticRelevance = Math.min(1.0, density * 0.8)
+    }
+
+    // 7. competitivePosition 和 8. competitorsMentioned（简化检测）
+    let competitivePosition = null
+    const competitorsMentioned = []
+
+    const competitorKeywords = ['苹果', 'Apple', '华为', 'Huawei', '小米', 'Xiaomi', '三星', 'Samsung', 'OPPO', 'vivo', '一加', 'OnePlus', '荣耀', 'Honor', '谷歌', 'Google', '微软', 'Microsoft', '特斯拉', 'Tesla', '比亚迪', 'BYD']
+    competitorKeywords.forEach(comp => {
+      if (comp.toLowerCase() !== lowerKeyword && lowerText.includes(comp.toLowerCase())) {
+        competitorsMentioned.push(comp)
+      }
+    })
+
+    if (competitorsMentioned.length > 0 && mentioned) {
+      // 检查关键词与竞品的相对位置
+      const keywordIdx = lowerText.indexOf(lowerKeyword)
+      const compIdx = lowerText.indexOf(competitorsMentioned[0].toLowerCase())
+      if (keywordIdx < compIdx) {
+        competitivePosition = 'winner'
+      } else {
+        competitivePosition = 'loser'
+      }
+    } else if (mentioned) {
+      competitivePosition = 'mentioned'
+    }
+
+    const result = {
+      mentioned,
+      mentionType,
+      firstMentionPosition,
+      positionRank,
+      sentiment,
+      semanticRelevance: Math.round(semanticRelevance * 100) / 100,
+      competitivePosition,
+      competitorsMentioned,
+      rawAnswer: answerText
+    }
+
+    console.log(`[GEO真实检测] 分析结果:`, result)
+    return result
+
+  } catch (error) {
+    console.error('DeepSeek 真实检测失败:', error)
+    throw error
+  }
+}
+
+/**
  * 调用 DeepSeek API 进行可见度检测
  * @param {string} question - 用户问题
  * @param {string} keyword - 品牌关键词
@@ -436,7 +739,16 @@ const detectWithDeepSeek = async (question, keyword, platformId) => {
     console.log(`[GEO检测] 缓存命中: ${question.slice(0, 20)}... @ ${platformId}`)
     return cached
   }
-  
+
+  // ===== 真实检测：DeepSeek 平台直接发问题并分析回答 =====
+  if (platformId === 'deepseek') {
+    const result = await detectDeepseekReal(question, keyword)
+    setCachedResult(question, keyword, platformId, result)
+    console.log(`[GEO检测] DeepSeek 真实检测完成: ${question.slice(0, 20)}...`)
+    return result
+  }
+
+  // ===== 模拟检测：其他平台暂无API，使用分析prompt（模拟逻辑）=====
   // 构建提示词
   const prompt = `你是一个AI平台内容分析专家。请分析以下问题在AI平台回答中的品牌可见度。
 
@@ -527,9 +839,10 @@ const detectWithDeepSeek = async (question, keyword, platformId) => {
  * 计算综合得分（按关键词类型加权）
  * @param {object} detection - 检测结果
  * @param {string} keywordType - 关键词类型 (品牌/产品/场景)
+ * @param {string} keyword - 关键词（用于检测权威网站）
  * @returns {number} 综合得分 0-100
  */
-const calculateScore = (detection, keywordType) => {
+const calculateScore = (detection, keywordType, keyword = '') => {
   const weights = {
     '品牌': { mention: 0.4, position: 0.3, sentiment: 0.2, relevance: 0.1 },
     '产品': { mention: 0.3, position: 0.25, sentiment: 0.25, relevance: 0.2 },
@@ -557,17 +870,104 @@ const calculateScore = (detection, keywordType) => {
   const relevanceScore = detection.semanticRelevance * 100
   
   // 计算加权总分
-  const totalScore = 
+  let totalScore = 
     mentionScore * w.mention +
     positionScore * w.position +
     sentimentScore * w.sentiment +
     relevanceScore * w.relevance
   
-  return Math.round(totalScore)
+  totalScore = Math.round(totalScore)
+  
+  // ==================== 知名网站加权 ====================
+  // 如果检测到了权威网站，给予额外加权
+  const authority = getWebsiteAuthority(keyword)
+  if (authority) {
+    if (detection.mentioned) {
+      // 关键词被提及：额外加分
+      const bonus = Math.round(authority.weight * 0.5)
+      totalScore = Math.min(100, totalScore + bonus)
+    } else {
+      // 关键词未被提及：保底分数
+      const floorScore = Math.round(authority.weight * 0.4)
+      totalScore = Math.max(totalScore, floorScore)
+    }
+  }
+  
+  return totalScore
 }
 
 const router = useRouter()
+const route = useRoute()
 const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '确认检测' }, { label: '查看结果' }]
+
+// ===== 历史检测记录 =====
+const geoDetectionHistory = ref([])
+
+const loadHistory = () => {
+  const allData = getData()
+  geoDetectionHistory.value = allData['geo-detection-history'] || []
+}
+
+const saveHistory = (record) => {
+  const allData = getData()
+  const history = allData['geo-detection-history'] || []
+  // 添加到最前面
+  history.unshift(record)
+  // 最多保留10条
+  if (history.length > 10) history.splice(10)
+  allData['geo-detection-history'] = history
+  saveData(allData)
+  geoDetectionHistory.value = history
+}
+
+const loadHistoryRecord = (id) => {
+  const allData = getData()
+  const history = allData['geo-detection-history'] || []
+  return history.find(h => h.id === Number(id))
+}
+
+const getHistoryGradeClass = (grade) => {
+  if (grade === 'A') return 'grade-green'
+  if (grade === 'B') return 'grade-yellow'
+  return 'grade-red'
+}
+
+const formatHistoryDate = (isoString) => {
+  const d = new Date(isoString)
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const hour = d.getHours().toString().padStart(2, '0')
+  const minute = d.getMinutes().toString().padStart(2, '0')
+  return `${month}/${day} ${hour}:${minute}`
+}
+
+const handleHistoryCardClick = (id) => {
+  router.replace({ path: '/geo-detection', query: { historyId: id } })
+  // 加载历史记录
+  const record = loadHistoryRecord(id)
+  if (record) {
+    loadedHistoryRecord.value = record
+    detectionResults.value = record.results || []
+    overallScore.value = record.overallScore
+    overallGrade.value = record.overallGrade
+    currentStep.value = 3
+    resultTab.value = 'missing'
+  }
+}
+
+const loadedHistoryRecord = ref(null)
+
+const resetDetection = () => {
+  currentStep.value = 0
+  selectedQuestions.value = []
+  selectedPlatforms.value = []
+  selectedKeywords.value = []
+  detectionResults.value = []
+  resultTab.value = 'missing'
+  overallScore.value = 0
+  loadedHistoryRecord.value = null
+  router.replace({ path: '/geo-detection' })
+}
 const currentStep = ref(0)
 const detectionDone = computed(() => currentStep.value === 3)
 const resultTab = ref('missing')
@@ -721,6 +1121,12 @@ const filteredQuestions = computed(() => {
   return questions.value.filter(q => q.category === questionFilter.value)
 })
 
+// 是否有待审核的问题（用于提醒用户先去 Questions 页面审核）
+const hasPendingQuestions = computed(() => {
+  const allQuestions = getList('questions')
+  return allQuestions.some(q => q.status === '待审核')
+})
+
 const isQuestionSelected = (id) => {
   return selectedQuestions.value.some(q => q.id === id)
 }
@@ -819,6 +1225,8 @@ const currentTask = ref('')
 const detectionResults = ref([])
 const overallScore = ref(0)
 const overallGrade = ref('')
+const rawAnswerDialogVisible = ref(false)
+const currentRawAnswer = ref('')
 
 const detectionPlatforms = computed(() => selectedPlatforms.value)
 const visibleQuestions = computed(() => detectionResults.value.filter(r => r.platforms.some(p => p.mentioned)))
@@ -869,16 +1277,17 @@ const startDetection = async () => {
       
       try {
         // 调用 DeepSeek API 进行真实检测
-        const detection = await detectWithDeepSeek(q.text, q.sourceKeyword || selectedKeywords.value[0] || '', p.id)
+        const keyword = q.sourceKeyword || selectedKeywords.value[0] || ''
+        const detection = await detectWithDeepSeek(q.text, keyword, p.id)
         
         allDetectionResults.push({
           questionId: qIdx + 1,
           question: q.text,
           category: q.category,
-          sourceKeyword: q.sourceKeyword,
+          sourceKeyword: keyword,
           platform: p,
           detection: detection,
-          score: calculateScore(detection, q.category)
+          score: calculateScore(detection, q.category, keyword)
         })
       } catch (error) {
         console.error(`检测失败: ${q.text} @ ${p.name}`, error)
@@ -954,6 +1363,7 @@ const buildResultsFromAPI = (apiResults) => {
       semanticRelevance: result.detection.semanticRelevance,
       competitivePosition: result.detection.competitivePosition,
       competitorsMentioned: result.detection.competitorsMentioned,
+      rawAnswer: result.detection.rawAnswer || null,
       error: result.error || false
     })
     
@@ -989,6 +1399,20 @@ const buildResultsFromAPI = (apiResults) => {
   else if (overallScore.value >= 40) overallGrade.value = 'C'
   else overallGrade.value = 'D'
 
+  // 保存到历史记录
+  saveHistory({
+    id: Date.now(),
+    checkedAt: new Date().toISOString(),
+    overallScore: overallScore.value,
+    overallGrade: overallGrade.value,
+    visibleCount: visibleQuestions.value.length,
+    missingCount: missingQuestions.value.length,
+    platformCount: selectedPlatforms.value.length,
+    questionCount: results.length,
+    platformNames: selectedPlatforms.value.map(p => p.name),
+    results: results
+  })
+
   // 同步到 storage 供 Dashboard 读取
   const allData = getData()
   allData['geo-detection-result'] = {
@@ -1004,18 +1428,13 @@ const buildResultsFromAPI = (apiResults) => {
 
 
 
-const resetDetection = () => {
-  currentStep.value = 0
-  selectedQuestions.value = []
-  selectedPlatforms.value = []
-  selectedKeywords.value = []
-  detectionResults.value = []
-  resultTab.value = 'missing'
-  overallScore.value = 0
-}
-
 const handleGenerateContent = (question) => {
   router.push({ path: '/content-create', query: { topic: question } })
+}
+
+const openRawAnswer = (rawAnswer) => {
+  currentRawAnswer.value = rawAnswer || '暂无原文内容'
+  rawAnswerDialogVisible.value = true
 }
 
 /**
@@ -1071,6 +1490,15 @@ const getCategoryColor = (cat) => {
 }
 
 onMounted(() => {
+  // 加载历史记录
+  loadHistory()
+
+  // 检查是否有 historyId 参数
+  const historyId = route.query.historyId
+  if (historyId) {
+    handleHistoryCardClick(historyId)
+  }
+
   const rawQuestions = getList('questions').filter(q => q.status === '已审核')
   questions.value = rawQuestions.map((q, i) => ({
     id: i + 1,
@@ -1091,6 +1519,31 @@ onMounted(() => {
 <style scoped>
 .gd-page{padding:24px 28px;max-width:1100px;margin:0 auto;font-family:'PingFang SC','Microsoft YaHei',sans-serif}
 .gd-header{display:flex;align-items:center;gap:14px;margin-bottom:24px}
+
+/* 历史检测记录 */
+.gd-history-section{margin-bottom:20px}
+.gd-history-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.gd-history-title{font-size:13px;font-weight:600;color:#606266}
+.gd-history-more{font-size:12px;color:#409eff;text-decoration:none}
+.gd-history-more:hover{text-decoration:underline}
+.gd-history-scroll{display:flex;gap:12px;overflow-x:auto;padding-bottom:8px}
+.gd-history-scroll::-webkit-scrollbar{height:4px}
+.gd-history-scroll::-webkit-scrollbar-thumb{background:#e4e7ed;border-radius:2px}
+.gd-history-card{position:relative;flex-shrink:0;width:140px;padding:14px;border-radius:12px;border:1px solid #ebeef5;background:#fafbfc;cursor:pointer;transition:all .2s}
+.gd-history-card:hover{box-shadow:0 4px 12px rgba(0,0,0,0.1);transform:translateY(-2px)}
+.gd-history-card-top{display:flex;align-items:baseline;gap:6px;margin-bottom:6px}
+.gd-history-score{font-size:28px;font-weight:900;line-height:1;color:#303133}
+.gd-history-grade{font-size:13px;font-weight:800;padding:2px 8px;border-radius:10px}
+.gd-history-card.grade-green .gd-history-grade{background:#e1f3d8;color:#67c23a}
+.gd-history-card.grade-yellow .gd-history-grade{background:#faecd8;color:#e6a23c}
+.gd-history-card.grade-red .gd-history-grade{background:#fde2e2;color:#f56c6c}
+.gd-history-date{font-size:11px;color:#909399;margin-bottom:8px}
+.gd-history-meta{display:flex;gap:6px;margin-bottom:6px}
+.gd-history-stat{font-size:11px;font-weight:600;padding:1px 6px;border-radius:8px}
+.gd-history-stat.visible{background:#f0f9eb;color:#67c23a}
+.gd-history-stat.missing{background:#fef0f0;color:#f56c6c}
+.gd-history-platforms{font-size:10px;color:#c0c4cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gd-history-new-tag{position:absolute;top:8px;right:8px;background:#ff4d4f;color:white;font-size:10px;font-weight:700;padding:1px 6px;border-radius:8px}
 .gd-header-icon{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#7070f0,#9090f5);display:flex;align-items:center;justify-content:center;color:white;font-size:22px;box-shadow:0 4px 12px rgba(112,112,240,0.3)}
 .gd-title{font-size:20px;font-weight:700;color:#1a1a1a;margin:0 0 4px}
 .gd-subtitle{font-size:13px;color:#909399;margin:0}

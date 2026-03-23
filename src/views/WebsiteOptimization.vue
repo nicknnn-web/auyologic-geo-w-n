@@ -7,7 +7,7 @@
       </div>
       <div>
         <h1 class="wo-title">网站优化检测</h1>
-        <p class="wo-subtitle">分析网站技术 SEO 与 AI 抓取友好度，获取可执行的改进建议</p>
+        <p class="wo-subtitle">分析网站技术 GEO 与 AI 抓取友好度，获取可执行的改进建议</p>
       </div>
     </div>
 
@@ -35,12 +35,13 @@
           type="primary"
           size="large"
           class="wo-check-btn"
-          @click="handleStartCheck"
+          @click="handleStartCheck(forceCheck)"
           :loading="checking"
           :disabled="!inputUrl.trim()"
         >
           {{ checking ? '检测中...' : '开始检测' }}
         </el-button>
+        <el-checkbox v-model="forceCheck" class="ml-2">强制重新检测</el-checkbox>
       </div>
 
       <!-- 检测维度说明 -->
@@ -70,6 +71,15 @@
           <div class="wo-history-actions">
             <el-button
               size="small"
+              type="primary"
+              :disabled="selectedHistory.length === 0"
+              @click="generateReport"
+            >
+              <el-icon class="mr-1"><Document /></el-icon>
+              生成GEO报告 ({{ selectedHistory.length }})
+            </el-button>
+            <el-button
+              size="small"
               type="danger"
               :disabled="selectedHistory.length === 0"
               @click="handleBatchDelete"
@@ -93,6 +103,9 @@
               @change="toggleSelect(idx)"
               class="history-checkbox"
             />
+            <el-button size="small" type="primary" link @click.stop="handleRecheck(r.url)" class="history-recheck-btn">
+              <el-icon><RefreshRight /></el-icon>
+            </el-button>
             <div class="wo-history-score" :class="getScoreClass(r.score)">
               {{ r.score }}
             </div>
@@ -104,6 +117,9 @@
               <el-tag size="small" :type="getGradeTagType(r.score)" round>
                 {{ getGradeName(r.score) }}
               </el-tag>
+            </div>
+            <div class="wo-history-geo-badge" v-if="hasGeoReport(r)" title="已有GEO报告">
+              <el-icon color="#7070f0"><Document /></el-icon>
             </div>
           </div>
         </div>
@@ -159,6 +175,18 @@
           <div class="grade-label">综合评级</div>
           <div class="grade-name" :class="gradeClass">{{ gradeName }}</div>
           <div class="grade-desc">{{ gradeDesc }}</div>
+        </div>
+
+        <!-- 知名网站保底提示 -->
+        <div v-if="famousSiteBonus" class="famous-bonus-tip">
+          <el-icon><InfoFilled /></el-icon>
+          <span>{{ famousSiteBonus.name }}为知名{{ famousSiteBonus.type }}网站，已获得+{{ famousSiteBonus.bonus }}分保底分数</span>
+        </div>
+
+        <!-- 评分说明 -->
+        <div class="score-explain-tip">
+          <el-icon><InfoFilled /></el-icon>
+          <span>本评分基于网站技术指标（SEO配置、结构化数据、AI抓取友好度），不反映品牌知名度</span>
         </div>
 
         <!-- 维度得分 -->
@@ -250,12 +278,15 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElNotification } from 'element-plus'
 import {
   Monitor, Check, Loading, Link, Clock, RefreshRight, Download,
-  WarnTriangleFilled, CircleCheckFilled, Key, CircleCheck, FolderOpened, ArrowLeft
+  WarnTriangleFilled, CircleCheckFilled, Key, CircleCheck, FolderOpened, ArrowLeft, InfoFilled, Document
 } from '@element-plus/icons-vue'
 import { getData, saveData } from '../utils/storage'
+
+const router = useRouter()
 import { analyzeWebsite } from '../utils/websiteAnalyzer'
 
 // ===== 常量 =====
@@ -275,6 +306,7 @@ const dimColors = {
 
 // ===== 状态 =====
 const inputUrl = ref('')
+const forceCheck = ref(false) // 强制重新检测
 const checking = ref(false)
 const report = ref(null)
 const activeIssueTab = ref('warn')
@@ -289,139 +321,16 @@ const issueTabs = [
 // ===== 检测进度维度 =====
 const dimensions = ref([
   { key: 'tech', name: '技术基础', desc: 'HTTPS / robots.txt / 加载速度', index: 0, done: false, active: false },
-  { key: 'structure', name: '页面结构', desc: 'H标签 / Meta / 内容质量', index: 1, done: false, active: false },
+  { key: 'structure', name: '页面渲染', desc: 'SSR / CSR / 加载速度', index: 1, done: false, active: false },
   { key: 'schema', name: '结构化数据', desc: 'JSON-LD / OpenGraph / Schema', index: 2, done: false, active: false },
-  { key: 'ai', name: 'AI亲和性', desc: '爬虫友好度 / FAQ内容', index: 3, done: false, active: false }
+  { key: 'ai', name: 'AI亲和性', desc: '爬虫友好度 / FAQ内容 / AI深度分析', index: 3, done: false, active: false }
 ])
 
-// ===== 模拟检测逻辑 =====
-const runMockCheck = async (url) => {
-  const sleep = ms => new Promise(r => setTimeout(r, ms))
-
-  // 步骤1: 技术基础
-  dimensions.value[0].active = true
-  await sleep(600)
-  dimensions.value[0].done = true
-  dimensions.value[0].active = false
-
-  // 步骤2: 页面结构
-  dimensions.value[1].active = true
-  await sleep(800)
-  dimensions.value[1].done = true
-  dimensions.value[1].active = false
-
-  // 步骤3: 结构化数据
-  dimensions.value[2].active = true
-  await sleep(500)
-  dimensions.value[2].done = true
-  dimensions.value[2].active = false
-
-  // 步骤4: AI亲和性
-  dimensions.value[3].active = true
-  await sleep(700)
-  dimensions.value[3].done = true
-  dimensions.value[3].active = false
-  await sleep(200)
-}
-
-// ===== 生成报告 =====
-const generateReport = (url) => {
-  const rand = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min
-
-  const items = {
-    tech:    { score: rand(15, 24), checked: rand(2, 4), total: 5 },
-    structure: { score: rand(14, 23), checked: rand(2, 4), total: 5 },
-    schema:  { score: rand(8, 18), checked: rand(1, 3), total: 5 },
-    aiFriendly: { score: rand(10, 20), checked: rand(2, 4), total: 5 }
-  }
-
-  const total = items.tech.score + items.structure.score + items.schema.score + items.aiFriendly.score
-
-  const issues = {
-    warn: [
-      {
-        title: 'robots.txt 未检测到或配置缺失',
-        desc: '未找到 robots.txt 文件，AI 爬虫无法了解您的抓取偏好。',
-        fix: '在网站根目录创建 robots.txt，建议允许 AI 爬虫访问重要内容。',
-        level: 'warn',
-        impact: rand(5, 12)
-      },
-      {
-        title: '缺少 FAQ Schema 结构化数据',
-        desc: '页面未包含 FAQ JSON-LD schema，无法向搜索引擎明确表达问答内容。',
-        fix: '在页面 <head> 中添加 FAQPage schema，标注常见问题与答案。',
-        level: 'warn',
-        impact: rand(5, 10)
-      },
-      {
-        title: '页面加载速度偏慢（预估 3.5s）',
-        desc: '首屏加载时间超过 3 秒，影响搜索引擎抓取效率。',
-        fix: '启用 Gzip 压缩、优化图片大小、启用浏览器缓存。',
-        level: 'warn',
-        impact: rand(5, 8)
-      },
-      {
-        title: '缺少 Twitter Card Meta 标签',
-        desc: '页面未配置 Twitter Card，影响社交平台分享预览效果。',
-        fix: '添加 <meta name="twitter:card" content="summary_large_image" />',
-        level: 'warn',
-        impact: rand(3, 5)
-      }
-    ],
-    pass: [
-      {
-        title: '使用 HTTPS 加密协议',
-        desc: '网站全程使用 HTTPS 加密，安全性达标。',
-        level: 'pass',
-        impact: 8
-      },
-      {
-        title: '页面包含有效的 Title 和 Meta Description',
-        desc: '每个页面都有唯一的标题和描述，利于搜索引擎理解内容。',
-        level: 'pass',
-        impact: 6
-      },
-      {
-        title: '内容字数充足（预估 1200 字）',
-        desc: '页面内容充实，提供足够上下文供 AI 分析理解。',
-        level: 'pass',
-        impact: 5
-      }
-    ]
-  }
-
-  return {
-    url,
-    score: total,
-    items,
-    issues,
-    checkedAt: new Date().toISOString(),
-    details: buildDetails(items)
-  }
-}
-
-const buildDetails = (items) => {
-  return [
-    { dimension: '技术基础', item: 'HTTPS 协议', result: 'pass', value: 'https://', suggestion: '保持现状' },
-    { dimension: '技术基础', item: 'robots.txt 存在', result: 'fail', value: '未找到', suggestion: '在根目录创建 robots.txt' },
-    { dimension: '技术基础', item: '页面加载速度', result: 'pass', value: '2.8s', suggestion: '可进一步优化到 2s 以内' },
-    { dimension: '技术基础', item: 'Canonical 标签', result: 'pass', value: '已设置', suggestion: '保持现状' },
-    { dimension: '技术基础', item: '移动端适配', result: 'pass', value: '已适配', suggestion: '保持现状' },
-    { dimension: '页面结构', item: 'H1 标签存在', result: 'pass', value: '1个', suggestion: '保持现状' },
-    { dimension: '页面结构', item: 'H2-H6 层级结构', result: 'pass', value: '5个', suggestion: '保持现状' },
-    { dimension: '页面结构', item: 'Meta Description', result: 'pass', value: '已设置', suggestion: '保持现状' },
-    { dimension: '页面结构', item: '图片 Alt 标签', result: 'fail', value: '缺失率 40%', suggestion: '为所有图片添加 alt 属性' },
-    { dimension: '页面结构', item: '内部链接数量', result: 'pass', value: '12个', suggestion: '可适当增加相关内容链接' },
-    { dimension: '结构化数据', item: 'JSON-LD Schema', result: 'fail', value: '未检测到', suggestion: '添加 Article 或 FAQ Schema' },
-    { dimension: '结构化数据', item: 'OpenGraph 标签', result: 'pass', value: '已设置', suggestion: '保持现状' },
-    { dimension: '结构化数据', item: 'Twitter Card', result: 'fail', value: '未设置', suggestion: '添加 Twitter Card Meta' },
-    { dimension: '结构化数据', item: '面包屑导航 Schema', result: 'fail', value: '未检测到', suggestion: '添加 BreadcrumbList Schema' },
-    { dimension: 'AI亲和性', item: 'AI 爬虫访问权限', result: 'pass', value: '允许', suggestion: '保持现状' },
-    { dimension: 'AI亲和性', item: 'JS 渲染难度', result: 'pass', value: '低（SSR）', suggestion: '保持现状' },
-    { dimension: 'AI亲和性', item: 'FAQ 内容存在', result: 'fail', value: '未检测到', suggestion: '增加 FAQ 版块内容' },
-    { dimension: 'AI亲和性', item: '内容原创度', result: 'pass', value: '高', suggestion: '保持原创内容策略' },
-  ]
-}
+// 知名网站保底分数提示
+const famousSiteBonus = computed(() => {
+  if (!report.value?.famousSiteBonus) return null
+  return report.value.famousSiteBonus
+})
 
 // ===== 计算属性 =====
 const detailTableData = computed(() => {
@@ -445,18 +354,18 @@ const gradeClass = computed(() => {
 
 const gradeName = computed(() => {
   if (!report.value) return ''
-  if (report.value.score >= 80) return '优秀'
-  if (report.value.score >= 70) return '良好'
-  if (report.value.score >= 60) return '及格'
+  if (report.value.score >= 70) return '优秀'
+  if (report.value.score >= 55) return '良好'
+  if (report.value.score >= 40) return '及格'
   return '需改进'
 })
 
 const gradeDesc = computed(() => {
   if (!report.value) return ''
-  if (report.value.score >= 80) return '您的网站技术 SEO 基础扎实，AI 抓取友好度较高'
-  if (report.value.score >= 70) return '网站整体表现不错，部分细节有优化空间'
-  if (report.value.score >= 60) return '网站基础合格，建议针对提示项进行针对性优化'
-  return '网站存在较多问题，建议优先处理高权重扣分项'
+  if (report.value.score >= 70) return '您的网站容易被AI引用，技术配置良好'
+  if (report.value.score >= 55) return '网站AI友好度不错，部分细节可优化'
+  if (report.value.score >= 40) return '网站基础合格，建议按提示优化AI抓取友好度'
+  return '网站AI抓取有待提升，建议重点优化AI亲和性'
 })
 
 // ===== 方法 =====
@@ -484,21 +393,39 @@ const getDimByItem = (itemName) => {
     'Title 标签': '页面结构', 'Meta Description': '页面结构', 'H1 标签': '页面结构',
     'H2-H6层级': '页面结构', '内容长度': '页面结构', '图片Alt标签': '页面结构',
     'JSON-LD Schema': '结构化数据', 'OpenGraph标签': '结构化数据',
-    '服务端渲染': 'AI亲和性', 'FAQ内容': 'AI亲和性', 'AI爬虫权限': 'AI亲和性'
+    '服务端渲染': 'AI亲和性', 'FAQ内容': 'AI亲和性', 'AI爬虫权限': 'AI亲和性',
+    'AI内容质量': 'AI亲和性', 'AI结构化程度': 'AI亲和性', 'AI实体提及': 'AI亲和性', 'GEO优化要素': 'AI亲和性'
   }
   return dimMap[itemName] || ''
 }
 
-const handleStartCheck = async () => {
+const handleStartCheck = async (force = false) => {
   if (!inputUrl.value.trim()) return
   report.value = null
   dimensions.value.forEach(d => { d.done = false; d.active = false })
   checking.value = true
+  // 显示开始检测提示
+  ElNotification({
+    title: '正在检测',
+    type: 'info',
+    duration: 3000,
+    position: 'top-right',
+    offset: 60
+  })
 
   try {
     // 执行真正的网站检测
-    const result = await analyzeWebsite(inputUrl.value, updateProgress)
-    const totalScore = result.dimensions.tech.score + result.dimensions.structure.score + result.dimensions.schema.score + result.dimensions.aiFriendly.score
+    const result = await analyzeWebsite(inputUrl.value, updateProgress, force)
+    
+    // 计算总分 - 技术指标(30%) + AI亲和性(70%)，更符合实际体感
+    const techScore = result.dimensions.tech.score + result.dimensions.structure.score + result.dimensions.schema.score
+    const aiScore = result.dimensions.aiFriendly.score
+    let totalScore = Math.round(techScore * 0.3 + aiScore * 0.7)
+    
+    // 知名网站加分：直接加上 bonus 和 aiBonus
+    if (result.famousSiteBonus) {
+      totalScore = totalScore + result.famousSiteBonus.bonus + (result.famousSiteBonus.aiBonus || 0)
+    }
     
     // 转换数据格式以匹配现有UI
     report.value = {
@@ -528,7 +455,9 @@ const handleStartCheck = async () => {
     ElMessage.error({ message: '检测失败: ' + error.message, offset: 80 })
   }
   checking.value = false
-  if (report.value) syncToDashboard()
+  if (report.value) {
+    syncToDashboard()
+  }
 }
 
 const handleNewCheck = () => {
@@ -575,6 +504,19 @@ const handleViewReport = (r) => {
   selectedHistory.value = []
 }
 
+const handleRecheck = async (url) => {
+  inputUrl.value = url
+  // 显示重新检测提示
+  ElNotification({
+    title: '正在检测',
+    type: 'info',
+    duration: 3000,
+    position: 'top-right',
+    offset: 60
+  })
+  await handleStartCheck(true) // 强制重新检测
+}
+
 const handleClearHistory = () => {
   const allData = getData()
   allData['website-reports'] = []
@@ -606,6 +548,23 @@ const handleBatchDelete = () => {
   selectedHistory.value = []
   loadHistory()
   ElMessage.success({ message: '已删除选中的报告', offset: 80 })
+}
+
+// 检查指定记录是否有GEO报告
+const hasGeoReport = (record) => {
+  const allData = getData()
+  const geoReport = allData['geo-report']
+  if (!geoReport || !geoReport.generatedAt) return false
+  const geoTime = new Date(geoReport.generatedAt).getTime()
+  const recordTime = record.checkedAt ? new Date(record.checkedAt).getTime() : 0
+  return geoTime >= recordTime - 5000 // 报告生成时间晚于记录时间（5秒容差）
+}
+
+// 跳转到GEO报告（绑定当前选中的历史记录）
+const generateReport = () => {
+  if (selectedHistory.value.length === 0) return
+  const recordIds = selectedHistory.value.join(',')
+  router.push(`/geo-report?recordId=${recordIds}`)
 }
 
 const getScoreClass = (score) => {
@@ -745,6 +704,11 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
+.history-recheck-btn {
+  flex-shrink: 0;
+  color: #409eff;
+}
+
 .wo-history-score {
   width: 44px;
   height: 44px;
@@ -780,6 +744,21 @@ onMounted(() => {
   font-size: 12px;
   color: #909399;
   margin-top: 2px;
+}
+
+.wo-history-grade {
+  flex-shrink: 0;
+}
+
+.wo-history-geo-badge {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #f0efff;
 }
 
 /* ===== 检测卡片 ===== */
@@ -1054,6 +1033,33 @@ onMounted(() => {
   font-size: 13px;
   color: #606266;
   line-height: 1.5;
+}
+
+/* 知名网站保底提示 */
+.famous-bonus-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #f0f9eb, #e1f3d8);
+  border: 1px solid #a6d97e;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #529b2e;
+  margin-top: 8px;
+}
+
+/* 评分说明 */
+.score-explain-tip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #909399;
+  margin-top: 8px;
 }
 
 /* 维度得分卡 */

@@ -10,6 +10,9 @@
         <p class="gr-subtitle">一键生成基于检测数据的定制化改进建议</p>
       </div>
       <div class="gr-header-actions">
+        <el-button @click="goBack" plain>
+          <el-icon class="mr-1"><ArrowLeft /></el-icon>返回
+        </el-button>
         <el-button type="primary" @click="generateReport" :loading="generating">
           <el-icon class="mr-1"><RefreshRight /></el-icon>生成报告
         </el-button>
@@ -192,6 +195,7 @@
 
       <!-- 操作按钮 -->
       <div class="report-actions" v-if="hasData">
+        <el-button @click="goBack" plain>返回</el-button>
         <el-button @click="copyToClipboard" type="primary" plain>复制报告</el-button>
         <el-button @click="downloadReport">下载报告</el-button>
       </div>
@@ -201,9 +205,9 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { DataAnalysis, Histogram, Monitor, RefreshRight, Document, WarningFilled, Flag, TrendCharts, View, Cpu, DataLine, List, DocumentCopy, Download } from '@element-plus/icons-vue'
+import { DataAnalysis, Histogram, Monitor, RefreshRight, Document, WarningFilled, Flag, TrendCharts, View, Cpu, DataLine, List, DocumentCopy, Download, ArrowLeft } from '@element-plus/icons-vue'
 import { getData, saveData } from '../utils/storage'
 
 // API配置
@@ -211,6 +215,7 @@ const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
 
 const router = useRouter()
+const route = useRoute()
 
 // 状态
 const generating = ref(false)
@@ -248,7 +253,8 @@ const getSeverityName = (severity) => {
 }
 
 // 加载检测数据
-const loadDetectionData = () => {
+// recordId: 可选，逗号分隔的 website-reports 数组索引，支持单条或多条（多条的techScore取加权平均）
+const loadDetectionData = (recordId) => {
   const allData = getData()
   const geoResult = allData['geo-detection-result'] || null
   if (geoResult) {
@@ -256,12 +262,32 @@ const loadDetectionData = () => {
   }
   
   const websiteReports = allData['website-reports'] || []
-  if (websiteReports.length > 0) {
-    techScore.value = websiteReports[0].score || 0
+  
+  if (recordId !== undefined && recordId !== null && recordId !== '') {
+    // 有 recordId：精确加载指定记录（支持逗号分隔多ID，取加权平均）
+    const ids = recordId.split(',').map(i => parseInt(i.trim())).filter(i => !isNaN(i) && websiteReports[i])
+    if (ids.length > 0) {
+      const totalWeight = ids.length
+      const avgTechScore = ids.reduce((sum, i) => sum + (websiteReports[i].score || 0), 0) / totalWeight
+      techScore.value = Math.round(avgTechScore)
+    } else {
+      // ID无效，兜底
+      if (websiteReports.length > 0) {
+        techScore.value = websiteReports[0].score || 0
+      } else {
+        const siteScore = allData['dashboard-site-score']
+        techScore.value = siteScore ? siteScore.score || 0 : 0
+      }
+    }
   } else {
-    const siteScore = allData['dashboard-site-score']
-    if (siteScore) {
-      techScore.value = siteScore.score || 0
+    // 无 recordId：兜底逻辑（取最新）
+    if (websiteReports.length > 0) {
+      techScore.value = websiteReports[0].score || 0
+    } else {
+      const siteScore = allData['dashboard-site-score']
+      if (siteScore) {
+        techScore.value = siteScore.score || 0
+      }
     }
   }
   
@@ -282,7 +308,14 @@ const generateReport = async () => {
     const allData = getData()
     const geoResult = allData['geo-detection-result'] || {}
     const websiteReports = allData['website-reports'] || []
-    const latestTechReport = websiteReports[0] || null
+    const recordId = route.query.recordId
+    let techReportToUse = websiteReports[0] || null
+    if (recordId) {
+      const ids = recordId.split(',').map(i => parseInt(i.trim())).filter(i => !isNaN(i))
+      if (ids.length > 0 && websiteReports[ids[0]]) {
+        techReportToUse = websiteReports[ids[0]]
+      }
+    }
     
     const detectionData = {
       combinedScore: combinedScore.value,
@@ -293,9 +326,9 @@ const generateReport = async () => {
         missingCount: geoResult.missingCount || 0,
         platformCount: geoResult.platformCount || 0
       },
-      techDetails: latestTechReport ? {
-        items: latestTechReport.items || {},
-        issues: latestTechReport.issues || { warn: [], pass: [] }
+      techDetails: techReportToUse ? {
+        items: techReportToUse.items || {},
+        issues: techReportToUse.issues || { warn: [], pass: [] }
       } : null
     }
     
@@ -356,7 +389,7 @@ ${detectionData.techDetails.issues.warn.map(i => `- ${i.title}: ${i.desc}`).join
       body: JSON.stringify({
         model: 'deepseek-chat',
         messages: [
-          { role: 'system', content: '你是一个专业的SEO和GEO优化顾问，擅长生成结构化的改进方案报告。请严格按照JSON格式返回。' },
+          { role: 'system', content: '你是一个专业的GEO优化顾问，擅长生成结构化的改进方案报告。请严格按照JSON格式返回。' },
           { role: 'user', content: prompt }
         ],
         temperature: 0.5,
@@ -416,7 +449,13 @@ const getDefaultReport = (detectionData) => {
 // 保存报告
 const saveReportToStorage = () => {
   const allData = getData()
-  allData['geo-report'] = { ...reportData.value, generatedAt: new Date().toISOString(), scores: { combined: combinedScore.value, visibility: visibilityScore.value, tech: techScore.value } }
+  const recordId = route.query.recordId
+  allData['geo-report'] = {
+    ...reportData.value,
+    generatedAt: new Date().toISOString(),
+    scores: { combined: combinedScore.value, visibility: visibilityScore.value, tech: techScore.value },
+    recordId: recordId || null // 记录关联的 website-reports 索引
+  }
   saveData(allData)
 }
 
@@ -482,13 +521,17 @@ const downloadReport = () => {
   ElMessage.success('报告已下载')
 }
 
+// 返回上一页
+const goBack = () => router.back()
+
 // 跳转
 const goToGEODetection = () => router.push('/geo-detection')
 const goToWebsiteOptimization = () => router.push('/website-optimization')
 
 // 初始化
 onMounted(() => {
-  loadDetectionData()
+  const recordId = route.query.recordId
+  loadDetectionData(recordId)
   const allData = getData()
   const savedReport = allData['geo-report']
   if (savedReport && savedReport.scores) {

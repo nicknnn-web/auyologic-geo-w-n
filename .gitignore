@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+*.log
+_site_preview.png
+kimi-*.png
+test-*.cjs
+scripts/
+docs/
+backend/node_modules/
+backend/_test_db.cjs
+backend/_init_db.cjs
+backend/_backend_output.log
