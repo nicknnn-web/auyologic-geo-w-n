@@ -4,14 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - 'frontend/**'
-      - 'src/**'
-      - 'dist/**'
-      - 'nginx.conf'
-      - 'vite.config.js'
-      - 'package.json'
-      - '.env.production'
 
 jobs:
   build-frontend:
@@ -44,4 +36,4 @@ jobs:
           context: .
           push: true
           tags: nicknnndocker/auyologic-geo-frontend:latest
-          dockerfile: Dockerfile.frontend 
+          dockerfile: Dockerfile.frontend
