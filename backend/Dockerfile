@@ -2,15 +2,15 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# 复制 package.json 先安装依赖（利用缓存）
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install --production
 
-COPY src ./src
-COPY uploads ./uploads
+# 复制源代码
+COPY . .
 
-ENV PORT=3001
-ENV NODE_ENV=production
-
+# 暴露端口
 EXPOSE 3001
 
+# 启动命令
 CMD ["node", "src/index.js"]
