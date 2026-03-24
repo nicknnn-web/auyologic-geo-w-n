@@ -72,7 +72,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getList, deleteItem } from '../utils/storage'
+import { draftsAPI } from '../utils/api'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -99,19 +99,40 @@ const handleSelectionChange = (rows) => {
   selectedRows.value = rows
 }
 
-const handleBatchDelete = () => {
+const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   const ids = selectedRows.value.map(row => row.id)
-  ids.forEach(id => deleteItem('drafts', id))
-  tableData.value = getList('drafts')
-  selectedRows.value = []
-  ElMessage.success(`已删除 ${ids.length} 条草稿`)
+  try {
+    for (const id of ids) {
+      await draftsAPI.delete(id)
+    }
+    await loadData()
+    selectedRows.value = []
+    ElMessage.success(`已删除 ${ids.length} 条草稿`)
+  } catch (err) {
+    ElMessage.error('删除失败：' + err.message)
+  }
 }
 
-// 加载数据（正序，最旧的在前面，新的在后面）
-const loadData = () => {
-  const data = getList('drafts')
-  tableData.value = [...data].sort((a, b) => a.id - b.id)
+// 加载数据（从后端 API）
+const loadData = async () => {
+  try {
+    const data = await draftsAPI.list()
+    // 字段映射：后端 snake_case → 前端 camelCase
+    const mapped = data.map(item => ({
+      ...item,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+      // 解析 JSON 字段
+      platforms: item.platforms ? JSON.parse(item.platforms) : [],
+      selectedImages: item.images ? JSON.parse(item.images) : []
+    }))
+    // 按 id 降序，最新的在前面
+    tableData.value = mapped.sort((a, b) => b.id - a.id)
+  } catch (err) {
+    ElMessage.error('加载草稿失败：' + err.message)
+    tableData.value = []
+  }
 }
 
 onMounted(() => {
@@ -134,9 +155,14 @@ const handlePublish = (row) => {
   router.push('/publish-tasks')
 }
 
-const handleDelete = (id) => {
-  tableData.value = deleteItem('drafts', id)
-  ElMessage.success('删除成功')
+const handleDelete = async (id) => {
+  try {
+    await draftsAPI.delete(id)
+    await loadData()
+    ElMessage.success('删除成功')
+  } catch (err) {
+    ElMessage.error('删除失败：' + err.message)
+  }
 }
 
 </script>

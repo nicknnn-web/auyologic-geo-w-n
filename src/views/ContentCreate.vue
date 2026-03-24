@@ -241,6 +241,21 @@
         class="text-gray-700 w-full border rounded-lg p-3 outline-none focus:border-purple-400"
         style="min-height: 300px; font-family: inherit; white-space: pre-wrap; resize: vertical;"
       ></textarea>
+
+      <!-- 结果区底部保存按钮 -->
+      <div class="flex gap-3 mt-4">
+        <el-button type="primary" size="large" @click="handleSaveDraft">
+          <el-icon class="mr-1"><Folder /></el-icon>
+          保存草稿
+        </el-button>
+        <el-button type="warning" size="large" @click="handleSaveAsNew">
+          另存为新草稿
+        </el-button>
+        <el-button size="large" @click="copyContent" plain>
+          <el-icon class="mr-1"><CopyDocument /></el-icon>
+          复制全文
+        </el-button>
+      </div>
     </div>
 
     <el-empty v-else description="填写上方表单开始AI创作" />
@@ -251,7 +266,7 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getList, addItem, saveList } from '../utils/storage'
+import { draftsAPI, keywordsAPI, commandsAPI } from '../utils/api'
 import { Folder, CopyDocument, Refresh, Clock } from '@element-plus/icons-vue'
 
 // ========== DeepSeek API 配置 ==========
@@ -262,6 +277,7 @@ const DEEPSEEK_MODEL = 'deepseek-chat'
 const router = useRouter()
 const form = ref({
   keyword: '',
+  brand: '',
   audience: '',
   platforms: [],
   command: '',
@@ -432,11 +448,23 @@ const selectedCommand = computed(() => {
   return commands.value.find(c => c.id === form.value.command)
 })
 
-onMounted(() => {
-  keywords.value = getList('keywords')
-  
-  // 迁移旧的 commands 数据：将 prompt 转换为纯类型标签
-  commands.value = migrateCommands(getList('commands'))
+onMounted(async () => {
+  // 从后端 API 加载关键词和指令模板
+  try {
+    const [kwData, cmdData] = await Promise.all([
+      keywordsAPI.list(),
+      commandsAPI.list()
+    ])
+    keywords.value = kwData
+    // 指令模板：后端用 name/content，适配前端需要的格式
+    commands.value = cmdData.map(cmd => ({
+      id: cmd.id,
+      name: cmd.name,
+      prompt: cmd.content || cmd.prompt || ''
+    }))
+  } catch (err) {
+    console.error('加载下拉数据失败:', err)
+  }
   
   // Step 2: 加载知识库文档
   loadKnowledgeDocs()
@@ -452,17 +480,17 @@ onMounted(() => {
   if (savedDraft) {
     try {
       const draft = JSON.parse(savedDraft)
-      form.value.keyword = draft.brand || ''
-      form.value.command = draft.commandId || ''
+      form.value.keyword = draft.keyword || ''
+      form.value.brand = draft.brand || ''
+      form.value.command = draft.command || ''
       form.value.audience = draft.audience || ''
-      form.value.platforms = draft.platforms || []
-      form.value.extra = draft.extra || ''
+      // platforms 可能是数组（从API解析后）或字符串（旧数据）
+      form.value.platforms = Array.isArray(draft.platforms) ? draft.platforms : (draft.platforms ? JSON.parse(draft.platforms) : [])
       generatedContent.value = draft.content || ''
       generatedTitle.value = draft.title || ''
       form.value.editId = draft.id
-      // 恢复选中的文档和图片
-      form.value.selectedDocs = draft.selectedDocs || []
-      form.value.selectedImages = draft.selectedImages || []
+      // selectedImages 可能是数组（从API解析后）或字符串（旧数据）
+      form.value.selectedImages = Array.isArray(draft.selectedImages) ? draft.selectedImages : (draft.selectedImages ? JSON.parse(draft.selectedImages) : [])
       sessionStorage.removeItem('editDraft')
     } catch (e) {
       console.error('加载草稿失败', e)
@@ -583,11 +611,13 @@ const loadImages = () => {
     const parsedImgs = JSON.parse(imgs)
     // 转换 Images.vue 存储的数据结构为 ContentCreate.vue 需要的格式
     // Images.vue 存的是 preview (base64)，ContentCreate.vue 需要 url
-    imgs = parsedImgs.map((img, index) => ({
-      id: img.id || `img${index + 1}`,
-      name: img.name || `图片 ${index + 1}`,
-      url: img.preview || img.url || ''
-    }))
+    imgs = parsedImgs
+      .map((img, index) => ({
+        id: img.id || `img${index + 1}`,
+        name: img.name || `图片 ${index + 1}`,
+        url: img.url || ''  // 只使用真实 URL，不使用 base64
+      }))
+      .filter(img => img.url && !img.url.startsWith('data:'))  // 过滤掉 base64 图片
   }
   images.value = imgs
 }
@@ -936,10 +966,10 @@ const handleGenerate = async () => {
     generatedTitle.value = parsed.title
     generatedContent.value = parsed.content
     
-    // Step 3: 在内容中加入配图（如果还没加入的话）
-    if (form.value.selectedImages?.length && !rawContent.includes('![](')) {
-      // 如果API返回的内容没有包含图片，在适当位置插入
-      const imageMarkdown = '\n\n' + form.value.selectedImages.map(url => `![](${url})`).join('\n')
+    // Step 3: 在内容中加入配图（只插入真实 URL，过滤 base64）
+    const validImages = (form.value.selectedImages || []).filter(url => url && !url.startsWith('data:'))
+    if (validImages.length && !rawContent.includes('![](')) {
+      const imageMarkdown = '\n\n' + validImages.map(url => `![](${url})`).join('\n')
       generatedContent.value += imageMarkdown
     }
     
@@ -993,61 +1023,53 @@ const regenerateParagraph = () => {
   // TODO: 实现段落级编辑功能
 }
 
-const handleSaveDraft = () => {
-  if (form.value.editId) {
-    const drafts = getList('drafts')
-    const editId = Number(form.value.editId)
-    const index = drafts.findIndex(d => Number(d.id) === editId)
-    if (index !== -1) {
-      drafts[index] = {
-        ...drafts[index],
-        title: generatedTitle.value || form.value.keyword + ' 软文',
-        brand: form.value.keyword,
-        content: generatedContent.value,
-        audience: form.value.audience,
-        platforms: form.value.platforms,
-        commandId: form.value.command,
-        extra: form.value.extra,
-        selectedDocs: form.value.selectedDocs,
-        selectedImages: form.value.selectedImages,
-        updatedAt: new Date().toLocaleString('zh-CN')
-      }
-      saveList('drafts', drafts)
-      ElMessage.success('草稿已更新')
-    }
-  } else {
-    addItem('drafts', {
-      title: generatedTitle.value || form.value.keyword + ' 软文',
-      brand: form.value.keyword,
-      content: generatedContent.value,
-      audience: form.value.audience,
-      platforms: form.value.platforms,
-      commandId: form.value.command,
-      extra: form.value.extra,
-      selectedDocs: form.value.selectedDocs,
-      selectedImages: form.value.selectedImages,
-      status: '草稿'
-    })
-    ElMessage.success('已保存到草稿箱')
+const handleSaveDraft = async () => {
+  const draftData = {
+    title: generatedTitle.value || form.value.keyword + ' 软文',
+    keyword: form.value.keyword,
+    content: generatedContent.value,
+    brand: form.value.brand,
+    platforms: JSON.stringify(form.value.platforms || []),
+    command: form.value.command,
+    audience: form.value.audience,
+    images: JSON.stringify(form.value.selectedImages || []),
+    status: '草稿'
   }
-  router.push('/drafts')
+
+  try {
+    if (form.value.editId) {
+      await draftsAPI.update(form.value.editId, draftData)
+      ElMessage.success('草稿已更新')
+    } else {
+      await draftsAPI.create(draftData)
+      ElMessage.success('已保存到草稿箱')
+    }
+    router.push('/drafts')
+  } catch (err) {
+    ElMessage.error('保存失败：' + err.message)
+  }
 }
 
-const handleSaveAsNew = () => {
-  addItem('drafts', {
+const handleSaveAsNew = async () => {
+  const draftData = {
     title: generatedTitle.value || form.value.keyword + ' 软文',
-    brand: form.value.keyword,
+    keyword: form.value.keyword,
     content: generatedContent.value,
+    brand: form.value.brand,
+    platforms: JSON.stringify(form.value.platforms || []),
+    command: form.value.command,
     audience: form.value.audience,
-    platforms: form.value.platforms,
-    commandId: form.value.command,
-    extra: form.value.extra,
-    selectedDocs: form.value.selectedDocs,
-    selectedImages: form.value.selectedImages,
+    images: JSON.stringify(form.value.selectedImages || []),
     status: '草稿'
-  })
-  ElMessage.success('已另存为新草稿')
-  form.value.editId = null
-  router.push('/drafts')
+  }
+
+  try {
+    await draftsAPI.create(draftData)
+    ElMessage.success('已另存为新草稿')
+    form.value.editId = null
+    router.push('/drafts')
+  } catch (err) {
+    ElMessage.error('保存失败：' + err.message)
+  }
 }
 </script>

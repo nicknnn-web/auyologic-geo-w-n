@@ -15,9 +15,10 @@
         </div>
         <div class="flex items-center">
           <el-link class="mr-4" :underline="false">帮助文档</el-link>
-          <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2">
-            <el-avatar :size="28" class="mr-2">U</el-avatar>
-            <span class="text-sm">用户</span>
+          <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2" @click="handleLogout">
+            <el-avatar :size="28" class="mr-2" style="background: #6366f1;">A</el-avatar>
+            <span class="text-sm">{{ currentUser }}</span>
+            <el-icon class="ml-1" style="color: #999;"><SwitchButton /></el-icon>
           </div>
         </div>
       </el-header>
@@ -121,10 +122,19 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis } from '@element-plus/icons-vue'
+import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, SwitchButton } from '@element-plus/icons-vue'
 
+const router = useRouter()
 const isCollapse = ref(false)
+const currentUser = computed(() => localStorage.getItem('auyologic_user') || 'admin')
+
+const handleLogout = () => {
+  localStorage.removeItem('auyologic_token')
+  localStorage.removeItem('auyologic_user')
+  router.push('/login')
+}
 </script>
 
 <style scoped>

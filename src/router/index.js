@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import Login from '../views/Login.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Keywords from '../views/Keywords.vue'
 import Questions from '../views/Questions.vue'
@@ -16,6 +17,7 @@ import WebsiteOptimization from '../views/WebsiteOptimization.vue'
 import GEOReport from '../views/GEOReport.vue'
 
 const routes = [
+  { path: '/login', name: 'login', component: Login },
   { path: '/', name: 'dashboard', component: Dashboard },
   
   // 关键词裂变
@@ -46,6 +48,19 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+// 全局守卫：未登录跳转到登录页
+router.beforeEach((to, from, next) => {
+  if (to.path === '/login') {
+    next()
+    return
+  }
+  if (!localStorage.getItem('auyologic_token')) {
+    next('/login')
+    return
+  }
+  next()
 })
 
 export default router

@@ -77,14 +77,19 @@ export async function initDB() {
         created_at TIMESTAMP DEFAULT NOW()
       );
 
-      -- 草稿箱
-      CREATE TABLE IF NOT EXISTS drafts (
+      -- 草稿箱（content_drafts 兼容旧名）
+      CREATE TABLE IF NOT EXISTS content_drafts (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
+        title VARCHAR(500),
         keyword VARCHAR(500),
         content TEXT,
+        brand VARCHAR(200),
         platforms TEXT,
-        status VARCHAR(20) DEFAULT 'draft',
+        command TEXT,
+        audience TEXT,
+        images TEXT,
+        status VARCHAR(20) DEFAULT '草稿',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       );
@@ -154,8 +159,67 @@ export async function initDB() {
         checked_at TIMESTAMP DEFAULT NOW()
       );
     `);
+    // 迁移：如果旧 drafts 表存在，迁移数据并删除
+    try {
+      const oldTable = await client.query(`
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'drafts'
+      `);
+      if (oldTable.rows.length > 0) {
+        console.log('检测到旧 drafts 表，开始迁移...');
+        // 新表不存在时才迁移
+        const newTable = await client.query(`
+          SELECT table_name FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = 'content_drafts'
+        `);
+        if (newTable.rows.length === 0) {
+          await client.query(`
+            ALTER TABLE drafts RENAME TO content_drafts;
+            ALTER TABLE content_drafts ADD COLUMN IF NOT EXISTS title VARCHAR(500);
+            ALTER TABLE content_drafts ADD COLUMN IF NOT EXISTS brand VARCHAR(200);
+            ALTER TABLE content_drafts ADD COLUMN IF NOT EXISTS command TEXT;
+            ALTER TABLE content_drafts ADD COLUMN IF NOT EXISTS audience TEXT;
+            ALTER TABLE content_drafts ADD COLUMN IF NOT EXISTS images TEXT;
+          `);
+          console.log('✅ 旧 drafts 表已迁移为 content_drafts');
+        }
+      }
+    } catch (e) {
+      console.log('迁移检查跳过:', e.message);
+    }
     console.log('✅ 数据库表初始化完成');
-  } finally {
+
+    // 插入种子数据（如果表为空）
+    try {
+      // 关键词种子数据
+      const kwCheck = await client.query('SELECT COUNT(*) FROM keywords WHERE user_id = $1', ['default_user']);
+      if (parseInt(kwCheck.rows[0].count) === 0) {
+        await client.query(`
+          INSERT INTO keywords (user_id, keyword, type) VALUES
+          ('default_user', 'GEO内容生成', '品牌'),
+          ('default_user', 'AI写作工具', '品类'),
+          ('default_user', '1475.py', '竞品'),
+          ('default_user', '微信公众号运营', '场景'),
+          ('default_user', '小红书种草', '场景');
+        `);
+        console.log('✅ 关键词种子数据已插入');
+      }
+
+      // 指令模板种子数据
+      const cmdCheck = await client.query('SELECT COUNT(*) FROM commands WHERE user_id = $1', ['default_user']);
+      if (parseInt(cmdCheck.rows[0].count) === 0) {
+        await client.query(`
+          INSERT INTO commands (user_id, name, content) VALUES
+          ('default_user', 'GEO深度测评文', '请围绕{keyword}，撰写一篇GEO深度测评文章，包含行业背景、多维度对比、真实案例和总结建议，目标受众为{audience}，适合发布在{platforms}。'),
+          ('default_user', '品牌软文种草', '以{keyword}为主题，撰写一篇种草软文，语气亲切自然，适合{audience}群体，通过{platforms}平台发布。'),
+          ('default_user', '竞品对比分析', '针对{keyword}与同类产品，进行深度竞品对比分析，突出差异化优势，适合{audience}，发布平台：{platforms}。'),
+          ('default_user', '干货知识分享', '以{keyword}为切入点，撰写一篇干货知识型文章，帮助{audience}解决实际问题，提升专业形象。');
+        `);
+        console.log('✅ 指令模板种子数据已插入');
+      }
+    } catch (e) {
+      console.log('种子数据插入跳过:', e.message);
+    }
     client.release();
   }
 }

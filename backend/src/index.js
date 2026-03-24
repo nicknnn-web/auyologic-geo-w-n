@@ -62,17 +62,21 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: '缺少邮箱或密码' });
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (result.rows.length === 0) return res.status(401).json({ error: '用户不存在' });
-    const user = result.rows[0];
-    if (!verifyPassword(password, user.password_hash)) return res.status(401).json({ error: '密码错误' });
-    res.json({
-      user: { id: user.id, username: user.username, email: user.email, created_at: user.created_at }
-    });
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ success: false, message: '请输入账号和密码' });
+    }
+
+    // 私用模式：固定管理员账号
+    if (username === 'admin' && password === 'auyologic2026') {
+      // 生成简单 token
+      const token = Buffer.from(`${username}:${Date.now()}`).toString('base64');
+      return res.json({ success: true, token, user: { username: 'admin' } });
+    }
+
+    res.status(401).json({ success: false, message: '账号或密码错误' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
@@ -108,7 +112,7 @@ const crudRoutes = [
   { path: '/api/questions',        table: 'expanded_questions' },
   { path: '/api/documents',        table: 'documents' },
   { path: '/api/images',           table: 'images' },
-  { path: '/api/instruction-templates', table: 'instruction_templates' },
+  { path: '/api/instruction-templates', table: 'commands' },
   { path: '/api/drafts',           table: 'content_drafts' },
   { path: '/api/accounts',         table: 'accounts' },
   { path: '/api/delivery-tasks',  table: 'delivery_tasks' },

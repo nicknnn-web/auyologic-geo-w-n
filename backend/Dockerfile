@@ -6,8 +6,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --production
 
-# 复制源代码
+# 复制源代码（排除 .env 文件）
 COPY . .
+# 确保容器内不存在 .env 文件，使用环境变量
+RUN rm -f .env || true
 
 # 暴露端口
 EXPOSE 3001
