@@ -177,7 +177,7 @@ const handleEdit = (row) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (id) => {
+const handleDelete = async (id) => {
   try {
     await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
   } catch { /* silent */ }
@@ -198,7 +198,7 @@ const handleBatchDelete = async () => {
   selectedKeywords.value = []
 }
 
-const handleSubmit = () => {
+const handleSubmit = async () => {
   if (!form.value.keyword || !form.value.type) {
     ElMessage.warning('请填写完整信息')
     return
