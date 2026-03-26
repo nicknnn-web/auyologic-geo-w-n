@@ -432,112 +432,135 @@ const extractKeywords = (text) => {
   return [...new Set(filtered)]
 }
 
-// 构建品牌核心词（简化为真正的关键词：品牌名 + 品类词 + 搜索结果）
-// 关键词必须是"词"或"短语"，不是句子
-const buildBrandKeywords = (name, industry, categoryWords, searchKeywords = []) => {
-  const keywords = []
+// 构建品牌核心词（关键词：品牌名 + 品类核心词 + 品牌相关词）
+// 侧重：用户搜索品牌时用的词
+const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [], searchKeywords = []) => {
+  const keywords = new Set()
   
-  // 品牌名本身就是核心词（2-6字）
+  // 1. 品牌名本身就是核心词（2-6字）
   if (name && name.length >= 2) {
-    keywords.push(name)
-    // 提取品牌名前2-4个字符作为简称
+    keywords.add(name)
     if (name.length > 2) {
-      keywords.push(name.slice(0, Math.min(4, name.length)))
+      keywords.add(name.slice(0, Math.min(4, name.length)))
     }
   }
   
-  // 添加品类词（纯词，不是短语）
+  // 2. 品类核心词（只取前3个，避免太泛）
   if (categoryWords && categoryWords.length > 0) {
-    categoryWords.slice(0, 5).forEach(cat => {
-      // 只保留纯词，去除短语
+    categoryWords.slice(0, 3).forEach(cat => {
       if (cat.length >= 2 && cat.length <= 6) {
-        keywords.push(cat)
+        keywords.add(cat)
       }
     })
   }
   
-  // 【新增】添加搜索结果中的业务关键词
+  // 3. 核心业务词（只取前3个）
+  if (coreBusinessWords && coreBusinessWords.length > 0) {
+    coreBusinessWords.slice(0, 3).forEach(w => {
+      if (w.length >= 2 && w.length <= 6) {
+        keywords.add(w)
+      }
+    })
+  }
+  
+  // 4. 搜索关键词（只取前2个）
   if (searchKeywords && searchKeywords.length > 0) {
-    searchKeywords.slice(0, 5).forEach(kw => {
+    searchKeywords.slice(0, 2).forEach(kw => {
       if (kw.length >= 2 && kw.length <= 6) {
-        keywords.push(kw)
+        keywords.add(kw)
       }
     })
   }
   
-  return keywords
+  return [...keywords]
 }
 
-// 构建场景需求词（简化为真正的行业场景词 + 搜索结果）
-// 关键词必须是"词"或"短语"，不是句子
-const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords, searchKeywords = []) => {
-  const keywords = []
+// 构建场景需求词（关键词：使用场景 + 痛点问题 + 需求词）
+// 侧重：用户描述使用场景/问题时的搜索词
+const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [], coreBusinessWords = [], searchKeywords = []) => {
+  const keywords = new Set()
   
-  // 添加行业特定的场景词（纯词）
+  // 1. 场景词（取前5个，差异化核心）
   if (scenarioWords && scenarioWords.length > 0) {
-    scenarioWords.slice(0, 6).forEach(sw => {
-      // 只保留2-6字的纯词
+    scenarioWords.slice(0, 5).forEach(sw => {
       if (sw.length >= 2 && sw.length <= 6) {
-        keywords.push(sw)
+        keywords.add(sw)
       }
     })
   }
   
-  // 从描述中提取的有效关键词
+  // 2. 从描述中提取的场景相关词（取前4个）
   if (extractedWords && extractedWords.length > 0) {
     extractedWords.slice(0, 4).forEach(w => {
       if (w.length >= 2 && w.length <= 6) {
-        keywords.push(w)
+        keywords.add(w)
       }
     })
   }
   
-  // 【新增】添加搜索结果中的业务关键词
+  // 3. 核心业务词（取前2个，补充场景相关）
+  if (coreBusinessWords && coreBusinessWords.length > 0) {
+    coreBusinessWords.slice(0, 2).forEach(w => {
+      if (w.length >= 2 && w.length <= 6) {
+        keywords.add(w)
+      }
+    })
+  }
+  
+  // 4. 搜索关键词（取前2个）
   if (searchKeywords && searchKeywords.length > 0) {
-    searchKeywords.slice(0, 6).forEach(kw => {
+    searchKeywords.slice(0, 2).forEach(kw => {
       if (kw.length >= 2 && kw.length <= 6) {
-        keywords.push(kw)
+        keywords.add(kw)
       }
     })
   }
   
-  return keywords
+  return [...keywords]
 }
 
-// 构建产品决策词（简化为真正的产品词 + 搜索结果）
-// 关键词必须是"词"或"短语"，不是句子
-const buildProductDecisionKeywords = (name, industry, productWords, categoryWords, searchKeywords = []) => {
-  const keywords = []
+// 构建产品决策词（关键词：决策词 + 对比词 + 评价词）
+// 侧重：用户在决策阶段搜索的词
+const buildProductDecisionKeywords = (name, industry, productWords, categoryWords, coreBusinessWords = [], searchKeywords = []) => {
+  const keywords = new Set()
   
-  // 添加行业特定的产品决策词（纯词）
+  // 1. 产品决策词（取前5个，这是核心差异化）
   if (productWords && productWords.length > 0) {
-    productWords.slice(0, 6).forEach(pw => {
-      // 只保留2-6字的纯词
+    productWords.slice(0, 5).forEach(pw => {
       if (pw.length >= 2 && pw.length <= 6) {
-        keywords.push(pw)
+        keywords.add(pw)
       }
     })
   }
   
-  // 品类词也可以作为产品决策词
+  // 2. 品类词（取前3个）
   if (categoryWords && categoryWords.length > 0) {
-    categoryWords.slice(0, 4).forEach(cat => {
+    categoryWords.slice(0, 3).forEach(cat => {
       if (cat.length >= 2 && cat.length <= 6) {
-        keywords.push(cat)
+        keywords.add(cat)
       }
     })
   }
   
-  // 【新增】添加搜索结果中的业务关键词
+  // 3. 核心业务词（取前2个）
+  if (coreBusinessWords && coreBusinessWords.length > 0) {
+    coreBusinessWords.slice(0, 2).forEach(w => {
+      if (w.length >= 2 && w.length <= 6) {
+        keywords.add(w)
+      }
+    })
+  }
+  
+  // 4. 搜索关键词（取前2个）
   if (searchKeywords && searchKeywords.length > 0) {
-    searchKeywords.slice(0, 6).forEach(kw => {
+    searchKeywords.slice(0, 2).forEach(kw => {
       if (kw.length >= 2 && kw.length <= 6) {
-        keywords.push(kw)
+        keywords.add(kw)
       }
     })
   }
   
-  return keywords
+  return [...keywords]
 }
 
 // 从企业描述中提取核心业务词（包含专业术语如GEO、SEO等）
@@ -684,19 +707,15 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
   const scenarioWords = industryData.scenario || []
   const categoryWords = industryData.category || []
   
-  // 【关键修复】核心业务词必须放在前面，确保被slice保留下来
-  // 构建三类关键词（核心业务词优先 + 行业词库补充 + 搜索结果）
-  const brandKeywords = buildBrandKeywords(name, industry, [...coreBusinessWords, ...categoryWords], searchKeywords)
-  const scenarioKeywords = buildScenarioKeywords(name, industry, [...coreBusinessWords, ...scenarioWords], extractedWords, searchKeywords)
-  const productDecisionKeywords = buildProductDecisionKeywords(name, industry, [...coreBusinessWords, ...productDecisionWords], [...coreBusinessWords, ...categoryWords], searchKeywords)
+  // 【修复】三类关键词使用差异化来源，减少重叠
+  // 品牌核心词：品牌名 + 品类词 + 核心业务词
+  // 场景需求词：场景词 + 提取词 + 核心业务词
+  // 产品决策词：决策词 + 品类词 + 核心业务词
+  const brandKeywords = buildBrandKeywords(name, industry, categoryWords, coreBusinessWords, searchKeywords)
+  const scenarioKeywords = buildScenarioKeywords(name, industry, scenarioWords, extractedWords, coreBusinessWords, searchKeywords)
+  const productDecisionKeywords = buildProductDecisionKeywords(name, industry, productDecisionWords, categoryWords, coreBusinessWords, searchKeywords)
   
-  // 辅助函数：去重并限制数量
-  const dedupe = (arr, max = 15) => {
-    const unique = [...new Set(arr)]
-    return unique.slice(0, max)
-  }
-  
-  // 构建返回格式
+  // 构建返回格式（每类独立去重，不再跨类去重）
   const makeGroup = (keywords, type) => ({
     type,
     items: keywords.slice(0, 15).map(kw => ({ text: kw, selected: false })),
@@ -704,9 +723,9 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
   })
   
   return [
-    makeGroup(dedupe(brandKeywords), '品牌核心词'),
-    makeGroup(dedupe(scenarioKeywords), '场景需求词'),
-    makeGroup(dedupe(productDecisionKeywords), '产品决策词')
+    makeGroup(brandKeywords, '品牌核心词'),
+    makeGroup(scenarioKeywords, '场景需求词'),
+    makeGroup(productDecisionKeywords, '产品决策词')
   ]
 }
 

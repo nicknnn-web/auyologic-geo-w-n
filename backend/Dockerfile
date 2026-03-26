@@ -3,11 +3,11 @@ FROM node:20-alpine
 WORKDIR /app
 
 # 复制 package.json 先安装依赖（利用缓存）
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install --production
 
 # 复制源代码（排除 .env 文件）
-COPY . .
+COPY backend/ ./
 # 确保容器内不存在 .env 文件，使用环境变量
 RUN rm -f .env || true
 

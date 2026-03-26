@@ -14,6 +14,7 @@ export async function initDB() {
   const client = await pool.connect();
   try {
     await client.query(`
+
       -- 用户设置（API密钥等）
       CREATE TABLE IF NOT EXISTS user_settings (
         id SERIAL PRIMARY KEY,
@@ -187,7 +188,6 @@ export async function initDB() {
     } catch (e) {
       console.log('迁移检查跳过:', e.message);
     }
-    console.log('✅ 数据库表初始化完成');
 
     // 插入种子数据（如果表为空）
     try {
@@ -220,6 +220,9 @@ export async function initDB() {
     } catch (e) {
       console.log('种子数据插入跳过:', e.message);
     }
+    client.release();
+  } catch (err) {
+    console.error('数据库初始化失败:', err.message);
     client.release();
   }
 }

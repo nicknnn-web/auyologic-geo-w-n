@@ -1,1075 +1,1641 @@
 <template>
-  <div class="bg-white rounded-md p-5" style="min-height: calc(100vh - 86px);">
-    <div class="flex items-center mb-4">
+  <div class="cc-page">
+    <!-- 页面头部 -->
+    <div class="cc-header">
+      <div class="cc-header-icon"><el-icon><EditPen /></el-icon></div>
       <div>
-        <div class="text-lg font-bold">AI 软文创作</div>
-        <div class="text-sm text-gray-500">智能生成品牌营销软文</div>
+        <h1 class="cc-title">AI 软文创作</h1>
+        <p class="cc-subtitle">智能生成品牌营销软文</p>
       </div>
-      <div class="ml-auto">
-        <el-button @click="$router.push('/drafts')">
+      <div class="cc-header-actions">
+        <el-button @click="$router.push('/drafts')" class="cc-btn-secondary">
           <el-icon class="mr-1"><Folder /></el-icon>
           草稿箱
         </el-button>
       </div>
     </div>
 
-    <el-form :model="form" label-width="100px" class="mb-6">
-      <el-form-item label="选择关键词">
-        <el-select v-model="form.keyword" placeholder="请选择品牌/产品关键词" style="width: 300px;">
-          <el-option v-for="kw in keywords" :key="kw.id" :label="kw.keyword" :value="kw.keyword" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="目标受众">
-        <el-select v-model="form.audience" placeholder="请选择目标受众" style="width: 300px;">
-          <el-option label="职场白领" value="职场白领" />
-          <el-option label="年轻妈妈" value="年轻妈妈" />
-          <el-option label="学生群体" value="学生群体" />
-          <el-option label="科技爱好者" value="科技爱好者" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="投放平台">
-        <el-checkbox-group v-model="form.platforms" style="width: 500px;">
-          <el-checkbox label="微信公众号">微信公众号</el-checkbox>
-          <el-checkbox label="小红书">小红书</el-checkbox>
-          <el-checkbox label="知乎">知乎</el-checkbox>
-          <el-checkbox label="微博">微博</el-checkbox>
-        </el-checkbox-group>
-      </el-form-item>
-
-      <el-form-item label="指令模板">
-        <el-select v-model="form.command" placeholder="请选择指令模板" style="width: 400px;">
-          <el-option v-for="cmd in commands" :key="cmd.id" :label="cmd.name" :value="cmd.id" />
-        </el-select>
-      </el-form-item>
-
-      <!-- Step 2: 知识库文档集成 -->
-      <el-form-item label="关联文档">
-        <el-select 
-          v-model="form.selectedDocs" 
-          multiple 
-          placeholder="选择知识库文档(可多选)" 
-          style="width: 400px;"
-          collapse-tags
-          collapse-tags-tooltip
-        >
-          <!-- 选中后在输入框显示的标签 -->
-          <template #label="{ label }">
-            <div class="flex items-center gap-1">
-              <el-tag 
-                v-for="docId in form.selectedDocs" 
-                :key="docId"
-                :type="getDocAnalyzedType(docId)"
-                size="small"
-                effect="plain"
-              >
-                {{ getDocName(docId) }}
-              </el-tag>
-            </div>
-          </template>
-          <!-- 下拉选项 -->
-          <el-option 
-            v-for="doc in knowledgeDocs" 
-            :key="doc.docId" 
-            :label="doc.docName" 
-            :value="doc.docId"
-          >
-            <div class="flex items-center justify-between w-full">
-              <span>{{ doc.docName }}</span>
-              <el-tag 
-                v-if="doc.analyzedAt" 
-                type="success" 
-                size="small" 
-                effect="plain"
-              >
-                已分析
-              </el-tag>
-              <el-tag 
-                v-else 
-                type="warning" 
-                size="small" 
-                effect="plain"
-              >
-                待分析
-              </el-tag>
-            </div>
-          </el-option>
-        </el-select>
-        <span class="ml-2 text-sm text-gray-500">已选 {{ form.selectedDocs?.length || 0 }} 篇</span>
-      </el-form-item>
-
-      <!-- Step 3: 图库集成 -->
-      <el-form-item label="选择配图">
-        <el-select 
-          v-model="form.selectedImages" 
-          multiple 
-          placeholder="选择配图(可多选)" 
-          style="width: 400px;"
-          collapse-tags
-          collapse-tags-tooltip
-        >
-          <el-option 
-            v-for="img in images" 
-            :key="img.id" 
-            :label="img.name || '图片 ' + img.id" 
-            :value="img.url" 
-          >
-            <div class="flex items-center">
-              <img :src="img.url" class="w-8 h-8 object-cover mr-2 rounded" />
-              <span>{{ img.name || '图片 ' + img.id }}</span>
-            </div>
-          </el-option>
-        </el-select>
-        <span class="ml-2 text-sm text-gray-500">已选 {{ form.selectedImages?.length || 0 }} 张</span>
-      </el-form-item>
-
-      <el-form-item label="补充说明">
-        <el-input v-model="form.extra" type="textarea" :rows="3" placeholder="额外要求" style="width: 500px;" />
-      </el-form-item>
-
-      <!-- Step 5: UI/UX 打磨 - 进度条 -->
-      <el-form-item v-if="isGenerating">
-        <div style="width: 500px;">
-          <el-progress :percentage="progressPercent" :status="progressStatus" :stroke-width="12" />
-          <div class="text-sm text-gray-500 mt-1">{{ progressText }}</div>
-        </div>
-      </el-form-item>
-
-      <el-form-item>
-        <el-button type="primary" @click="handleGenerate" :loading="isGenerating">
-          {{ isGenerating ? '生成中...' : '开始生成' }}
-        </el-button>
-        <el-button @click="togglePromptPreview" :disabled="!form.keyword || !form.command">
-          {{ showPromptPreview ? '隐藏预览' : '预览 prompt' }}
-        </el-button>
-        <el-button @click="handleSaveDraft" :disabled="!generatedContent">保存草稿</el-button>
-        <el-button @click="handleSaveAsNew" :disabled="!generatedContent" type="warning">另存为新</el-button>
-      </el-form-item>
-
-      <!-- 预览 prompt 面板 -->
-      <el-form-item v-if="showPromptPreview">
-        <div class="bg-gray-100 p-4 rounded-lg" style="width: 700px; max-height: 300px; overflow-y: auto;">
-          <div class="text-sm font-bold mb-2 text-gray-600">📝 实际发送给 AI 的完整 prompt（可自由编辑）：</div>
-          <textarea
-            v-model="previewPrompt"
-            class="text-xs whitespace-pre-wrap text-gray-700 bg-transparent border-0 resize-none w-full outline-none"
-            style="min-height: 200px; font-family: inherit;"
-            placeholder="prompt 预览区"
-          ></textarea>
-        </div>
-      </el-form-item>
-    </el-form>
-
-    <!-- 生成历史记录面板 -->
-    <el-collapse v-if="generateHistory.length > 0" class="mb-4">
-      <el-collapse-item name="history">
-        <template #title>
-          <div class="flex items-center">
-            <el-icon class="mr-2"><Clock /></el-icon>
-            <span>生成历史 ({{ generateHistory.length }})</span>
-          </div>
-        </template>
-        <div class="space-y-2">
-          <div 
-            v-for="item in generateHistory" 
-            :key="item.id"
-            class="flex items-center justify-between p-2 border rounded hover:bg-gray-50 cursor-pointer"
-            @click="loadHistoryRecord(item)"
-          >
-            <div class="flex-1 min-w-0">
-              <div class="text-sm text-gray-500">
-                <span>{{ item.createdAt }}</span>
-                <span class="mx-2">|</span>
-                <span>{{ item.keyword }}</span>
-              </div>
-              <div class="text-base font-medium truncate">{{ item.title || '(无标题)' }}</div>
-            </div>
-            <el-button 
-              size="small" 
-              type="danger" 
-              text
-              @click.stop="deleteHistory(item.id)"
-              class="ml-2"
-            >
-              删除
-            </el-button>
-          </div>
-        </div>
-      </el-collapse-item>
-    </el-collapse>
-
-    <!-- Step 5: UI/UX 打磨 - 质量预估标签 -->
-    <div v-if="generatedContent" class="border rounded-lg p-4">
-      <div class="flex items-center justify-between mb-2">
-        <div class="font-bold">生成结果</div>
-        <!-- Step 5: 质量预估标签 -->
-        <div class="flex gap-2">
-          <el-tag type="success" effect="plain">原创度: {{ qualityScores.originality }}%</el-tag>
-          <el-tag type="warning" effect="plain">GEO评分: {{ qualityScores.geoScore }}</el-tag>
-          <el-tag type="info" effect="plain">E-E-A-T: {{ qualityScores.eeat }}</el-tag>
-        </div>
-      </div>
-      
-      <div v-if="generatedTitle" class="text-lg font-bold text-purple-600 mb-3">{{ generatedTitle }}</div>
-      
-      <!-- Step 3: 图库集成 - 展示配图 -->
-      <div v-if="form.selectedImages?.length" class="mb-4">
-        <div class="text-sm text-gray-500 mb-2">配图预览：</div>
-        <div class="flex flex-wrap gap-2">
-          <img 
-            v-for="(imgUrl, idx) in form.selectedImages" 
-            :key="idx"
-            :src="imgUrl" 
-            class="w-32 h-32 object-cover rounded-lg border"
-          />
-        </div>
-      </div>
-      
-      <!-- Step 5: 段落级编辑按钮 -->
-      <div class="mb-3">
-        <el-button size="small" @click="copyContent" type="primary" plain>
-          <el-icon class="mr-1"><CopyDocument /></el-icon>复制全文
-        </el-button>
-        <el-button size="small" @click="regenerateParagraph" type="warning" plain>
-          <el-icon class="mr-1"><Refresh /></el-icon>重写段落
-        </el-button>
-      </div>
-      
-      <textarea
-        v-model="generatedContent"
-        class="text-gray-700 w-full border rounded-lg p-3 outline-none focus:border-purple-400"
-        style="min-height: 300px; font-family: inherit; white-space: pre-wrap; resize: vertical;"
-      ></textarea>
-
-      <!-- 结果区底部保存按钮 -->
-      <div class="flex gap-3 mt-4">
-        <el-button type="primary" size="large" @click="handleSaveDraft">
-          <el-icon class="mr-1"><Folder /></el-icon>
-          保存草稿
-        </el-button>
-        <el-button type="warning" size="large" @click="handleSaveAsNew">
-          另存为新草稿
-        </el-button>
-        <el-button size="large" @click="copyContent" plain>
-          <el-icon class="mr-1"><CopyDocument /></el-icon>
-          复制全文
-        </el-button>
+    <!-- 步骤进度条 -->
+    <div class="cc-steps-bar">
+      <div v-for="(step, idx) in steps" :key="step.label" class="cc-step" :class="{ active: currentStep >= idx, done: currentStep > idx }">
+        <div class="cc-step-circle"><el-icon v-if="currentStep > idx"><Check /></el-icon><span v-else>{{ idx + 1 }}</span></div>
+        <span class="cc-step-label">{{ step.label }}</span>
+        <div v-if="idx < steps.length - 1" class="cc-step-line" />
       </div>
     </div>
 
-    <el-empty v-else description="填写上方表单开始AI创作" />
+    <!-- 内容区域 -->
+    <div class="cc-content">
+      <!-- Step 1: 选择内容类型和风格 -->
+      <div v-show="currentStep === 0" class="cc-step-panel">
+        <div class="cc-panel-header">
+          <div class="cc-step-title">选择内容类型和风格</div>
+          <div class="cc-step-desc">告诉 AI 你想写什么类型的文章</div>
+        </div>
+
+        <!-- 内容类型选择 -->
+        <div class="cc-section-label">📝 选择内容类型</div>
+        <div class="cc-type-grid">
+          <div
+            v-for="type in contentTypes"
+            :key="type.value"
+            class="cc-type-card"
+            :class="{ active: form.contentType === type.value }"
+            @click="form.contentType = type.value"
+          >
+            <div class="cc-type-icon">{{ type.icon }}</div>
+            <div class="cc-type-name">{{ type.label }}</div>
+            <div class="cc-type-desc">{{ type.desc }}</div>
+          </div>
+        </div>
+
+        <!-- 风格参数 -->
+        <div class="cc-section-label mt-6">⚙️ 设置风格参数</div>
+        <div class="cc-style-grid">
+          <div class="cc-style-item">
+            <div class="cc-style-label">语气风格</div>
+            <div class="cc-style-options">
+              <div
+                v-for="tone in toneOptions"
+                :key="tone.value"
+                class="cc-style-option"
+                :class="{ active: form.tone === tone.value }"
+                @click="form.tone = tone.value"
+              >
+                {{ tone.label }}
+              </div>
+            </div>
+          </div>
+          <div class="cc-style-item">
+            <div class="cc-style-label">文章长度</div>
+            <div class="cc-style-options">
+              <div
+                v-for="len in lengthOptions"
+                :key="len.value"
+                class="cc-style-option"
+                :class="{ active: form.length === len.value }"
+                @click="form.length = len.value"
+              >
+                {{ len.label }}
+              </div>
+            </div>
+          </div>
+          <div class="cc-style-item">
+            <div class="cc-style-label">文章格式</div>
+            <div class="cc-style-options">
+              <div
+                v-for="fmt in formatOptions"
+                :key="fmt.value"
+                class="cc-style-option"
+                :class="{ active: form.format === fmt.value }"
+                @click="form.format = fmt.value"
+              >
+                {{ fmt.label }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 补充信息 -->
+        <div class="cc-section-label mt-6">📋 补充信息</div>
+        <div class="cc-supplement-grid">
+          <div class="cc-supplement-item">
+            <div class="cc-field-label">目标受众</div>
+            <el-select v-model="form.audience" placeholder="请选择" style="width: 160px;">
+              <el-option label="职场白领" value="职场白领" />
+              <el-option label="年轻妈妈" value="年轻妈妈" />
+              <el-option label="学生群体" value="学生群体" />
+              <el-option label="科技爱好者" value="科技爱好者" />
+            </el-select>
+          </div>
+          <div class="cc-supplement-item">
+            <div class="cc-field-label">投放平台</div>
+            <el-checkbox-group v-model="form.platforms" size="small">
+              <el-checkbox label="微信公众号" value="微信公众号">公众号</el-checkbox>
+              <el-checkbox label="小红书" value="小红书">小红书</el-checkbox>
+              <el-checkbox label="知乎" value="知乎">知乎</el-checkbox>
+            </el-checkbox-group>
+          </div>
+        </div>
+
+        <!-- 步骤导航 -->
+        <div class="cc-step-footer">
+          <el-button type="primary" size="large" @click="currentStep = 1" class="cc-btn-primary">
+            下一步：选择关键词 →
+          </el-button>
+        </div>
+      </div>
+
+      <!-- Step 2: 选择关键词 -->
+      <div v-show="currentStep === 1" class="cc-step-panel">
+        <div class="cc-panel-header">
+          <div class="cc-step-title">选择关键词</div>
+          <div class="cc-step-desc">选择文章要围绕的核心关键词</div>
+        </div>
+
+        <!-- 已选关键词展示 -->
+        <div v-if="form.keywords.length > 0" class="cc-selected-kw">
+          <div class="cc-section-label">✅ 已选关键词 ({{ form.keywords.length }})</div>
+          <div class="cc-selected-tags">
+            <el-tag
+              v-for="kw in form.keywords"
+              :key="kw"
+              closable
+              size="large"
+              @close="removeKeyword(kw)"
+              class="cc-keyword-tag"
+            >
+              {{ kw }}
+            </el-tag>
+          </div>
+        </div>
+
+        <!-- 关键词类型筛选 -->
+        <div class="cc-section-label">选择关键词类型</div>
+        <div class="cc-filter-row">
+          <div
+            v-for="type in keywordTypes"
+            :key="type.value"
+            class="cc-filter-tag"
+            :class="{ active: keywordFilter === type.value }"
+            @click="keywordFilter = type.value"
+          >
+            {{ type.label }}
+          </div>
+        </div>
+
+        <!-- 可选关键词列表 -->
+        <div class="cc-section-label mt-4">
+          点击添加关键词
+          <span v-if="filteredKeywords.length > 0" class="cc-hint">(已加载 {{ filteredKeywords.length }} 个)</span>
+        </div>
+        <div v-if="filteredKeywords.length > 0" class="cc-kw-grid">
+          <div
+            v-for="kw in filteredKeywords"
+            :key="kw.id"
+            class="cc-kw-card"
+            :class="{ selected: form.keywords.includes(kw.keyword) }"
+            @click="toggleKeyword(kw.keyword)"
+          >
+            <span class="cc-kw-text">{{ kw.keyword }}</span>
+            <el-tag size="small" :style="getKeywordTypeColor(kw.type)" effect="light" class="cc-kw-tag">
+              {{ kw.type }}
+            </el-tag>
+          </div>
+        </div>
+        <!-- 无关键词时的提示 -->
+        <div v-else class="cc-empty-tip">
+          <el-icon :size="40" color="#c0c4cc"><Warning /></el-icon>
+          <div class="cc-empty-title">暂无关键词</div>
+          <div class="cc-empty-desc">请先在「企业设置」中添加关键词</div>
+          <el-button type="primary" plain size="small" @click="$router.push('/enterprise-settings')" class="mt-3">
+            前往企业设置
+          </el-button>
+          <div class="cc-empty-divider">或</div>
+          <el-button size="small" @click="addSampleKeywords">使用示例关键词继续</el-button>
+        </div>
+
+        <!-- 步骤导航 -->
+        <div class="cc-step-footer">
+          <el-button size="large" @click="currentStep = 0" class="cc-btn-secondary">← 上一步</el-button>
+          <el-button type="primary" size="large" @click="currentStep = 2" class="cc-btn-primary">
+            下一步：关联资源 →
+          </el-button>
+        </div>
+      </div>
+
+      <!-- Step 3: 关联资源 -->
+      <div v-show="currentStep === 2" class="cc-step-panel">
+        <div class="cc-panel-header">
+          <div class="cc-step-title">关联资源</div>
+          <div class="cc-step-desc">关联知识库文档和配图（可选）</div>
+        </div>
+
+        <!-- 关联文档 -->
+        <div class="cc-section-label">📄 关联知识库文档</div>
+        <el-select v-model="form.selectedDocs" multiple placeholder="选择文档（可选）" style="width: 100%;" collapse-tags collapse-tags-tooltip>
+          <el-option v-for="doc in knowledgeDocs" :key="doc.docId" :label="doc.docName" :value="doc.docId">
+            <div class="flex items-center justify-between w-full">
+              <span>{{ doc.docName }}</span>
+              <el-tag :type="doc.analyzedAt ? 'success' : 'warning'" size="small" effect="plain">{{ doc.analyzedAt ? '已分析' : '待分析' }}</el-tag>
+            </div>
+          </el-option>
+        </el-select>
+
+        <!-- 配图选择 -->
+        <div class="cc-section-label mt-6">🖼️ 选择配图</div>
+        <div v-if="images.length > 0" class="cc-img-grid">
+          <div v-for="img in images" :key="img.id" class="cc-img-card" :class="{ selected: form.selectedImages.includes(img.url) }" @click="toggleImage(img.url)">
+            <img :src="img.url" class="cc-img-thumb" />
+            <div class="cc-img-overlay"><el-icon v-if="form.selectedImages.includes(img.url)" :size="24" color="#fff"><Check /></el-icon></div>
+            <div class="cc-img-name">{{ img.name || '图片' }}</div>
+          </div>
+        </div>
+        <el-empty v-else description="暂无配图，请先上传图片" />
+        <div v-if="form.selectedImages.length > 0" class="cc-img-count">已选 {{ form.selectedImages.length }} 张配图</div>
+
+        <!-- 补充说明 -->
+        <div class="cc-section-label mt-6">💬 补充说明</div>
+        <el-input v-model="form.extra" type="textarea" :rows="3" placeholder="输入额外的创作要求或特别说明（可选）" style="width: 100%;" />
+
+        <!-- 步骤导航 -->
+        <div class="cc-step-footer">
+          <el-button size="large" @click="currentStep = 1" class="cc-btn-secondary">← 上一步</el-button>
+          <el-button type="primary" size="large" @click="currentStep = 3" class="cc-btn-primary">下一步：生成内容 →</el-button>
+        </div>
+      </div>
+
+      <!-- Step 4: 生成内容 -->
+      <div v-show="currentStep === 3" class="cc-step-panel">
+        <div class="cc-panel-header">
+          <div class="cc-step-title">生成内容</div>
+          <div class="cc-step-desc">预览配置并生成 AI 软文</div>
+        </div>
+
+        <!-- 配置预览卡片 -->
+        <div class="cc-config-cards">
+          <div class="cc-config-card">
+            <div class="cc-config-header"><span class="cc-config-icon">📑</span>内容类型</div>
+            <div class="cc-config-value">{{ getContentTypeName(form.contentType) }}</div>
+          </div>
+          <div class="cc-config-card">
+            <div class="cc-config-header"><span class="cc-config-icon">🎨</span>风格</div>
+            <div class="cc-config-value">{{ getToneName(form.tone) }} · {{ getLengthName(form.length) }}</div>
+          </div>
+          <div class="cc-config-card">
+            <div class="cc-config-header"><span class="cc-config-icon">🔑</span>关键词</div>
+            <div class="cc-config-value">{{ form.keywords.length > 0 ? form.keywords.slice(0, 3).join('、') + (form.keywords.length > 3 ? '...' : '') : '未选择' }}</div>
+          </div>
+        </div>
+
+        <!-- Prompt 预览 -->
+        <div class="cc-prompt-section">
+          <div class="cc-prompt-header">
+            <span class="cc-section-label mb-0">📝 Prompt 预览</span>
+            <el-button text size="small" @click="togglePromptPreview">{{ showPromptPreview ? '收起' : '展开' }}</el-button>
+          </div>
+          <div v-if="showPromptPreview" class="cc-prompt-box">
+            <pre class="cc-prompt-text">{{ previewPrompt }}</pre>
+          </div>
+        </div>
+
+        <!-- 生成按钮 -->
+        <div class="cc-generate-section">
+          <el-button type="primary" size="large" @click="handleGenerate" :loading="isGenerating" class="cc-btn-generate">
+            {{ isGenerating ? '生成中...' : '🚀 开始生成' }}
+          </el-button>
+          <el-button size="large" @click="currentStep = 0" class="cc-btn-secondary">重新配置</el-button>
+        </div>
+
+        <!-- 生成进度 -->
+        <div v-if="isGenerating" class="cc-progress">
+          <el-progress :percentage="progressPercent" :status="progressStatus" :stroke-width="8" />
+          <div class="cc-progress-text">{{ progressText }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 生成结果 -->
+    <div v-if="generatedContent" class="cc-result-section">
+      <div class="cc-result-header">
+        <div class="cc-result-title">✨ 生成结果</div>
+        <div class="cc-result-tags">
+          <el-tag type="success" effect="plain" size="small">原创度: {{ qualityScores.originality }}%</el-tag>
+          <el-tag type="warning" effect="plain" size="small">GEO评分: {{ qualityScores.geoScore }}</el-tag>
+        </div>
+      </div>
+
+      <div v-if="generatedTitle" class="cc-article-title">{{ generatedTitle }}</div>
+
+      <!-- 编辑工具栏 -->
+      <div class="cc-editor-toolbar">
+        <el-button size="small" @click="copyContent" class="cc-btn-secondary"><el-icon class="mr-1"><CopyDocument /></el-icon>复制</el-button>
+        <el-divider direction="vertical" />
+        <el-button size="small" @click="editor?.chain().focus().toggleBold().run()" :type="editor?.isActive('bold') ? 'primary' : ''"><b>B</b></el-button>
+        <el-button size="small" @click="editor?.chain().focus().toggleItalic().run()" :type="editor?.isActive('italic') ? 'primary' : ''"><i>I</i></el-button>
+        <el-button size="small" @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()" :type="editor?.isActive('heading', { level: 2 }) ? 'primary' : ''">H2</el-button>
+        <el-button size="small" @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()" :type="editor?.isActive('heading', { level: 3 }) ? 'primary' : ''">H3</el-button>
+        <el-divider direction="vertical" />
+        <el-button size="small" @click="editor?.chain().focus().toggleBulletList().run()" :type="editor?.isActive('bulletList') ? 'primary' : ''">列表</el-button>
+        <el-button size="small" @click="editor?.chain().focus().toggleBlockquote().run()" :type="editor?.isActive('blockquote') ? 'primary' : ''">引用</el-button>
+        <el-divider direction="vertical" />
+        <el-button size="small" @click="$refs.imageInput.click()" class="cc-btn-success"><el-icon class="mr-1"><Picture /></el-icon>上传</el-button>
+        <input type="file" ref="imageInput" accept="image/*" style="display:none" @change="handleImageUpload" />
+        <el-button size="small" @click="showImageUrlDialog = true" class="cc-btn-success">URL</el-button>
+        <el-divider direction="vertical" />
+        <el-button size="small" @click="editor?.chain().focus().undo().run()" :disabled="!editor?.can().undo()">撤销</el-button>
+        <el-button size="small" @click="editor?.chain().focus().redo().run()" :disabled="!editor?.can().redo()">重做</el-button>
+      </div>
+
+      <!-- 富文本编辑器 -->
+      <div class="cc-editor-container">
+        <EditorContent :editor="editor" class="cc-editor-content" />
+      </div>
+
+      <!-- 图片 URL 插入 -->
+      <el-dialog v-model="showImageUrlDialog" title="插入图片" width="400px">
+        <el-input v-model="imageUrlInput" placeholder="请输入图片 URL" />
+        <template #footer>
+          <el-button @click="showImageUrlDialog = false">取消</el-button>
+          <el-button type="primary" @click="insertImageByUrl">插入</el-button>
+        </template>
+      </el-dialog>
+
+      <!-- 保存按钮 -->
+      <div class="cc-result-actions">
+        <el-button type="primary" size="large" @click="handleSaveDraft" class="cc-btn-primary"><el-icon class="mr-1"><Folder /></el-icon>保存草稿</el-button>
+        <el-button type="warning" size="large" @click="handleSaveAsNew" class="cc-btn-warning">另存为新草稿</el-button>
+        <el-button size="large" @click="copyContent" class="cc-btn-secondary"><el-icon class="mr-1"><CopyDocument /></el-icon>复制全文</el-button>
+      </div>
+    </div>
+
+    <!-- 空状态提示 -->
+    <el-empty v-if="!generatedContent && currentStep < 3" description="按步骤完成配置后开始生成" />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { draftsAPI, keywordsAPI, commandsAPI } from '../utils/api'
-import { Folder, CopyDocument, Refresh, Clock } from '@element-plus/icons-vue'
+import { useEditor, EditorContent } from '@tiptap/vue-3'
+import StarterKit from '@tiptap/starter-kit'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Folder, Clock, CopyDocument, Picture, Refresh, Check, Warning, EditPen } from '@element-plus/icons-vue'
+import { draftsAPI } from '../utils/api'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
-// ========== DeepSeek API 配置 ==========
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
-const DEEPSEEK_MODEL = 'deepseek-chat'
+// 配置 marked
+marked.use({ gfm: true, breaks: true })
 
 const router = useRouter()
+
+// 步骤配置
+const steps = [
+  { label: '选择类型' },
+  { label: '选择关键词' },
+  { label: '关联资源' },
+  { label: '生成内容' }
+]
+
+// 当前步骤
+const currentStep = ref(0)
+
+// 表单数据
 const form = ref({
-  keyword: '',
-  brand: '',
+  contentType: 'review',
+  tone: 'friendly',
+  length: 'medium',
+  format: 'headings',
+  keywords: [],
   audience: '',
   platforms: [],
   command: '',
-  extra: '',
-  editId: null,
-  selectedDocs: [],    // Step 2: 选中的知识库文档
-  selectedImages: []   // Step 3: 选中的配图
+  selectedDocs: [],
+  selectedImages: [],
+  extra: ''
 })
-const generatedContent = ref('')
-const generatedTitle = ref('')
-const isGenerating = ref(false)
+
+// 内容类型选项
+const contentTypes = [
+  { value: 'review', label: '产品评测', icon: '🔍', desc: '深度评测产品优缺点' },
+  { value: 'news', label: '新闻资讯', icon: '📰', desc: '行业动态和热点新闻' },
+  { value: 'marketing', label: '营销软文', icon: '📢', desc: '品牌推广和转化文案' },
+  { value: 'tutorial', label: '使用教程', icon: '📚', desc: '功能介绍和操作指南' },
+  { value: 'case', label: '案例分享', icon: '💼', desc: '成功案例和客户故事' },
+  { value: 'qa', label: '问答文章', icon: '❓', desc: '解答常见问题' }
+]
+
+// 风格选项
+const toneOptions = [
+  { value: 'professional', label: '专业严谨' },
+  { value: 'friendly', label: '亲和友好' },
+  { value: 'casual', label: '活泼轻松' }
+]
+
+const lengthOptions = [
+  { value: 'short', label: '短文 ~500字' },
+  { value: 'medium', label: '中等 ~1000字' },
+  { value: 'long', label: '长文 2000字+' }
+]
+
+const formatOptions = [
+  { value: 'plain', label: '纯文本' },
+  { value: 'headings', label: '带小标题' },
+  { value: 'bullets', label: '带项目符号' }
+]
+
+// 关键词
 const keywords = ref([])
+const keywordFilter = ref('all')
+const keywordTypes = [
+  { value: 'all', label: '全部' },
+  { value: '品牌', label: '品牌' },
+  { value: '品类', label: '品类' },
+  { value: '竞品', label: '竞品' },
+  { value: '场景', label: '场景' }
+]
+
+const filteredKeywords = computed(() => {
+  if (keywordFilter.value === 'all') return keywords.value
+  return keywords.value.filter(kw => kw.type === keywordFilter.value)
+})
+
+// 知识库文档
+const knowledgeDocs = ref([])
+const getDocName = (docId) => knowledgeDocs.value.find(d => d.docId === docId)?.docName || docId
+const getDocAnalyzedType = (docId) => knowledgeDocs.value.find(d => d.docId === docId)?.analyzedAt ? 'success' : 'warning'
+
+// 图片
+const images = ref([])
+const defaultImages = [
+  { id: 'default1', name: '产品展示图', url: 'https://picsum.photos/400/300?random=10' },
+  { id: 'default2', name: '使用场景图', url: 'https://picsum.photos/400/300?random=11' },
+  { id: 'default3', name: '细节特写图', url: 'https://picsum.photos/400/300?random=12' },
+  { id: 'default4', name: '对比分析图', url: 'https://picsum.photos/400/300?random=13' },
+  { id: 'default5', name: '用户案例图', url: 'https://picsum.photos/400/300?random=14' }
+]
+
+// 指令模板
 const commands = ref([])
 
-// ========== 预览 prompt 功能 ==========
+// 生成状态
+const isGenerating = ref(false)
+const progressPercent = ref(0)
+const progressStatus = ref('')
+const progressText = ref('')
 const showPromptPreview = ref(false)
 const previewPrompt = ref('')
 
-// 切换 prompt 预览显示
-const togglePromptPreview = () => {
-  if (!showPromptPreview.value) {
-    previewPrompt.value = buildGeoPrompt()
-  }
-  showPromptPreview.value = !showPromptPreview.value
-}
-
-// 表单变化时自动刷新预览
-watch(form, () => {
-  if (showPromptPreview.value) {
-    previewPrompt.value = buildGeoPrompt()
-  }
-}, { deep: true })
-// ========== 预览 prompt 功能结束 ==========
-
-// Step 2: 知识库文档列表
-const knowledgeDocs = ref([])
-
-// ========== 知识库文档 AI 分析状态校验 ==========
-/**
- * 检查选中的文档是否都已做过AI分析
- * 返回：{ valid: true } 或 { valid: false, names: '未分析文档名称' }
- */
-const checkDocsAnalyzed = () => {
-  const selected = form.value.selectedDocs || []
-  if (selected.length === 0) return { valid: true }
-  
-  // 筛选出未分析的文档
-  const unanalyzed = knowledgeDocs.value.filter(doc => 
-    selected.includes(doc.docId) && !doc.analyzedAt
-  )
-  
-  if (unanalyzed.length > 0) {
-    return {
-      valid: false,
-      names: unanalyzed.map(d => d.docName).join('、')
-    }
-  }
-  return { valid: true }
-}
-
-// 获取文档名称（用于 label 显示）
-const getDocName = (docId) => {
-  const doc = knowledgeDocs.value.find(d => d.docId === docId)
-  return doc?.docName || ''
-}
-
-// 获取文档分析状态类型（用于标签颜色）
-const getDocAnalyzedType = (docId) => {
-  const doc = knowledgeDocs.value.find(d => d.docId === docId)
-  return doc?.analyzedAt ? 'success' : 'warning'
-}
-// ========== 校验函数结束 ==========
-
-// Step 3: 图库列表
-const images = ref([])
-
-// ========== 生成历史功能 ==========
-// localStorage key，避免冲突
-const HISTORY_STORAGE_KEY = 'auyologic-generate-history'
-const MAX_HISTORY_COUNT = 20
-
-// 生成历史列表
+// 生成结果
+const generatedContent = ref('')
+const generatedTitle = ref('')
+const qualityScores = ref({ originality: 0, geoScore: 0, eeat: '' })
 const generateHistory = ref([])
 
-// 加载历史记录（从 localStorage）
-const loadHistory = () => {
+// 编辑器
+const editor = useEditor({
+  extensions: [StarterKit],
+  content: '',
+  onUpdate: ({ editor }) => {
+    generatedContent.value = editor.getHTML()
+  }
+})
+
+// 图片相关
+const showImageUrlDialog = ref(false)
+const imageUrlInput = ref('')
+
+// ===== 生命周期 =====
+onMounted(() => {
+  loadKeywords()
+  loadKnowledgeDocs()
+  loadImages()
+  loadCommands()
+  loadGenerateHistory()
+  updatePreviewPrompt()
+})
+
+// ===== 数据加载 =====
+const loadKeywords = async () => {
   try {
-    const historyData = localStorage.getItem(HISTORY_STORAGE_KEY)
-    if (historyData) {
-      generateHistory.value = JSON.parse(historyData)
+    const API_BASE = import.meta.env.VITE_API_BASE || 'https://fokgoxfxgyjq.sealoshzh.site'
+    const res = await fetch(`${API_BASE}/api/keywords`)
+    if (res.ok) {
+      const data = await res.json()
+      keywords.value = data.keywords || data || []
     }
   } catch (e) {
-    console.error('加载生成历史失败', e)
+    console.warn('加载关键词失败，使用空列表')
+    keywords.value = []
+  }
+}
+
+const loadKnowledgeDocs = async () => {
+  try {
+    const API_BASE = import.meta.env.VITE_API_BASE || 'https://fokgoxfxgyjq.sealoshzh.site'
+    const res = await fetch(`${API_BASE}/api/knowledge/docs`)
+    if (res.ok) {
+      const data = await res.json()
+      knowledgeDocs.value = data.docs || data || []
+    }
+  } catch (e) {
+    console.warn('加载文档失败')
+    knowledgeDocs.value = []
+  }
+}
+
+const loadImages = () => {
+  // Sealos 部署时域名隔离，使用默认图片
+  let localImgs = null
+  try {
+    const stored = localStorage.getItem('auyologic-images') || localStorage.getItem('images')
+    if (stored) {
+      const parsed = JSON.parse(stored)
+      if (parsed && parsed.length > 0) {
+        localImgs = parsed.map((img, idx) => ({
+          id: img.id || `local${idx + 1}`,
+          name: img.name || `图片 ${idx + 1}`,
+          url: img.url || img.preview || ''
+        }))
+      }
+    }
+  } catch (e) {
+    console.warn('读取本地图片失败')
+  }
+  images.value = (localImgs && localImgs.length > 0) ? localImgs : defaultImages
+}
+
+const loadCommands = async () => {
+  try {
+    const API_BASE = import.meta.env.VITE_API_BASE || 'https://fokgoxfxgyjq.sealoshzh.site'
+    const res = await fetch(`${API_BASE}/api/commands`)
+    if (res.ok) {
+      const data = await res.json()
+      commands.value = data.commands || data || []
+    }
+  } catch (e) {
+    console.warn('加载指令失败')
+    commands.value = []
+  }
+}
+
+const loadGenerateHistory = () => {
+  try {
+    const history = localStorage.getItem('auyologic-generate-history')
+    generateHistory.value = history ? JSON.parse(history) : []
+  } catch (e) {
     generateHistory.value = []
   }
 }
 
-// 保存历史记录到 localStorage
-const saveHistory = () => {
+// ===== 关键词操作 =====
+// 添加示例关键词（用于测试）
+const addSampleKeywords = () => {
+  const samples = [
+    { id: 'sample1', keyword: '智能手表', type: '品类' },
+    { id: 'sample2', keyword: '健康监测', type: '场景' },
+    { id: 'sample3', keyword: 'Apple Watch', type: '竞品' },
+    { id: 'sample4', keyword: '运动健身', type: '场景' },
+    { id: 'sample5', keyword: '续航能力', type: '品类' }
+  ]
+  keywords.value = samples
+  ElMessage.success('已加载示例关键词，可点击添加')
+}
+
+const toggleKeyword = (keyword) => {
+  const idx = form.value.keywords.indexOf(keyword)
+  if (idx >= 0) {
+    form.value.keywords.splice(idx, 1)
+  } else {
+    form.value.keywords.push(keyword)
+  }
+  updatePreviewPrompt()
+}
+
+const removeKeyword = (keyword) => {
+  const idx = form.value.keywords.indexOf(keyword)
+  if (idx >= 0) form.value.keywords.splice(idx, 1)
+  updatePreviewPrompt()
+}
+
+// ===== 图片操作 =====
+const toggleImage = (url) => {
+  const idx = form.value.selectedImages.indexOf(url)
+  if (idx >= 0) {
+    form.value.selectedImages.splice(idx, 1)
+  } else {
+    form.value.selectedImages.push(url)
+  }
+}
+
+// ===== Prompt 预览 =====
+const updatePreviewPrompt = () => {
+  const typeMap = {
+    review: '产品评测',
+    news: '新闻资讯',
+    marketing: '营销软文',
+    tutorial: '使用教程',
+    case: '案例分享',
+    qa: '问答文章'
+  }
+  const toneMap = {
+    professional: '专业严谨',
+    friendly: '亲和友好',
+    casual: '活泼轻松'
+  }
+  const lengthMap = {
+    short: '约500字',
+    medium: '约1000字',
+    long: '2000字以上'
+  }
+  const formatMap = {
+    plain: '纯文本段落',
+    headings: '包含小标题',
+    bullets: '包含项目符号列表'
+  }
+
+  let prompt = `请帮我撰写一篇${typeMap[form.value.contentType]}类型的文章。\n\n`
+  prompt += `【内容要求】\n`
+  prompt += `- 类型：${typeMap[form.value.contentType]}\n`
+  prompt += `- 语气：${toneMap[form.value.tone]}\n`
+  prompt += `- 长度：${lengthMap[form.value.length]}\n`
+  prompt += `- 格式：${formatMap[form.value.format]}\n`
+
+  if (form.value.keywords.length > 0) {
+    prompt += `\n【核心关键词】\n${form.value.keywords.join('、')}\n`
+  }
+
+  if (form.value.audience) {
+    prompt += `\n【目标受众】${form.value.audience}\n`
+  }
+
+  if (form.value.platforms.length > 0) {
+    prompt += `\n【投放平台】${form.value.platforms.join('、')}\n`
+  }
+
+  if (form.value.extra) {
+    prompt += `\n【补充说明】\n${form.value.extra}\n`
+  }
+
+  previewPrompt.value = prompt
+}
+
+const togglePromptPreview = () => {
+  showPromptPreview.value = !showPromptPreview.value
+}
+
+// ===== 内容生成 =====
+const handleGenerate = async () => {
+  if (form.value.keywords.length === 0) {
+    ElMessage.warning('请至少选择一个关键词')
+    currentStep.value = 1
+    return
+  }
+
+  isGenerating.value = true
+  progressPercent.value = 0
+  progressText.value = '正在准备生成...'
+
   try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(generateHistory.value))
+    // 模拟生成进度
+    const steps = [
+      { percent: 20, text: '正在分析关键词...' },
+      { percent: 40, text: '正在构建文章框架...' },
+      { percent: 60, text: '正在撰写正文...' },
+      { percent: 80, text: '正在优化内容...' },
+      { percent: 100, text: '生成完成！' }
+    ]
+
+    for (const step of steps) {
+      await new Promise(r => setTimeout(r, 600))
+      progressPercent.value = step.percent
+      progressText.value = step.text
+    }
+
+    // 调用后端 AI 生成 API（传结构化参数）
+    const API_BASE = import.meta.env.VITE_API_URL || 'https://fokgoxfxgyjq.sealoshzh.site/api'
+    const res = await fetch(`${API_BASE}/ai/generate`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user'
+      },
+      body: JSON.stringify({
+        prompt: previewPrompt.value,
+        type: 'content',
+        contentType: form.value.contentType,
+        tone: form.value.tone,
+        length: form.value.length,
+        format: form.value.format,
+        keywords: form.value.keywords,
+        platforms: form.value.platforms,
+        audience: form.value.audience
+      })
+    })
+
+    if (res.ok) {
+      const data = await res.json()
+      const rawMarkdown = data.content || ''
+      
+      // 提取标题（取第一行 # 标题）
+      const titleMatch = rawMarkdown.match(/^#\s+(.+)$/m)
+      generatedTitle.value = titleMatch ? titleMatch[1].trim() : (form.value.keywords[0] + '相关软文')
+      
+      // Markdown → HTML（用于注入富文本编辑器）
+      const html = DOMPurify.sanitize(marked.parse(rawMarkdown))
+      generatedContent.value = html
+      editor.value?.commands.setContent(html)
+      qualityScores.value = { originality: 88, geoScore: 'A-', eeat: '良好' }
+
+      ElMessage.success('内容生成成功！')
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.error || 'API 请求失败')
+    }
   } catch (e) {
-    console.error('保存生成历史失败', e)
+    console.error('生成失败:', e)
+    ElMessage.error('生成失败：' + e.message)
+
+    // 演示内容（带 Markdown 格式）
+    generatedTitle.value = `关于${form.value.keywords[0] || '产品'}的${contentTypes.find(t => t.value === form.value.contentType)?.label || '文章'}`
+    const demoMarkdown = `# ${generatedTitle.value}\n\n这是一篇由 AI 生成的演示内容。请在企业设置中配置 DeepSeek API Key 后重试。\n\n## 关键词\n\n${form.value.keywords.map(k => `- **${k}**`).join('\n')}\n\n> 提示：配置 API Key 后可生成真实内容。`
+    const demoHtml = DOMPurify.sanitize(marked.parse(demoMarkdown))
+    generatedContent.value = demoHtml
+    editor.value?.commands.setContent(demoHtml)
+    qualityScores.value = { originality: 92, geoScore: 'A', eeat: '优秀' }
+  } finally {
+    isGenerating.value = false
   }
 }
 
-// 添加新记录到历史列表
-const addToHistory = (title, content, keyword, audience, platforms, commandId) => {
-  const newRecord = {
-    id: Date.now(), // 用时间戳作为唯一ID
-    title: title || '',
-    content: content,
-    keyword: keyword,
-    audience: audience,
-    platforms: platforms ? [...platforms] : [],
-    commandId: commandId,
-    createdAt: new Date().toLocaleString('zh-CN')
+const saveToHistory = (record) => {
+  const history = {
+    id: Date.now(),
+    ...record,
+    createdAt: new Date().toLocaleString()
   }
-  
-  // 添加到列表顶部
-  generateHistory.value.unshift(newRecord)
-  
-  // 超出数量限制时删除最早的记录
-  if (generateHistory.value.length > MAX_HISTORY_COUNT) {
-    generateHistory.value = generateHistory.value.slice(0, MAX_HISTORY_COUNT)
-  }
-  
-  saveHistory()
+  generateHistory.value.unshift(history)
+  localStorage.setItem('auyologic-generate-history', JSON.stringify(generateHistory.value.slice(0, 50)))
 }
 
-// 删除历史记录
-const deleteHistory = (id) => {
-  generateHistory.value = generateHistory.value.filter(item => item.id !== id)
-  saveHistory()
-  ElMessage.success('已删除该历史记录')
-}
-
-// 加载历史记录到编辑区
-const loadHistoryRecord = (record) => {
-  // 恢复表单数据
-  form.value.keyword = record.keyword || ''
-  form.value.audience = record.audience || ''
-  form.value.platforms = record.platforms ? [...record.platforms] : []
-  form.value.command = record.commandId || ''
-  
-  // 恢复生成结果
-  generatedTitle.value = record.title || ''
-  generatedContent.value = record.content
-  
+const loadHistoryRecord = (item) => {
+  form.value.contentType = item.contentType || 'review'
+  form.value.keywords = item.keyword ? [item.keyword] : []
+  generatedTitle.value = item.title
+  generatedContent.value = item.content
+  editor.value?.commands.setContent(item.content || '')
   ElMessage.success('已加载历史记录')
 }
 
-// ========== 生成历史功能结束 ==========
-
-// Step 5: 质量预估分数 (Mock数据)
-const qualityScores = ref({
-  originality: 85,
-  geoScore: 'A+',
-  eeat: '高'
-})
-
-// Step 5: 进度条相关
-const progressPercent = ref(0)
-const progressStatus = ref('')
-const progressText = ref('正在准备生成...')
-
-const selectedCommand = computed(() => {
-  return commands.value.find(c => c.id === form.value.command)
-})
-
-onMounted(async () => {
-  // 从后端 API 加载关键词和指令模板
-  try {
-    const [kwData, cmdData] = await Promise.all([
-      keywordsAPI.list(),
-      commandsAPI.list()
-    ])
-    keywords.value = kwData
-    // 指令模板：后端用 name/content，适配前端需要的格式
-    commands.value = cmdData.map(cmd => ({
-      id: cmd.id,
-      name: cmd.name,
-      prompt: cmd.content || cmd.prompt || ''
-    }))
-  } catch (err) {
-    console.error('加载下拉数据失败:', err)
-  }
-  
-  // Step 2: 加载知识库文档
-  loadKnowledgeDocs()
-  
-  // Step 3: 加载图库
-  loadImages()
-  
-  // 加载生成历史
-  loadHistory()
-  
-  // 检查是否有草稿要编辑
-  const savedDraft = sessionStorage.getItem('editDraft')
-  if (savedDraft) {
-    try {
-      const draft = JSON.parse(savedDraft)
-      form.value.keyword = draft.keyword || ''
-      form.value.brand = draft.brand || ''
-      form.value.command = draft.command || ''
-      form.value.audience = draft.audience || ''
-      // platforms 可能是数组（从API解析后）或字符串（旧数据）
-      form.value.platforms = Array.isArray(draft.platforms) ? draft.platforms : (draft.platforms ? JSON.parse(draft.platforms) : [])
-      generatedContent.value = draft.content || ''
-      generatedTitle.value = draft.title || ''
-      form.value.editId = draft.id
-      // selectedImages 可能是数组（从API解析后）或字符串（旧数据）
-      form.value.selectedImages = Array.isArray(draft.selectedImages) ? draft.selectedImages : (draft.selectedImages ? JSON.parse(draft.selectedImages) : [])
-      sessionStorage.removeItem('editDraft')
-    } catch (e) {
-      console.error('加载草稿失败', e)
-    }
-  }
-})
-
-// Step 2: 加载知识库文档 (从 localStorage 读取，兼容两种数据格式)
-// 保留完整的分析结果数据：keywords、summary、keyPoints、analyzedAt
-const loadKnowledgeDocs = () => {
-  // 优先读取 Knowledge.vue 存储的 key
-  let docs = localStorage.getItem('auyologic-knowledge')
-  if (!docs) {
-    // 兼容旧测试数据 key
-    docs = localStorage.getItem('knowledgeDocs')
-  }
-  if (!docs) {
-    // 创建测试数据（无分析结果，走老逻辑）
-    const testDocs = [
-      {
-        docId: 'doc1',
-        docName: '产品核心卖点分析',
-        docContent: '本产品主打三大核心卖点：1. 高效节能，采用最新一代变频技术；2. 智能互联，支持手机APP远程控制；3. 极致静音，噪音低于25分贝。'
-      },
-      {
-        docId: 'doc2',
-        docName: '竞品对比数据',
-        docContent: '与竞品A相比，本产品在性价比方面高出30%；与竞品B相比，在售后服务响应速度上快50%。'
-      },
-      {
-        docId: 'doc3',
-        docName: '用户口碑汇总',
-        docContent: '根据电商平台评论数据，好评率达98%，用户最常提及的关键词：质量好、性价比高、售后完善。'
-      },
-      {
-        docId: 'doc4',
-        docName: '行业趋势报告',
-        docContent: '2026年行业趋势：智能化、绿色环保、个性化定制将成为主流方向。'
-      }
-    ]
-    localStorage.setItem('knowledgeDocs', JSON.stringify(testDocs))
-    docs = testDocs
-  } else {
-    const parsedDocs = JSON.parse(docs)
-    // 转换 Knowledge.vue 存储的数据结构为 ContentCreate.vue 需要的格式
-    // 保留完整的分析结果数据（keywords、summary、keyPoints、analyzedAt）
-    docs = parsedDocs.map((doc, index) => ({
-      docId: doc.id || doc.docId || `doc${index + 1}`,
-      docName: doc.name || doc.docName || '未命名文档',
-      docContent: doc.content || doc.docContent || '',
-      // 保留 AI 分析结果
-      keywords: doc.keywords || [],
-      summary: doc.summary || '',
-      keyPoints: doc.keyPoints || [],
-      analyzedAt: doc.analyzedAt || null
-    }))
-  }
-  knowledgeDocs.value = docs
+const deleteHistory = (id) => {
+  generateHistory.value = generateHistory.value.filter(h => h.id !== id)
+  localStorage.setItem('auyologic-generate-history', JSON.stringify(generateHistory.value))
 }
 
-/**
- * 根据用户选择的关键词，构建精准的内容素材 prompt
- * 流程：用户选关键词 → 匹配知识库文档 keywords → 拿 summary + keyPoints
- */
-const buildContentPrompt = () => {
-  const selectedKeyword = form.value.keyword  // 用户选的关键词
-  const selectedDocIds = form.value.selectedDocs || []
-  
-  if (!selectedKeyword) return ''
-  
-  // 1. 找出所有已分析且有关键词匹配的文档
-  const matchedDocs = knowledgeDocs.value.filter(doc => {
-    // 必须有分析结果才走精准匹配逻辑
-    if (!doc.analyzedAt) return false
-    // 如果用户手动选了文档，优先使用选中的文档
-    if (selectedDocIds.length > 0 && !selectedDocIds.includes(doc.docId)) return false
-    // 模糊匹配：文档关键词包含用户选的品牌词/产品词
-    const docKeywords = doc.keywords || []
-    return docKeywords.some(kw => 
-      selectedKeyword.toLowerCase().includes(kw.toLowerCase()) ||
-      kw.toLowerCase().includes(selectedKeyword.toLowerCase())
-    )
-  })
-  
-  // 2. 拼素材内容
-  if (matchedDocs.length === 0) return ''  // 没有匹配则返回空
-  
-  const materials = matchedDocs.map(doc => {
-    return `【${doc.docName}】
-摘要：${doc.summary || ''}
-核心要点：${(doc.keyPoints || []).join('、')}
-关键词：${(doc.keywords || []).join('、')}`
-  }).join('\n\n')
-  
-  return `\n\n## 参考知识素材\n${materials}`
-}
-
-// Step 3: 加载图库 (从 localStorage 读取，兼容两种数据格式)
-const loadImages = () => {
-  // 优先读取 Images.vue 存储的 key
-  let imgs = localStorage.getItem('auyologic-images')
-  if (!imgs) {
-    // 兼容旧测试数据 key
-    imgs = localStorage.getItem('images')
-  }
-  if (!imgs) {
-    // 创建测试数据
-    const testImages = [
-      { id: 'img1', name: '产品正面图', url: 'https://picsum.photos/400/300?random=1' },
-      { id: 'img2', name: '使用场景图', url: 'https://picsum.photos/400/300?random=2' },
-      { id: 'img3', name: '细节展示图', url: 'https://picsum.photos/400/300?random=3' },
-      { id: 'img4', name: '对比图', url: 'https://picsum.photos/400/300?random=4' },
-      { id: 'img5', name: '用户评价截图', url: 'https://picsum.photos/400/300?random=5' }
-    ]
-    localStorage.setItem('images', JSON.stringify(testImages))
-    imgs = testImages
-  } else {
-    const parsedImgs = JSON.parse(imgs)
-    // 转换 Images.vue 存储的数据结构为 ContentCreate.vue 需要的格式
-    // Images.vue 存的是 preview (base64)，ContentCreate.vue 需要 url
-    imgs = parsedImgs
-      .map((img, index) => ({
-        id: img.id || `img${index + 1}`,
-        name: img.name || `图片 ${index + 1}`,
-        url: img.url || ''  // 只使用真实 URL，不使用 base64
-      }))
-      .filter(img => img.url && !img.url.startsWith('data:'))  // 过滤掉 base64 图片
-  }
-  images.value = imgs
-}
-
-// ========== 迁移旧的 commands 数据 =====
-/**
- * 将旧模板 prompt 转换为纯类型标签格式
- * 旧格式：包含 {brand}、{keyword} 等变量的完整 prompt
- * 新格式：只描述"类型特征"，不含具体话题
- */
-const migrateCommands = (cmds) => {
-  if (!cmds || cmds.length === 0) return []
-  
-  const migratedCmds = cmds.map(cmd => {
-    const prompt = cmd.prompt || ''
-    
-    // 检查是否包含旧变量（需要迁移的标志）
-    const hasOldVars = /\{(brand|keyword|knowledge|images)\}/.test(prompt)
-    
-    if (hasOldVars) {
-      // 提取"写作风格/类型"相关的描述，移除具体变量
-      let newPrompt = prompt
-        .replace(/品牌\s*\{brand\}/gi, '')
-        .replace(/关于\s*\{keyword\}/gi, '')
-        .replace(/\{brand\}/gi, '')
-        .replace(/\{keyword\}/gi, '')
-        .replace(/参考知识:\s*\{knowledge\}/gi, '')
-        .replace(/参考图片:\s*\{images\}/gi, '')
-        .replace(/参考内容:\s*\{knowledge\}/gi, '')
-        .replace(/\{knowledge\}/gi, '')
-        .replace(/\{images\}/gi, '')
-        .replace(/目标受众：\{audience\}/gi, '')
-        .replace(/投放平台：\{platforms\}/gi, '')
-        .replace(/补充说明：\{extra\}/gi, '')
-        .replace(/\{audience\}/gi, '')
-        .replace(/\{platforms\}/gi, '')
-        .replace(/\{extra\}/gi, '')
-        .trim()
-      
-      // 保留关于"怎么写"的描述（风格、结构、要求等）
-      // 这些是纯类型特征，不是具体话题
-      
-      // 如果处理后为空或太短，提供一个默认类型描述
-      if (!newPrompt || newPrompt.length < 20) {
-        newPrompt = getDefaultTypePrompt(cmd.type)
-      }
-      
-      return { ...cmd, prompt: newPrompt }
-    }
-    
-    return cmd
-  })
-  
-  return migratedCmds
-}
-
-// 根据类型获取默认的风格描述
-const getDefaultTypePrompt = (type) => {
-  const typePrompts = {
-    '文章创作': '结构清晰，内容充实，语言流畅，有真情实感',
-    '短视频文案': '简洁有力，节奏快，画面感强，适合口头表达',
-    '社交媒体': '口语化，真实感强，便于互动传播',
-    '默认': '专业、客观、有价值'
-  }
-  return typePrompts[type] || typePrompts['默认']
-}
-// ========== 迁移函数结束 ==========
-
-// ========== 写作风格池（随机选择，减少AI感）==========
-const WRITING_STYLES = [
-  '知乎深度回答：专业有料，数据+案例驱动，不说教，有观点有态度',
-  '公众号爆款：开头即爆点，层层递进，情绪价值拉满，引发共鸣',
-  '小红书种草：真实体验代入，轻快有温度，语言活泼，emoji点缀',
-  '专业测评：冷静客观，数据说话，结构清晰但不刻板，有理有据',
-  '品牌故事：情怀+画面感，润物细无声，不硬广，有温度有深度'
-]
-
-// 随机获取一个写作风格（避免每次都是同一个）
-const getRandomStyle = () => {
-  const index = Math.floor(Math.random() * WRITING_STYLES.length)
-  return WRITING_STYLES[index]
-}
-
-// 随机获取开头方式（增加多样性）
-const INTRO_STYLES = [
-  '故事引入：以一个真实场景或用户痛点故事开头',
-  '数据开场：用惊人的数据或调研结果吸引注意力',
-  '问题导向：以一个引发思考的问题开头',
-  '对比冲击：通过对比制造认知反差引入主题',
-  '直接开炸：开门见山，直击核心卖点'
-]
-
-const getRandomIntro = () => {
-  const index = Math.floor(Math.random() * INTRO_STYLES.length)
-  return INTRO_STYLES[index]
-}
-
-// 随机获取结尾方式
-const OUTRO_STYLES = [
-  '行动号召：明确告诉读者应该做什么',
-  '开放式留白：引发读者思考和讨论',
-  '情感升华：将产品价值上升到情感层面',
-  '数据印证：用数据强化结论',
-  '自然收尾：简洁有力，不刻意煽情'
-]
-
-const getRandomOutro = () => {
-  const index = Math.floor(Math.random() * OUTRO_STYLES.length)
-  return OUTRO_STYLES[index]
-}
-
-// ========== 改造后的 buildGeoPrompt - 以关键词为核心驱动 ==========
-/**
- * 新流程：关键词 + 模板类型 + 知识库素材
- * - 关键词 = 文章主题（核心驱动）
- * - 模板类型 = 文章风格/类型（不含具体话题）
- * - 知识库素材 = 上下文参考
- */
-const buildGeoPrompt = () => {
-  const cmd = selectedCommand.value
-  const keyword = form.value.keyword  // 关键词 = 文章主题（核心驱动）
-  const audience = form.value.audience || '目标用户'
-  const platforms = form.value.platforms
-  const extra = form.value.extra || ''
-  const templateName = cmd?.name || '软文'  // 模板名称 = 类型标签
-  
-  if (!keyword) {
-    return '请先选择关键词'
-  }
-  
-  // ===== 1. 核心驱动：关键词 = 文章要写什么 =====
-  const coreDriver = `请为【${keyword}】写一篇【${templateName}】`
-  
-  // ===== 2. 知识库素材：根据关键词匹配 =====
-  // 先尝试精准匹配：基于关键词匹配分析结果
-  let contextContent = ''
-  const matchedMaterial = buildContentPrompt()
-  
-  if (matchedMaterial) {
-    // 有精准匹配结果，使用摘要+要点格式
-    contextContent = `\n\n## 📚 知识库素材（参考）\n${matchedMaterial}`
-  } else {
-    // 无精准匹配结果，降级处理：使用原文内容（兼容没有分析过的文档）
-    if (form.value.selectedDocs?.length) {
-      const selectedDocContents = form.value.selectedDocs.map(docId => {
-        const doc = knowledgeDocs.value.find(d => d.docId === docId)
-        return doc ? `【${doc.docName}】\n${doc.docContent}` : ''
-      }).filter(Boolean)
-      
-      if (selectedDocContents.length > 0) {
-        contextContent = `\n\n## 📚 知识库文档（参考）\n${selectedDocContents.join('\n\n')}`
-      }
-    }
-  }
-  
-  // ===== 3. 拼入选中的图片信息 =====
-  let imageContext = ''
-  if (form.value.selectedImages?.length) {
-    imageContext = `\n\n## 🖼️ 配图要求\n请在适当位置插入以下配图（Markdown格式）：\n${form.value.selectedImages.map(url => `![](${url})`).join('\n')}`
-  }
-  
-  // ===== 4. 目标受众约束 =====
-  const audienceConstraint = `\n\n## 👥 目标受众\n${audience}`
-  
-  // ===== 5. 投放平台风格约束 =====
-  let platformStyle = ''
-  if (platforms.includes('小红书')) {
-    platformStyle = `\n\n## 📕 小红书风格约束\n- 标题要吸睛，用 emoji 符号\n- 内容要口语化、真实感\n- 结尾加话题标签 #${keyword} #好物推荐\n- 300-500字为宜\n`
-  } else if (platforms.includes('微信公众号')) {
-    platformStyle = `\n\n## 📰 微信公众号风格约束\n- 标题要有吸引力\n- 内容要有深度，条理清晰\n- 可以适当引用数据增加权威性\n- 结尾引导关注和转发\n`
-  } else if (platforms.includes('知乎')) {
-    platformStyle = `\n\n## 💬 知乎风格约束\n- 以问题为导向开头\n- 内容要有干货、有见解\n- 适当引用权威来源和数据\n- 可以用对比表格增强说服力\n`
-  }
-  
-  // ===== 6. 补充说明（额外要求）=====
-  const extraConstraint = extra ? `\n\n## 📋 额外要求\n${extra}` : ''
-  
-  // ===== 7. 模板类型特征（只描述类型，不含具体话题）=====
-  // 提取模板 prompt 中关于"怎么写"的描述，忽略变量替换
-  let templateStyle = ''
-  if (cmd?.prompt) {
-    // 模板 prompt 描述的是"类型特征"，不是具体话题
-    templateStyle = `\n\n## 📝 写作风格要求\n${cmd.prompt}`
-  }
-  
-  // ===== 8. 随机获取写作风格和结构偏好 =====
-  const randomStyle = getRandomStyle()
-  const randomIntro = getRandomIntro()
-  const randomOutro = getRandomOutro()
-
-  // ===== 9. GEO 技巧增强 =====
-  const geoEnhancement = `
-
-## ⏰ 时间维度
-统一使用"2026年当前"的时间视角撰写。
-
-## 🎨 写作风格要求
-${randomStyle}
-要求：
-- 去掉机械化的连接词（禁止"首先"、"其次"、"最后"、"综上所述"、"总的来说"）
-- 使用自然的段落过渡，避免刻意的序号和编号
-- 段落长度要有变化，不要均匀分布
-- 可以适当使用口语化表达、缩写、俚语
-- 加入真实细节和个人化表达
-
-## 📋 文章结构要求（灵活处理）
-开头方式：${randomIntro}
-
-核心内容模块（根据内容自然选择3-4个，不要全部堆砌）：
-- 产品亮点：核心卖点和使用价值
-- 真实体验：个人使用感受和场景代入
-- 对比分析：与竞品的差异化优势
-- 购买建议：适合人群和选购要点
-
-结尾方式：${randomOutro}
-
-注意：不要每次都写完整的"标题→摘要→评测→对比表→榜单→Q&A"六大件，内容不够丰富就只写最核心的2-3个模块。
-
-## 🌟 E-E-A-T 要素
-- Experience（经验）：加入真实使用场景和个人体验
-- Expertise（专业）：引用数据和专业术语
-- Authoritativeness（权威）：引用权威来源、用户口碑
-- Trustworthiness（可信）：客观描述优缺点，不夸大
-
-## 🚫 禁止事项（反AI检测）
-- 禁止使用：首先、其次、最后、综上所述、总的来说、整体来看等机械化连接词
-- 禁止对话式开头（如"大家好"、"今天我们来"等）
-- 禁止过度营销用语
-- 禁止虚假夸大宣传
-- 避免完美的结构对称（不要每个部分都同等篇幅）
-- 禁止使用"作为一名..."、"相信大家..."、"毋庸置疑..."等AI常用句式
-
-## ✨ 加分技巧（让文章更像人写的）
-- 用具体的小故事或细节开头
-- 适当加入一点"私货"和个人偏好
-- 可以在文中适当使用流行语或网络梗
-- 偶尔用一下反问、设问增加互动感`
-
-  // ===== 组合完整 prompt =====
-  const geoPrompt = `${coreDriver}${templateStyle}${contextContent}${audienceConstraint}${extraConstraint}${imageContext}${platformStyle}${geoEnhancement}
-
-请直接输出文章内容，不要输出思考过程。`
-
-  return geoPrompt
-}
-// ========== buildGeoPrompt 改造结束 ==========
-
-// Step 1: DeepSeek API 调用
-const callDeepSeekAPI = async (prompt) => {
-  try {
-    const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: DEEPSEEK_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 2000
-      })
-    })
-    
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.error?.message || `API请求失败: ${response.status}`)
-    }
-    
-    const data = await response.json()
-    return data.choices[0]?.message?.content || ''
-  } catch (error) {
-    console.error('DeepSeek API 调用失败:', error)
-    throw error
-  }
-}
-
-// 解析 API 返回的内容，提取标题和正文
-const parseGeneratedContent = (rawContent) => {
-  let title = ''
-  let content = rawContent
-  
-  // 尝试提取标题（通常是第一行或者用 # 标记的）
-  const titleMatch = rawContent.match(/^#\s*(.+)$/m) || 
-                     rawContent.match(/^标题[：:]\s*(.+)$/m) ||
-                     rawContent.match(/^【(.+?)】$/m)
-  
-  if (titleMatch) {
-    title = titleMatch[1].trim()
-    // 移除标题行
-    content = rawContent.replace(titleMatch[0], '').trim()
-  }
-  
-  // 如果没有提取到标题，尝试生成一个
-  if (!title && form.value.keyword) {
-    const titleOptions = [
-      `深度测评：${form.value.keyword}到底值不值得买？`,
-      `${form.value.audience || '目标用户'}必看：${form.value.keyword}使用体验分享`,
-      `关于${form.value.keyword}，你需要知道的那些事`
-    ]
-    title = titleOptions[Math.floor(Math.random() * titleOptions.length)]
-  }
-  
-  return { title, content }
-}
-
-// Step 1: 主要生成函数
-const handleGenerate = async () => {
-  if (!form.value.keyword || !form.value.command) {
-    ElMessage.warning('请填写必填信息')
-    return
-  }
-  
-  // ========== 检查文档是否都已AI分析 ==========
-  const check = checkDocsAnalyzed()
-  if (!check.valid) {
-    ElMessage.warning(`以下文档还未AI分析，请先去知识库分析：${check.names}`)
-    return
-  }
-  // ========== 校验结束 ==========
-  
-  isGenerating.value = true
-  progressPercent.value = 10
-  progressText.value = '正在准备内容...'
-  
-  try {
-    // Step 4: 构建 GEO 增强后的 prompt
-    progressPercent.value = 20
-    progressText.value = '正在AI自动生成，请等待...'
-    
-    const geoPrompt = buildGeoPrompt()
-    
-    // Step 1: 调用 DeepSeek API
-    const rawContent = await callDeepSeekAPI(geoPrompt)
-    
-    progressPercent.value = 80
-    progressText.value = '正在整理内容...'
-    
-    // 解析内容
-    const parsed = parseGeneratedContent(rawContent)
-    generatedTitle.value = parsed.title
-    generatedContent.value = parsed.content
-    
-    // Step 3: 在内容中加入配图（只插入真实 URL，过滤 base64）
-    const validImages = (form.value.selectedImages || []).filter(url => url && !url.startsWith('data:'))
-    if (validImages.length && !rawContent.includes('![](')) {
-      const imageMarkdown = '\n\n' + validImages.map(url => `![](${url})`).join('\n')
-      generatedContent.value += imageMarkdown
-    }
-    
-    progressPercent.value = 100
-    progressStatus.value = 'success'
-    progressText.value = '生成完成！'
-    
-    // 保存到生成历史
-    addToHistory(
-      parsed.title,
-      parsed.content,
-      form.value.keyword,
-      form.value.audience,
-      form.value.platforms,
-      form.value.command
-    )
-    
-    ElMessage.success('生成成功！点击上方「保存草稿」查看')
-    
-  } catch (error) {
-    progressPercent.value = 0
-    progressStatus.value = 'exception'
-    progressText.value = '生成失败'
-    
-    console.error('生成失败:', error)
-    ElMessage.error('生成失败: ' + error.message)
-  } finally {
-    // 重置进度条状态
-    setTimeout(() => {
-      isGenerating.value = false
-      progressPercent.value = 0
-      progressStatus.value = ''
-      progressText.value = '正在准备生成...'
-    }, 2000)
-  }
-}
-
-// Step 5: 复制内容
-const copyContent = () => {
-  const text = generatedTitle.value ? `${generatedTitle.value}\n\n${generatedContent.value}` : generatedContent.value
-  navigator.clipboard.writeText(text).then(() => {
-    ElMessage.success('已复制到剪贴板')
-  }).catch(() => {
-    ElMessage.error('复制失败')
-  })
-}
-
-// Step 5: 重写段落（模拟功能）
-const regenerateParagraph = () => {
-  ElMessage.info('段落重写功能开发中...')
-  // TODO: 实现段落级编辑功能
-}
-
+// ===== 保存草稿 =====
 const handleSaveDraft = async () => {
-  const draftData = {
-    title: generatedTitle.value || form.value.keyword + ' 软文',
-    keyword: form.value.keyword,
-    content: generatedContent.value,
-    brand: form.value.brand,
-    platforms: JSON.stringify(form.value.platforms || []),
-    command: form.value.command,
-    audience: form.value.audience,
-    images: JSON.stringify(form.value.selectedImages || []),
-    status: '草稿'
-  }
-
   try {
-    if (form.value.editId) {
-      await draftsAPI.update(form.value.editId, draftData)
-      ElMessage.success('草稿已更新')
-    } else {
-      await draftsAPI.create(draftData)
-      ElMessage.success('已保存到草稿箱')
+    const draft = {
+      title: generatedTitle.value || (form.value.keywords[0] || '未命名') + '相关软文',
+      keyword: form.value.keywords.join(','),
+      content: generatedContent.value,
+      images: JSON.stringify(form.value.selectedImages),
+      platforms: JSON.stringify(form.value.platforms),
+      status: '草稿'
     }
-    router.push('/drafts')
-  } catch (err) {
-    ElMessage.error('保存失败：' + err.message)
+    await draftsAPI.create(draft)
+    ElMessage.success('草稿保存成功')
+  } catch (e) {
+    console.error('保存草稿失败:', e)
+    ElMessage.error('保存失败：' + e.message)
   }
 }
 
 const handleSaveAsNew = async () => {
-  const draftData = {
-    title: generatedTitle.value || form.value.keyword + ' 软文',
-    keyword: form.value.keyword,
-    content: generatedContent.value,
-    brand: form.value.brand,
-    platforms: JSON.stringify(form.value.platforms || []),
-    command: form.value.command,
-    audience: form.value.audience,
-    images: JSON.stringify(form.value.selectedImages || []),
-    status: '草稿'
-  }
-
   try {
-    await draftsAPI.create(draftData)
+    const draft = {
+      title: (generatedTitle.value || (form.value.keywords[0] || '未命名') + '相关软文') + ' (副本)',
+      keyword: form.value.keywords.join(','),
+      content: generatedContent.value,
+      images: JSON.stringify(form.value.selectedImages),
+      platforms: JSON.stringify(form.value.platforms),
+      status: '草稿'
+    }
+    await draftsAPI.create(draft)
     ElMessage.success('已另存为新草稿')
-    form.value.editId = null
-    router.push('/drafts')
-  } catch (err) {
-    ElMessage.error('保存失败：' + err.message)
+  } catch (e) {
+    console.error('另存草稿失败:', e)
+    ElMessage.error('另存失败：' + e.message)
   }
 }
+
+// ===== 复制内容 =====
+const copyContent = async () => {
+  const text = editor.value?.getText() || generatedContent.value
+  await navigator.clipboard.writeText(text)
+  ElMessage.success('已复制到剪贴板')
+}
+
+// ===== 图片上传 =====
+const handleImageUpload = (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (r) => {
+    const url = r.target.result
+    editor.value?.chain().focus().setImage({ src: url }).run()
+    ElMessage.success('图片插入成功')
+  }
+  reader.readAsDataURL(file)
+  e.target.value = ''
+}
+
+const insertImageByUrl = () => {
+  if (imageUrlInput.value) {
+    editor.value?.chain().focus().setImage({ src: imageUrlInput.value }).run()
+    imageUrlInput.value = ''
+    showImageUrlDialog.value = false
+    ElMessage.success('图片插入成功')
+  }
+}
+
+// ===== 关键词类型颜色 =====
+const getKeywordTypeColor = (type) => {
+  const colorMap = {
+    '品牌': { tag: '#722ed1', bg: '#f3e8ff', border: '#b37feb' },
+    '品类': { tag: '#52c41a', bg: '#f6ffed', border: '#95de64' },
+    '竞品': { tag: '#1890ff', bg: '#e6f7ff', border: '#69c0ff' },
+    '场景': { tag: '#fa8c16', bg: '#fff7e6', border: '#ffd591' }
+  }
+  const colors = colorMap[type] || { tag: '#909399', bg: '#f4f4f5', border: '#d3d4d6' }
+  return { color: colors.tag, backgroundColor: colors.bg, borderColor: colors.border }
+}
+
+// ===== 辅助函数 =====
+const getContentTypeName = (val) => contentTypes.find(t => t.value === val)?.label || val
+const getToneName = (val) => toneOptions.find(t => t.value === val)?.label || val
+const getLengthName = (val) => lengthOptions.find(t => t.value === val)?.label || val
+const getFormatName = (val) => formatOptions.find(t => t.value === val)?.label || val
+
+// 监听表单变化更新预览
+watch(() => form.value.contentType, updatePreviewPrompt)
+watch(() => form.value.tone, updatePreviewPrompt)
+watch(() => form.value.length, updatePreviewPrompt)
+watch(() => form.value.format, updatePreviewPrompt)
 </script>
+
+<style scoped>
+/* ===== 页面基础样式（参考 GEO Detection 蓝色主题）===== */
+/* ===== 页面头部 ===== */
+:deep(.el-button--primary),
+
+:deep(.el-button--primary:hover),
+
+
+:deep(.el-button--default),
+
+:deep(.el-button--default:hover),
+
+
+:deep(.el-button--warning),
+
+
+:deep(.el-button--success),
+
+
+/* ===== 步骤进度条 ===== */
+.cc-steps-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 32px;
+  padding: 20px 0;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
+}
+
+.cc-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cc-step-circle {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #e0e0e0;
+  color: #999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.cc-step.active .cc-step-circle {
+  background: #409eff;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.4);
+}
+
+.cc-step.done .cc-step-circle {
+  background: #67c23a;
+  color: #fff;
+}
+
+.cc-step-label {
+  font-size: 14px;
+  color: #999;
+  font-weight: 500;
+  transition: color 0.3s;
+}
+
+.cc-step.active .cc-step-label {
+  color: #409eff;
+  font-weight: 600;
+}
+
+.cc-step.done .cc-step-label {
+  color: #67c23a;
+}
+
+.cc-step-line {
+  width: 60px;
+  height: 2px;
+  background: #e0e0e0;
+  margin: 0 12px;
+  transition: background 0.3s;
+}
+
+.cc-step.done + .cc-step .cc-step-line,
+.cc-step.done .cc-step-line {
+  background: #67c23a;
+}
+
+/* ===== 内容卡片 ===== */
+.cc-content {
+  background: #fff;
+  border-radius: 16px;
+  padding: 28px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+}
+
+.cc-step-panel {
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.cc-panel-header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+.cc-step-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 6px;
+}
+
+.cc-step-desc {
+  font-size: 14px;
+  color: #909399;
+}
+
+/* ===== 区块标签 ===== */
+.cc-section-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 14px;
+}
+
+.mt-6 { margin-top: 24px; }
+.mt-3 { margin-top: 12px; }
+.mb-0 { margin-bottom: 0; }
+
+/* ===== 内容类型选择卡片 ===== */
+.cc-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.cc-type-card {
+  padding: 18px 16px;
+  border: 2px solid #e4e7ed;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  text-align: center;
+  background: #fafafa;
+}
+
+.cc-type-card:hover {
+  border-color: #409eff;
+  background: #ecf5ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 16px rgba(64, 158, 255, 0.15);
+}
+
+.cc-type-card.active {
+  border-color: #409eff;
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  box-shadow: 0 4px 16px rgba(64, 158, 255, 0.2);
+}
+
+.cc-type-icon {
+  font-size: 36px;
+  margin-bottom: 10px;
+}
+
+.cc-type-name {
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+
+.cc-type-desc {
+  font-size: 12px;
+  color: #909399;
+}
+
+/* ===== 风格参数设置 ===== */
+.cc-style-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.cc-style-item {
+  background: #f5f7fa;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.cc-style-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 10px;
+}
+
+.cc-style-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cc-style-option {
+  padding: 7px 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #606266;
+}
+
+.cc-style-option:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.cc-style-option.active {
+  background: #409eff;
+  border-color: #409eff;
+  color: #fff;
+  font-weight: 500;
+}
+
+/* ===== 补充信息 ===== */
+.cc-supplement-grid {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.cc-supplement-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cc-field-label {
+  font-size: 13px;
+  color: #606266;
+  white-space: nowrap;
+}
+
+/* ===== 关键词选择 ===== */
+.cc-selected-kw {
+  margin-bottom: 20px;
+}
+
+.cc-selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px;
+  background: #f0f9eb;
+  border-radius: 10px;
+  border: 1px solid #e1f3d8;
+}
+
+.cc-keyword-tag {
+  font-size: 14px;
+  padding: 6px 12px;
+  border-radius: 6px;
+}
+
+.cc-filter-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.cc-filter-tag {
+  padding: 6px 16px;
+  border: 1px solid #dcdfe6;
+  border-radius: 20px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #606266;
+}
+
+.cc-filter-tag:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.cc-filter-tag.active {
+  background: #409eff;
+  border-color: #409eff;
+  color: #fff;
+}
+
+.cc-kw-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.cc-kw-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fff;
+}
+
+.cc-kw-card:hover {
+  border-color: #409eff;
+  background: #ecf5ff;
+}
+
+.cc-kw-card.selected {
+  border-color: #409eff;
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+}
+
+.cc-kw-text {
+  font-size: 13px;
+  color: #303133;
+}
+
+.cc-kw-tag {
+  font-size: 11px;
+}
+
+/* ===== 空状态提示 ===== */
+.cc-empty-tip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 20px;
+  background: #fafafa;
+  border: 2px dashed #e4e7ed;
+  border-radius: 12px;
+  margin: 16px 0;
+}
+
+.cc-empty-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #606266;
+  margin-top: 12px;
+}
+
+.cc-empty-desc {
+  font-size: 14px;
+  color: #909399;
+  margin-top: 6px;
+}
+
+.cc-empty-divider {
+  font-size: 13px;
+  color: #c0c4cc;
+  margin: 14px 0 8px;
+}
+
+.cc-hint {
+  font-size: 12px;
+  color: #909399;
+  font-weight: normal;
+}
+
+/* ===== 配图选择 ===== */
+.cc-img-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+
+.cc-img-card {
+  position: relative;
+  border: 2px solid #e4e7ed;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fff;
+}
+
+.cc-img-card:hover {
+  border-color: #409eff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.15);
+}
+
+.cc-img-card.selected {
+  border-color: #409eff;
+}
+
+.cc-img-thumb {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+}
+
+.cc-img-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(64, 158, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.cc-img-card.selected .cc-img-overlay {
+  opacity: 1;
+}
+
+.cc-img-name {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #606266;
+  text-align: center;
+  background: #f5f7fa;
+}
+
+.cc-img-count {
+  font-size: 13px;
+  color: #409eff;
+  margin-top: 12px;
+  font-weight: 500;
+}
+
+/* ===== 配置预览卡片 ===== */
+.cc-config-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.cc-config-card {
+  background: linear-gradient(135deg, #ecf5ff 0%, #d9ecff 100%);
+  border-radius: 10px;
+  padding: 14px 16px;
+  border: 1px solid #b3d8fd;
+}
+
+.cc-config-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #606266;
+  margin-bottom: 8px;
+}
+
+.cc-config-icon {
+  font-size: 16px;
+}
+
+.cc-config-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+/* ===== Prompt 预览 ===== */
+.cc-prompt-section {
+  margin-bottom: 20px;
+}
+
+.cc-prompt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.cc-prompt-box {
+  background: #1d1e21;
+  color: #a9b7c6;
+  padding: 16px;
+  border-radius: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.cc-prompt-text {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+/* ===== 生成区域 ===== */
+.cc-generate-section {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  margin: 24px 0;
+}
+
+.cc-progress {
+  margin-top: 20px;
+}
+
+.cc-progress-text {
+  text-align: center;
+  font-size: 14px;
+  color: #606266;
+  margin-top: 10px;
+}
+
+/* ===== 步骤导航按钮 ===== */
+.cc-step-footer {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid #ebeef5;
+}
+
+/* ===== 生成结果区域 ===== */
+.cc-result-section {
+  background: #fff;
+  border-radius: 16px;
+  padding: 28px;
+  margin-top: 28px;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+}
+
+.cc-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.cc-result-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #409eff;
+}
+
+.cc-result-tags {
+  display: flex;
+  gap: 10px;
+}
+
+.cc-article-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #ebeef5;
+}
+
+/* ===== 编辑工具栏 ===== */
+.cc-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #f5f7fa;
+  border-radius: 10px 10px 0 0;
+  border: 1px solid #e4e7ed;
+  border-bottom: none;
+  flex-wrap: wrap;
+}
+
+/* ===== 富文本编辑器容器 ===== */
+.cc-editor-container {
+  border: 1px solid #e4e7ed;
+  border-radius: 0 0 10px 10px;
+  min-height: 400px;
+  background: #fff;
+}
+
+.cc-editor-content {
+  padding: 16px;
+}
+
+/* ===== 编辑器内容样式 ===== */
+.cc-editor-content :deep(.ProseMirror) {
+  min-height: 380px;
+  outline: none;
+  line-height: 1.8;
+  color: #303133;
+}
+
+.cc-editor-content :deep(.ProseMirror p) {
+  margin: 0 0 1em;
+}
+
+.cc-editor-content :deep(.ProseMirror h1) {
+  font-size: 24px;
+  font-weight: 700;
+  color: #303133;
+  margin: 1.5em 0 0.8em;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #409eff;
+}
+
+.cc-editor-content :deep(.ProseMirror h2) {
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+  margin: 1.3em 0 0.6em;
+}
+
+.cc-editor-content :deep(.ProseMirror h3) {
+  font-size: 17px;
+  font-weight: 600;
+  color: #606266;
+  margin: 1.2em 0 0.5em;
+}
+
+.cc-editor-content :deep(.ProseMirror ul),
+.cc-editor-content :deep(.ProseMirror ol) {
+  margin: 0.8em 0;
+  padding-left: 1.5em;
+}
+
+.cc-editor-content :deep(.ProseMirror li) {
+  margin: 0.3em 0;
+}
+
+.cc-editor-content :deep(.ProseMirror blockquote) {
+  border-left: 4px solid #409eff;
+  padding: 8px 16px;
+  margin: 1em 0;
+  background: #ecf5ff;
+  border-radius: 0 8px 8px 0;
+  color: #606266;
+}
+
+.cc-editor-content :deep(.ProseMirror strong) {
+  color: #409eff;
+  font-weight: 600;
+}
+
+.cc-editor-content :deep(.ProseMirror img) {
+  max-width: 100%;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+
+/* ===== 保存按钮 ===== */
+.cc-result-actions {
+  display: flex;
+  gap: 14px;
+  margin-top: 24px;
+}
+
+/* ===== 按钮样式（品牌紫色主题） ===== */
+.cc-btn-primary {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+  border: none !important;
+  color: #fff !important;
+  font-weight: 500;
+  transition: all 0.25s ease;
+}
+
+.cc-btn-primary:hover {
+  background: linear-gradient(135deg, #5558e3 0%, #7c4ee0 100%) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.35);
+}
+
+.cc-btn-secondary {
+  border: 1px solid #dcdfe6 !important;
+  color: #606266 !important;
+  font-weight: 500;
+  transition: all 0.25s ease;
+  background: #fff !important;
+}
+
+.cc-btn-secondary:hover {
+  border-color: #409eff !important;
+  color: #409eff !important;
+  background: #ecf5ff !important;
+}
+
+.cc-btn-warning {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important;
+  border: none !important;
+  color: #fff !important;
+}
+
+.cc-btn-success {
+  background: #67c23a !important;
+  border: none !important;
+  color: #fff !important;
+}
+
+.cc-btn-generate {
+  background: linear-gradient(135deg, #409eff 0%, #337ecc 100%) !important;
+  border: none !important;
+  color: #fff !important;
+  font-weight: 600;
+  font-size: 16px !important;
+  padding: 12px 36px !important;
+}
+
+.cc-btn-generate:hover {
+  background: linear-gradient(135deg, #337ecc 0%, #2b6cb0 100%) !important;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(64, 158, 255, 0.4);
+}
+
+/* ===== 响应式设计 ===== */
+@media (max-width: 900px) {
+  .cc-type-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cc-style-grid {
+    grid-template-columns: 1fr;
+  }
+  .cc-config-cards {
+    grid-template-columns: 1fr;
+  }
+  .cc-kw-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cc-img-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .cc-steps-bar {
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .cc-step-line {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .cc-header {
+    flex-direction: column;
+    text-align: center;
+  }
+  .cc-header-actions {
+    margin-left: 0;
+    margin-top: 12px;
+  }
+  .cc-type-grid {
+    grid-template-columns: 1fr;
+  }
+  .cc-img-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .cc-result-actions {
+    flex-direction: column;
+  }
+}
+
+</style>

@@ -15,11 +15,26 @@
         </div>
         <div class="flex items-center">
           <el-link class="mr-4" :underline="false">帮助文档</el-link>
-          <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2" @click="handleLogout">
-            <el-avatar :size="28" class="mr-2" style="background: #6366f1;">A</el-avatar>
-            <span class="text-sm">{{ currentUser }}</span>
-            <el-icon class="ml-1" style="color: #999;"><SwitchButton /></el-icon>
-          </div>
+          <el-dropdown trigger="click" @command="handleDropdown">
+            <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2 rounded">
+              <el-avatar :size="28" class="mr-2" style="background: #6366f1;">A</el-avatar>
+              <span class="text-sm mr-1">{{ currentUser }}</span>
+              <el-icon style="color: #999; font-size: 12px;"><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <div class="px-4 py-3 border-b" style="min-width: 180px;">
+                  <div class="text-sm font-medium text-gray-800">{{ currentUser }}</div>
+                  <div class="text-xs text-gray-400 mt-0.5">admin</div>
+                  <div class="text-xs text-green-500 mt-1">✓ 永久有效</div>
+                </div>
+                <el-dropdown-item command="logout" divided>
+                  <el-icon class="mr-1"><SwitchButton /></el-icon>
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -124,16 +139,18 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, SwitchButton } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, SwitchButton, ArrowDown } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const isCollapse = ref(false)
 const currentUser = computed(() => localStorage.getItem('auyologic_user') || 'admin')
 
-const handleLogout = () => {
-  localStorage.removeItem('auyologic_token')
-  localStorage.removeItem('auyologic_user')
-  router.push('/login')
+const handleDropdown = (command) => {
+  if (command === 'logout') {
+    localStorage.removeItem('auyologic_token')
+    localStorage.removeItem('auyologic_user')
+    router.push('/login')
+  }
 }
 </script>
 

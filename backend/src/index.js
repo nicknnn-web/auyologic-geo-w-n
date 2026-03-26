@@ -37,27 +37,12 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 const hashPassword = (pwd) => crypto.createHash('sha256').update(pwd).digest('hex');
 const verifyPassword = (pwd, hash) => hashPassword(pwd) === hash;
 
-// 单用户模式：固定 user_id = 1
-const DEFAULT_USER_ID = 1;
+// 单用户模式：固定 user_id = 'default_user'
+const DEFAULT_USER_ID = 'default_user';
 
-// ========== 认证 ==========
+// ========== 认证（单用户模式：无需注册） ==========
 app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { username, email, password, deepseek_api_key } = req.body;
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: '缺少必填字段' });
-    }
-    const password_hash = hashPassword(password);
-    const result = await pool.query(
-      `INSERT INTO users (username, email, password_hash, deepseek_api_key)
-       VALUES ($1, $2, $3, $4) RETURNING id, username, email, created_at`,
-      [username, email, password_hash, deepseek_api_key || null]
-    );
-    res.json({ success: true, user: result.rows[0] });
-  } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: '用户名或邮箱已存在' });
-    res.status(500).json({ error: err.message });
-  }
+  res.status(403).json({ error: '单用户模式，无需注册。请使用 admin 账号登录。' });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -83,24 +68,31 @@ app.post('/api/auth/login', async (req, res) => {
 // ========== 用户设置 ==========
 app.get('/api/settings', async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, created_at FROM users WHERE id = $1', [DEFAULT_USER_ID]);
-    if (result.rows.length === 0) return res.status(404).json({ error: '用户不存在' });
+    const result = await pool.query('SELECT * FROM user_settings WHERE user_id = $1', [DEFAULT_USER_ID]);
+    if (result.rows.length === 0) {
+      // 首次访问，创建一条记录
+      const insert = await pool.query(
+        'INSERT INTO user_settings (user_id) VALUES ($1) RETURNING *',
+        [DEFAULT_USER_ID]
+      );
+      return res.json(insert.rows[0]);
+    }
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/settings', async (req, res) => {
   try {
-    const { username, deepseek_api_key, doubao_api_key, kimi_api_key } = req.body;
+    const { deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model } = req.body;
     const result = await pool.query(
-      `UPDATE users SET
-        username = COALESCE($1, username),
-        deepseek_api_key = COALESCE($2, deepseek_api_key),
-        doubao_api_key = COALESCE($3, doubao_api_key),
-        kimi_api_key = COALESCE($4, kimi_api_key),
+      `UPDATE user_settings SET
+        deepseek_api_key = COALESCE($1, deepseek_api_key),
+        doubao_api_key = COALESCE($2, doubao_api_key),
+        kimi_api_key = COALESCE($3, kimi_api_key),
+        default_ai_model = COALESCE($4, default_ai_model),
         updated_at = NOW()
-       WHERE id = $5 RETURNING id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key`,
-      [username || null, deepseek_api_key || null, doubao_api_key || null, kimi_api_key || null, DEFAULT_USER_ID]
+       WHERE user_id = $5 RETURNING *`,
+      [deepseek_api_key || null, doubao_api_key || null, kimi_api_key || null, default_ai_model || null, DEFAULT_USER_ID]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -109,16 +101,17 @@ app.put('/api/settings', async (req, res) => {
 // ========== 通用 CRUD（所有业务表） ==========
 const crudRoutes = [
   { path: '/api/keywords',         table: 'keywords' },
-  { path: '/api/questions',        table: 'expanded_questions' },
-  { path: '/api/documents',        table: 'documents' },
+  { path: '/api/questions',        table: 'questions' },
+  { path: '/api/documents',        table: 'knowledge' },
   { path: '/api/images',           table: 'images' },
   { path: '/api/instruction-templates', table: 'commands' },
   { path: '/api/drafts',           table: 'content_drafts' },
-  { path: '/api/accounts',         table: 'accounts' },
-  { path: '/api/delivery-tasks',  table: 'delivery_tasks' },
-  { path: '/api/publish-records', table: 'publish_records' },
-  { path: '/api/geo-tasks',       table: 'geo_detection_tasks' },
-  { path: '/api/website-tasks',    table: 'website_optimization_tasks' },
+  { path: '/api/accounts',         table: 'media_accounts' },
+  { path: '/api/delivery-tasks',  table: 'publish_tasks' },
+  { path: '/api/publish-records',  table: 'publish_records' },
+  { path: '/api/geo-tasks',       table: 'geo_detection' },
+  { path: '/api/geo-reports',     table: 'geo_reports' },
+  { path: '/api/website-tasks',    table: 'website_optimization' },
 ];
 
 crudRoutes.forEach(({ path: routePath, table }) => {
@@ -196,11 +189,13 @@ app.post('/api/documents/upload', upload.single('file'), async (req, res) => {
 // ========== AI 功能 ==========
 app.post('/api/ai/generate', async (req, res) => {
   try {
-    const { prompt, type } = req.body;
-    const user = await pool.query('SELECT * FROM users WHERE id = $1', [DEFAULT_USER_ID]);
+    const { prompt, type, contentType, tone, length, format, keywords, platforms, audience } = req.body;
+    const user = await pool.query('SELECT * FROM user_settings WHERE user_id = $1', [DEFAULT_USER_ID]);
     const apiKey = user.rows[0]?.deepseek_api_key || process.env.DEFAULT_DEEPSEEK_API_KEY;
     if (!apiKey) return res.status(400).json({ error: '请先在设置中配置 DeepSeek API Key' });
-    const result = await generateContent(prompt, apiKey);
+    // 将结构化参数传给生成器
+    const options = { contentType, tone, length, format, keywords: keywords || [], platforms: platforms || [], audience: audience || '' };
+    const result = await generateContent(prompt, apiKey, options);
     res.json({ content: result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -208,7 +203,7 @@ app.post('/api/ai/generate', async (req, res) => {
 app.post('/api/ai/questions', async (req, res) => {
   try {
     const { keyword, platforms } = req.body;
-    const user = await pool.query('SELECT * FROM users WHERE id = $1', [DEFAULT_USER_ID]);
+    const user = await pool.query('SELECT * FROM user_settings WHERE user_id = $1', [DEFAULT_USER_ID]);
     const apiKey = user.rows[0]?.deepseek_api_key || process.env.DEFAULT_DEEPSEEK_API_KEY;
     if (!apiKey) return res.status(400).json({ error: '请先配置 DeepSeek API Key' });
     const result = await generateContent(`针对关键词"${keyword}"，在${platforms || '知乎/小红书/微信公众号'}平台，生成用户常问的问题列表，返回JSON数组格式：[{question: "...", platform: "...", type: "..."}]，只需返回JSON数组`, apiKey);
