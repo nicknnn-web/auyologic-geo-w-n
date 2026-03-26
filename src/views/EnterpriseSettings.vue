@@ -9,7 +9,7 @@
           <span class="breadcrumb-current">企业信息</span>
         </div>
         <h1 class="settings-title">企业信息</h1>
-        <p class="settings-subtitle">完善企业基本信息，AI创作时将自动参考这些内容</p>
+        <p class="settings-subtitle">完善您的企业基本信息，AI创作时将自动参考这些内容</p>
       </div>
       <div class="settings-header-right">
         <div class="save-indicator" :class="saveState">
