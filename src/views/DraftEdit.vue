@@ -23,8 +23,14 @@
       </div>
     </div>
 
+    <!-- 加载状态 -->
+    <div v-if="loading" class="flex items-center justify-center py-20">
+      <el-spin size="large" />
+      <span class="ml-4 text-gray-500">加载中...</span>
+    </div>
+
     <!-- 编辑器 -->
-    <div v-if="draft" class="editor-wrapper">
+    <div v-else-if="draft" class="editor-wrapper">
       <!-- 标题输入 -->
       <el-input
         v-model="editTitle"
@@ -100,6 +106,7 @@ const draft = ref(null)
 const editTitle = ref('')
 const keywords = ref([])
 const saving = ref(false)
+const loading = ref(true)
 
 // 编辑器
 const editor = useEditor({
@@ -116,9 +123,16 @@ onMounted(async () => {
   const draftId = route.params.id || route.query.id
   if (draftId) {
     try {
-      const data = await draftsAPI.get(draftId)
+      // 添加超时处理
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('请求超时')), 10000)
+      )
+      const dataPromise = draftsAPI.get(draftId)
+      
+      const data = await Promise.race([dataPromise, timeoutPromise])
       draft.value = data
       editTitle.value = data.title || ''
+      loading.value = false
       
       // 解析关键词
       if (data.keyword) {
@@ -128,7 +142,28 @@ onMounted(async () => {
       // 设置编辑器内容
       editor.value?.commands.setContent(data.content || '')
     } catch (e) {
+      console.error('加载草稿失败:', e)
       ElMessage.error('加载草稿失败：' + e.message)
+      loading.value = false
+      // 超时或失败时尝试从 sessionStorage 读取
+      const stored = sessionStorage.getItem('editDraft')
+      if (stored) {
+        try {
+          const data = JSON.parse(stored)
+          draft.value = data
+          editTitle.value = data.title || ''
+          if (data.form?.keywords) {
+            keywords.value = Array.isArray(data.form.keywords) ? data.form.keywords : [data.form.keywords]
+          }
+          editor.value?.commands.setContent(data.content || '')
+          sessionStorage.removeItem('editDraft')
+          ElMessage.success('从缓存加载成功')
+        } catch {
+          router.back()
+        }
+      } else {
+        router.back()
+      }
     }
   } else {
     // 从 sessionStorage 读取
@@ -137,6 +172,7 @@ onMounted(async () => {
       const data = JSON.parse(stored)
       draft.value = data
       editTitle.value = data.title || ''
+      loading.value = false
       
       if (data.form?.keywords) {
         keywords.value = Array.isArray(data.form.keywords) ? data.form.keywords : [data.form.keywords]
@@ -146,6 +182,7 @@ onMounted(async () => {
       sessionStorage.removeItem('editDraft')
     } else {
       ElMessage.error('未找到草稿')
+      loading.value = false
       router.back()
     }
   }
