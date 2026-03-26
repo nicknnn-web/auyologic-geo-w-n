@@ -2,7 +2,7 @@
   <div class="bg-white rounded-md p-5" style="min-height: calc(100vh - 86px);">
     <div class="flex items-center mb-4">
       <div>
-        <div class="text-lg font-bold">AI 软文创作</div>
+        <div class="text-lg font-bold">AI 文章创作</div>
         <div class="text-sm text-gray-500">智能生成品牌营销文章</div>
       </div>
       <div class="ml-auto">
