@@ -86,6 +86,10 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+
 // P3: 创作类型常量
 const PROMPT_TYPES = [
   { label: '文章创作', value: '文章创作' },
@@ -121,19 +125,36 @@ const getTypeColor = (type) => {
 }
 
 // 加载数据
-const loadData = () => {
-  tableData.value = getList('commands')
-  
-  // 如果没有指令，添加示例模板
-  if (tableData.value.length === 0) {
-    const defaultCommands = [
-      {
-        name: '产品测评软文',
-        type: '文章创作',
-        desc: '专业产品测评文章',
-        prompt: `请为品牌 {brand} 撰写一篇关于 {keyword} 的产品测评软文。
+const loadData = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/instruction-templates`)
+    if (res.ok) {
+      const data = await res.json()
+      tableData.value = data
+      saveList('commands', data)
+      if (data.length === 0) {
+        initDefaultCommands()
+        tableData.value = getList('commands')
+      }
+    } else {
+      tableData.value = getList('commands')
+      if (tableData.value.length === 0) initDefaultCommands()
+    }
+  } catch {
+    tableData.value = getList('commands')
+    if (tableData.value.length === 0) initDefaultCommands()
+  }
+}
 
-目标受众：{audience}
+const initDefaultCommands = () => {
+  const defaultCommands = [
+    {
+      name: '产品软文模板',
+      type: '产品创作',
+      desc: '专业产品评测类文章',
+      prompt: `请为品牌 {brand} 撰写一篇关于 {keyword} 的产品评测类文章。
+
+目标人群：{audience}
 投放平台：{platforms}
 补充说明：{extra}
 
@@ -142,40 +163,40 @@ const loadData = () => {
 参考知识:
 {knowledge}
 
-要求:
-1. 结构：开篇引入→产品介绍→核心评测→使用体验→总结推荐
-2. 风格：专业严谨但亲切易懂
-3. 字数：800-1500字
-4. 突出产品优势和差异化卖点
-5. 适合在{platforms}发布`
-      },
-      {
-        name: '品牌故事软文',
-        type: '文章创作',
-        desc: '品牌背后故事文章',
-        prompt: `请为品牌 {brand} 撰写一篇关于 {keyword} 的品牌故事软文。
+要求：
+1. 结构完整，包含产品功能、优势、用户体验、使用建议等板块。
+2. 语言专业但不晦涩，代入感强，能引发读者共鸣。
+3. 字数约800-1500字。
+4. 突出产品亮点和差异化优势。
+5. 适合{platforms}平台发布。`
+    },
+    {
+      name: '品牌故事模板',
+      type: '产品创作',
+      desc: '品牌背景与情怀打造',
+      prompt: `请为品牌 {brand} 撰写一篇关于 {keyword} 品牌故事类文章。
 
-目标受众：{audience}
+目标人群：{audience}
 投放平台：{platforms}
 补充说明：{extra}
 
 品牌/产品背景：
 {knowledge}
 
-要求:
-1. 结构：背景→创始故事→发展历程→核心价值观→未来展望
-2. 风格：温情、有深度、能引发共鸣
-3. 字数：1000-2000字
-4. 突出品牌情怀和价值主张
-5. 适合在{platforms}发布`
-      },
-      {
-        name: '亲身体验分享',
-        type: '社交媒体',
-        desc: '第一人称体验笔记',
-        prompt: `请以第一人称视角，为品牌 {brand} 撰写一篇关于 {keyword} 的亲身体验分享。
+要求：
+1. 结构：创始人故事→品牌理念→产品优势→未来展望。
+2. 情感真实、语言自然、有代入感。
+3. 字数约1000-2000字。
+4. 突出品牌调性和价值观认同。
+5. 适合{platforms}平台发布。`
+    },
+    {
+      name: '种草推荐模板',
+      type: '种草推荐',
+      desc: '以第一人称真实体验分享',
+      prompt: `以第一人称视角，为品牌 {brand} 撰写一篇关于 {keyword} 的种草推荐文章。
 
-目标受众：{audience}
+目标人群：{audience}
 投放平台：{platforms}
 补充说明：{extra}
 
@@ -184,64 +205,59 @@ const loadData = () => {
 参考知识:
 {knowledge}
 
-要求:
-1. 结构：场景引入→使用过程→真实感受→推荐理由
-2. 风格：真实、自然、有代入感
-3. 字数：500-1000字
-4. 多用第一人称，增加可信度
-5. 适合在小红书、微博等平台发布`
-      },
-      {
-        name: '短视频脚本',
-        type: '短视频文案',
-        desc: '15-60秒短视频文案',
-        prompt: `请为品牌 {brand} 撰写一段 {keyword} 主题的短视频脚本。
+要求：
+1. 结构：真实使用场景引入→产品亮点→真实体验感受→推荐理由。
+2. 语言真实自然，有代入感。
+3. 字数约500-1000字。
+4. 适合种草风格，口碑推广为主。
+5. 适合{platforms}平台发布。`
+    },
+    {
+      name: '短视频脚本模板',
+      type: '短视频脚本',
+      desc: '15-60秒的产品视频脚本',
+      prompt: `请为品牌 {brand} 撰写一份 {keyword} 相关的短视频拍摄脚本。
 
-目标受众：{audience}
+目标人群：{audience}
 投放平台：{platforms}
 补充说明：{extra}
 
-参考内容:
+参考素材:
 {knowledge}
 
-脚本要求:
-1. 总时长：15-60秒
-2. 结构：钩子(3秒)→痛点/场景(10秒)→产品展示(20秒)→引导(7秒)
-3. 风格：活泼、接地气、有感染力
-4. 适合在{platforms}发布`
-      },
-      {
-        name: '热点蹭稿',
-        type: '社交媒体',
-        desc: '蹭热点营销文案',
-        prompt: `请结合当前热点，为品牌 {brand} 撰写一篇关于 {keyword} 的蹭热点软文。
+脚本要求：
+1. 总时长15-60秒。
+2. 结构：开场(3秒)→使用场景(10秒)→产品展示(20秒)→结尾(7秒)。
+3. 画面：或真人口播、或产品特写，有感染力。
+4. 适合{platforms}平台发布。`
+    },
+    {
+      name: '热点选题模板',
+      type: '种草推荐',
+      desc: '结合热点的营销文章',
+      prompt: `结合当前热点，为品牌 {brand} 撰写一篇关于 {keyword} 的热点营销文章。
 
-目标受众：{audience}
+目标人群：{audience}
 投放平台：{platforms}
 补充说明：{extra}
 
 参考热点背景：
 {knowledge}
 
-要求:
-1. 结构：热点引入→自然过渡→产品关联→观点输出
-2. 风格：紧跟热点、观点独特
-3. 字数：300-800字
-4. 蹭热点要自然，不能生硬
-5. 适合在{platforms}发布`
-      }
-    ]
-    
-    defaultCommands.forEach(cmd => {
-      addItem('commands', cmd)
-    })
-    tableData.value = getList('commands')
-  }
-}
+要求：
+1. 结构热点切入→自然过渡到产品→产品亮点→行动号召。
+2. 蹭热点要自然，不要生硬。
+3. 字数约300-800字。
+4. 热点要自然融入，不能生硬。
+5. 适合{platforms}平台发布。`
+    }
+  ]
 
-onMounted(() => {
-  loadData()
-})
+  defaultCommands.forEach(cmd => {
+    addItem('commands', cmd)
+  })
+  tableData.value = getList('commands')
+}
 
 const handleAdd = () => {
   form.value = { name: '', type: '', prompt: '' }
@@ -255,22 +271,46 @@ const handleEdit = (row) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (id) => {
-  tableData.value = deleteItem('commands', id)
+const handleDelete = async (id) => {
+  try {
+    await fetch(`${API_BASE_URL}/api/instruction-templates/${id}`, { method: 'DELETE' })
+  } catch { /* silent */ }
+  tableData.value = tableData.value.filter(r => r.id !== id)
   ElMessage.success('删除成功')
 }
 
-const handleSubmit = () => {
-  formRef.value.validate((valid) => {
+const handleSubmit = async () => {
+  try {
+    const valid = await formRef.value.validate().catch(() => false)
     if (!valid) return
     if (isEdit.value) {
-      tableData.value = updateItem('commands', form.value.id, form.value)
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content })
+        })
+        if (res.ok) {
+          const updated = await res.json()
+          const idx = tableData.value.findIndex(r => r.id === updated.id)
+          if (idx > -1) tableData.value[idx] = updated
+        }
+      } catch { /* silent */ }
       ElMessage.success('编辑成功')
     } else {
-      tableData.value = addItem('commands', form.value)
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content })
+        })
+        if (res.ok) {
+          tableData.value.unshift(await res.json())
+        }
+      } catch { /* silent */ }
       ElMessage.success('添加成功')
     }
     dialogVisible.value = false
-  })
+  } catch { /* silent */ }
 }
 </script>
