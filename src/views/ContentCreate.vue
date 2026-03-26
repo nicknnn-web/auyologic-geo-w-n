@@ -258,6 +258,7 @@ import { Folder, CopyDocument, Refresh, Clock } from '@element-plus/icons-vue'
 const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
 const DEEPSEEK_MODEL = 'deepseek-chat'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 
 const router = useRouter()
 const form = ref({
@@ -432,11 +433,33 @@ const selectedCommand = computed(() => {
   return commands.value.find(c => c.id === form.value.command)
 })
 
-onMounted(() => {
-  keywords.value = getList('keywords')
-  
-  // 迁移旧的 commands 数据：将 prompt 转换为纯类型标签
-  commands.value = migrateCommands(getList('commands'))
+onMounted(async () => {
+  // 从后端 API 加载关键词
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/keywords`)
+    if (res.ok) {
+      keywords.value = await res.json()
+      // 同步到 localStorage
+      saveList('keywords', keywords.value)
+    }
+  } catch {
+    // 失败则从 localStorage 读取
+    keywords.value = getList('keywords')
+  }
+
+  // 从后端 API 加载指令模板
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/instruction-templates`)
+    if (res.ok) {
+      const data = await res.json()
+      commands.value = migrateCommands(data)
+      // 同步到 localStorage
+      saveList('commands', data)
+    }
+  } catch {
+    // 失败则从 localStorage 读取
+    commands.value = migrateCommands(getList('commands'))
+  }
   
   // Step 2: 加载知识库文档
   loadKnowledgeDocs()
