@@ -13,8 +13,8 @@ pool.on('error', (err) => {
 export async function initDB() {
   const client = await pool.connect();
   try {
+    // 创建用户账户表
     await client.query(`
-      -- 用户账户表
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255) UNIQUE,
@@ -32,9 +32,11 @@ export async function initDB() {
         default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 用户设置（API密钥等）
+    // 创建用户设置表
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_settings (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255) UNIQUE,
@@ -44,23 +46,29 @@ export async function initDB() {
         default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 确保默认用户存在
+    // 插入默认用户
+    await client.query(`
       INSERT INTO users (user_id, username, deepseek_api_key, default_ai_model)
       VALUES ('default_user', '管理员', 'sk-c8769ba486ee46d799a37a4b8e747159', 'deepseek-chat')
-      ON CONFLICT (user_id) DO NOTHING;
+      ON CONFLICT (user_id) DO NOTHING
+    `);
 
-      -- 关键词
+    // 关键词表
+    await client.query(`
       CREATE TABLE IF NOT EXISTS keywords (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
         keyword VARCHAR(500),
         type VARCHAR(50) DEFAULT '品牌',
         created_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 扩展问题
+    // 扩展问题表
+    await client.query(`
       CREATE TABLE IF NOT EXISTS questions (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -69,9 +77,11 @@ export async function initDB() {
         answer TEXT,
         status VARCHAR(20) DEFAULT 'pending',
         created_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 知识库文档
+    // 知识库文档
+    await client.query(`
       CREATE TABLE IF NOT EXISTS knowledge (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -81,9 +91,11 @@ export async function initDB() {
         file_type VARCHAR(50),
         file_size INTEGER,
         created_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 企业图库
+    // 企业图库
+    await client.query(`
       CREATE TABLE IF NOT EXISTS images (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -91,18 +103,22 @@ export async function initDB() {
         image_path VARCHAR(1000),
         tags TEXT,
         created_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 创作指令模板
+    // 创作指令模板
+    await client.query(`
       CREATE TABLE IF NOT EXISTS commands (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
         name VARCHAR(200),
         content TEXT,
         created_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 草稿箱
+    // 草稿箱
+    await client.query(`
       CREATE TABLE IF NOT EXISTS drafts (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -112,9 +128,11 @@ export async function initDB() {
         status VARCHAR(20) DEFAULT 'draft',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 自媒体账号
+    // 自媒体账号
+    await client.query(`
       CREATE TABLE IF NOT EXISTS media_accounts (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -124,9 +142,11 @@ export async function initDB() {
         cookies TEXT,
         status VARCHAR(20) DEFAULT 'active',
         created_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 投放任务
+    // 投放任务
+    await client.query(`
       CREATE TABLE IF NOT EXISTS publish_tasks (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -138,9 +158,11 @@ export async function initDB() {
         result TEXT,
         created_at TIMESTAMP DEFAULT NOW(),
         published_at TIMESTAMP
-      );
+      )
+    `);
 
-      -- GEO可见度检测记录
+    // GEO可见度检测记录
+    await client.query(`
       CREATE TABLE IF NOT EXISTS geo_detection (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -150,9 +172,11 @@ export async function initDB() {
         summary TEXT,
         score INTEGER DEFAULT 0,
         checked_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- GEO检测总报告
+    // GEO检测总报告
+    await client.query(`
       CREATE TABLE IF NOT EXISTS geo_reports (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -163,9 +187,11 @@ export async function initDB() {
         missing_count INTEGER DEFAULT 0,
         platform_data JSONB,
         checked_at TIMESTAMP DEFAULT NOW()
-      );
+      )
+    `);
 
-      -- 网站优化检测
+    // 网站优化检测
+    await client.query(`
       CREATE TABLE IF NOT EXISTS website_optimization (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
@@ -177,7 +203,7 @@ export async function initDB() {
         overall_score INTEGER DEFAULT 0,
         report JSONB,
         checked_at TIMESTAMP DEFAULT NOW()
-      );
+      )
     `);
     console.log('✅ 数据库表初始化完成');
   } finally {
