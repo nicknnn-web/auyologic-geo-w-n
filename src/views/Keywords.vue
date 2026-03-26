@@ -87,6 +87,8 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+
 const router = useRouter()
 
 const tableData = ref([])
@@ -108,8 +110,17 @@ const isEdit = ref(false)
 const form = ref({ keyword: '', type: '' })
 
 // 加载数据
-const loadData = () => {
-  tableData.value = getList('keywords')
+const loadData = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/keywords`)
+    if (res.ok) {
+      tableData.value = await res.json()
+    } else {
+      tableData.value = getList('keywords')
+    }
+  } catch {
+    tableData.value = getList('keywords')
+  }
 }
 
 onMounted(() => {
@@ -126,7 +137,13 @@ const cycleType = (row) => {
   const currentIndex = typeOrder.indexOf(row.type)
   const nextIndex = (currentIndex + 1) % typeOrder.length
   row.type = typeOrder[nextIndex]
-  tableData.value = updateItem('keywords', row.id, { type: row.type })
+  try {
+    await fetch(`${API_BASE_URL}/api/keywords/${row.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: row.type })
+    })
+  } catch { /* silent */ }
   ElMessage.success('类型已更新')
 }
 
@@ -161,15 +178,22 @@ const handleEdit = (row) => {
 }
 
 const handleDelete = (id) => {
-  tableData.value = deleteItem('keywords', id)
+  try {
+    await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
+  } catch { /* silent */ }
+  tableData.value = tableData.value.filter(r => r.id !== id)
   ElMessage.success('删除成功')
 }
 
-const handleBatchDelete = () => {
+const handleBatchDelete = async () => {
   if (selectedKeywords.value.length === 0) return
-  selectedKeywords.value.forEach(row => {
-    tableData.value = deleteItem('keywords', row.id)
-  })
+  const ids = selectedKeywords.value.map(r => r.id)
+  for (const id of ids) {
+    try {
+      await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
+    } catch { /* silent */ }
+  }
+  tableData.value = tableData.value.filter(r => !ids.includes(r.id))
   ElMessage.success(`已删除 ${selectedKeywords.value.length} 条记录`)
   selectedKeywords.value = []
 }
@@ -185,10 +209,30 @@ const handleSubmit = () => {
     return
   }
   if (isEdit.value) {
-    tableData.value = updateItem('keywords', form.value.id, form.value)
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/keywords/${form.value.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
+      })
+      if (res.ok) {
+        const updated = await res.json()
+        const idx = tableData.value.findIndex(r => r.id === updated.id)
+        if (idx > -1) tableData.value[idx] = updated
+      }
+    } catch { /* silent */ }
     ElMessage.success('编辑成功')
   } else {
-    tableData.value = addItem('keywords', form.value)
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
+      })
+      if (res.ok) {
+        tableData.value.unshift(await res.json())
+      }
+    } catch { /* silent */ }
     ElMessage.success('添加成功')
   }
   dialogVisible.value = false
