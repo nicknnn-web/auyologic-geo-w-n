@@ -97,6 +97,7 @@ import { ElMessage } from 'element-plus'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { draftsAPI } from '../utils/api'
+import { addItem } from '../utils/storage'
 import { ArrowLeft, Check, Edit, Promotion } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -143,25 +144,32 @@ onMounted(async () => {
       editor.value?.commands.setContent(data.content || '')
     } catch (e) {
       console.error('加载草稿失败:', e)
-      ElMessage.error('加载草稿失败：' + e.message)
-      loading.value = false
-      // 超时或失败时尝试从 sessionStorage 读取
+      // 超时、失败或 404 时尝试从 sessionStorage 读取
       const stored = sessionStorage.getItem('editDraft')
       if (stored) {
         try {
           const data = JSON.parse(stored)
           draft.value = data
           editTitle.value = data.title || ''
+          loading.value = false
           if (data.form?.keywords) {
             keywords.value = Array.isArray(data.form.keywords) ? data.form.keywords : [data.form.keywords]
           }
+          // 支持 localStorage 中的 content（旧格式）
+          if (!data.content && data.generatedContent) {
+            data.content = data.generatedContent
+          }
           editor.value?.commands.setContent(data.content || '')
           sessionStorage.removeItem('editDraft')
-          ElMessage.success('从缓存加载成功')
+          ElMessage.success('从缓存加载成功（草稿未同步到服务器）')
         } catch {
+          ElMessage.error('加载草稿失败：' + e.message)
+          loading.value = false
           router.back()
         }
       } else {
+        ElMessage.error('加载草稿失败：' + e.message)
+        loading.value = false
         router.back()
       }
     }
@@ -198,21 +206,37 @@ const formatDate = (dateStr) => {
 }
 
 const handleSave = async () => {
-  if (!draft.value?.id) {
-    ElMessage.warning('草稿ID不存在，无法保存')
-    return
-  }
-  
   saving.value = true
   try {
-    await draftsAPI.update(draft.value.id, {
-      title: editTitle.value,
-      content: draft.value.content,
-      status: draft.value.status
-    })
-    ElMessage.success('保存成功')
+    // 如果没有 id（从缓存加载的草稿），先创建再更新
+    if (!draft.value?.id) {
+      // 创建新草稿
+      const newDraft = await draftsAPI.create({
+        title: editTitle.value,
+        content: draft.value?.content || '',
+        status: draft.value?.status || '草稿'
+      })
+      draft.value = { ...draft.value, id: newDraft.id }
+      ElMessage.success('保存成功（已创建新草稿）')
+    } else {
+      // 更新已有草稿
+      await draftsAPI.update(draft.value.id, {
+        title: editTitle.value,
+        content: draft.value.content,
+        status: draft.value.status
+      })
+      ElMessage.success('保存成功')
+    }
   } catch (e) {
-    ElMessage.error('保存失败：' + e.message)
+    console.error('保存失败:', e)
+    // 失败时保存到 localStorage
+    addItem('drafts', {
+      title: editTitle.value,
+      content: draft.value?.content || '',
+      status: '草稿',
+      createdAt: new Date().toLocaleString()
+    })
+    ElMessage.warning('服务器保存失败，已保存到本地')
   } finally {
     saving.value = false
   }
