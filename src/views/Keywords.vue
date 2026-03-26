@@ -132,7 +132,7 @@ const getTypeColor = (type) => {
   return map[type] || 'info'
 }
 
-const cycleType = (row) => {
+const cycleType = async (row) => {
   const typeOrder = ['品牌', '产品', '场景']
   const currentIndex = typeOrder.indexOf(row.type)
   const nextIndex = (currentIndex + 1) % typeOrder.length
