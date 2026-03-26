@@ -79,12 +79,17 @@ app.post('/api/auth/login', async (req, res) => {
 // ========== 用户设置 ==========
 app.get('/api/settings', async (req, res) => {
   try {
-    // 确保表有扩展字段
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(500),
-      ADD COLUMN IF NOT EXISTS website VARCHAR(500),
-      ADD COLUMN IF NOT EXISTS industry VARCHAR(200),
-      ADD COLUMN IF NOT EXISTS description TEXT,
-      ADD COLUMN IF NOT EXISTS target_audience TEXT`);
+    // 逐列添加扩展字段（PostgreSQL 不支持一条 ALT
+    const cols = [
+      ['company_name', 'VARCHAR(500)'],
+      ['website', 'VARCHAR(500)'],
+      ['industry', 'VARCHAR(200)'],
+      ['description', 'TEXT'],
+      ['target_audience', 'TEXT'],
+    ];
+    for (const [col, type] of cols) {
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
+    }
     const result = await pool.query('SELECT id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience, created_at FROM users WHERE id = $1', [DEFAULT_USER_ID]);
     if (result.rows.length === 0) return res.status(404).json({ error: '用户不存在' });
     res.json(result.rows[0]);
@@ -93,13 +98,18 @@ app.get('/api/settings', async (req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   try {
-    // 确保表有扩展字段
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(500),
-      ADD COLUMN IF NOT EXISTS website VARCHAR(500),
-      ADD COLUMN IF NOT EXISTS industry VARCHAR(200),
-      ADD COLUMN IF NOT EXISTS description TEXT,
-      ADD COLUMN IF NOT EXISTS target_audience TEXT`);
     const { username, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience } = req.body;
+    // 逐列添加扩展字段
+    const cols = [
+      ['company_name', 'VARCHAR(500)'],
+      ['website', 'VARCHAR(500)'],
+      ['industry', 'VARCHAR(200)'],
+      ['description', 'TEXT'],
+      ['target_audience', 'TEXT'],
+    ];
+    for (const [col, type] of cols) {
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
+    }
     const result = await pool.query(
       `UPDATE users SET
         username = COALESCE($1, username),
