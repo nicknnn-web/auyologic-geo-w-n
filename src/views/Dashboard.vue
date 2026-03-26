@@ -2,7 +2,7 @@
   <div class="bg-white rounded-md p-5" style="min-height: calc(100vh - 86px);">
     <div class="mb-6">
       <div class="text-2xl font-bold mb-1">数据控制台</div>
-      <div class="text-gray-400 text-sm">GEO智能营销一站式解决方案</div>
+      <div class="text-gray-400 text-sm">奥哟解决您的GEO智能营销一站式解决方案</div>
     </div>
 
     <!-- 快捷入口 -->
