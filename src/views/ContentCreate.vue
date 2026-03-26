@@ -438,8 +438,13 @@ onMounted(async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/api/keywords`)
     if (res.ok) {
-      keywords.value = await res.json()
-      // 同步到 localStorage
+      const data = await res.json()
+      keywords.value = data
+      // API 返回空但 localStorage 有数据时，合并
+      if (data.length === 0) {
+        const localKw = getList('keywords')
+        if (localKw.length > 0) keywords.value = localKw
+      }
       saveList('keywords', keywords.value)
     }
   } catch {
@@ -453,11 +458,19 @@ onMounted(async () => {
     if (res.ok) {
       const data = await res.json()
       commands.value = migrateCommands(data)
-      // 同步到 localStorage
-      saveList('commands', data)
+      // API 返回空但 localStorage 有数据时，合并（避免旧数据丢失）
+      if (data.length === 0) {
+        const localCmds = getList('commands')
+        if (localCmds.length > 0) {
+          commands.value = migrateCommands(localCmds)
+          saveList('commands', localCmds)
+        }
+      } else {
+        saveList('commands', data)
+      }
     }
   } catch {
-    // 失败则从 localStorage 读取
+    // 网络错误则从 localStorage 读取
     commands.value = migrateCommands(getList('commands'))
   }
   
