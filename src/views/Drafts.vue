@@ -82,6 +82,8 @@ marked.setOptions({
   gfm: true
 })
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+
 const router = useRouter()
 const tableData = ref([])
 const previewVisible = ref(false)
@@ -108,10 +110,28 @@ const handleBatchDelete = () => {
   ElMessage.success(`已删除 ${ids.length} 条草稿`)
 }
 
-// 加载数据（正序，最旧的在前面，新的在后面）
-const loadData = () => {
-  const data = getList('drafts')
-  tableData.value = [...data].sort((a, b) => a.id - b.id)
+// 加载数据 - 优先从后端 API，失败则 fallback 到 localStorage
+const loadData = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/drafts`, {
+      headers: { 'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user' }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      tableData.value = [...data].sort((a, b) => a.id - b.id)
+      // API 返回空但 localStorage 有数据时，合并
+      if (data.length === 0) {
+        const localData = getList('drafts')
+        if (localData.length > 0) {
+          tableData.value = [...localData].sort((a, b) => a.id - b.id)
+        }
+      }
+    } else {
+      tableData.value = getList('drafts')
+    }
+  } catch {
+    tableData.value = getList('drafts')
+  }
 }
 
 onMounted(() => {
