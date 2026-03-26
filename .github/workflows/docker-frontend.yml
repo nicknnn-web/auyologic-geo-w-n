@@ -39,4 +39,4 @@ jobs:
           context: .
           push: true
           tags: nicknnndocker/auyologic-geo-frontend:latest
-          dockerfile: Dockerfile.frontend
+          file: Dockerfile.frontend
