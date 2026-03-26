@@ -122,9 +122,31 @@ const crudRoutes = [
   { path: '/api/website-tasks',    table: 'website_optimization_tasks' },
 ];
 
+// 确保表存在（防御性：如果 initDB 漏了，每个路由第一次访问时自动创建）
+const tableSchemas = {
+  keywords: `CREATE TABLE IF NOT EXISTS keywords (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword VARCHAR(500), type VARCHAR(50) DEFAULT '品牌', created_at TIMESTAMP DEFAULT NOW())`,
+  expanded_questions: `CREATE TABLE IF NOT EXISTS expanded_questions (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword_id INTEGER, question TEXT, answer TEXT, status VARCHAR(20) DEFAULT 'pending', created_at TIMESTAMP DEFAULT NOW())`,
+  documents: `CREATE TABLE IF NOT EXISTS documents (id SERIAL PRIMARY KEY, user_id VARCHAR(255), title VARCHAR(500), content TEXT, file_path VARCHAR(1000), file_type VARCHAR(50), file_size INTEGER, created_at TIMESTAMP DEFAULT NOW())`,
+  images: `CREATE TABLE IF NOT EXISTS images (id SERIAL PRIMARY KEY, user_id VARCHAR(255), title VARCHAR(500), image_path VARCHAR(1000), tags TEXT, created_at TIMESTAMP DEFAULT NOW())`,
+  instruction_templates: `CREATE TABLE IF NOT EXISTS instruction_templates (id SERIAL PRIMARY KEY, user_id VARCHAR(255), name VARCHAR(200), content TEXT, created_at TIMESTAMP DEFAULT NOW())`,
+  content_drafts: `CREATE TABLE IF NOT EXISTS content_drafts (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword VARCHAR(500), content TEXT, platforms TEXT, status VARCHAR(20) DEFAULT 'draft', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`,
+  accounts: `CREATE TABLE IF NOT EXISTS accounts (id SERIAL PRIMARY KEY, user_id VARCHAR(255), platform VARCHAR(50), account_name VARCHAR(200), account_id VARCHAR(200), cookies TEXT, status VARCHAR(20) DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW())`,
+  delivery_tasks: `CREATE TABLE IF NOT EXISTS delivery_tasks (id SERIAL PRIMARY KEY, user_id VARCHAR(255), draft_id INTEGER, platform VARCHAR(50), account_id INTEGER, content TEXT, status VARCHAR(20) DEFAULT 'pending', result TEXT, created_at TIMESTAMP DEFAULT NOW(), published_at TIMESTAMP)`,
+  publish_records: `CREATE TABLE IF NOT EXISTS publish_records (id SERIAL PRIMARY KEY, user_id VARCHAR(255), draft_id INTEGER, platform VARCHAR(50), account_id INTEGER, content TEXT, status VARCHAR(20) DEFAULT 'published', result TEXT, published_at TIMESTAMP DEFAULT NOW())`,
+  geo_detection_tasks: `CREATE TABLE IF NOT EXISTS geo_detection_tasks (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword VARCHAR(500), platform VARCHAR(50), visible BOOLEAN DEFAULT FALSE, summary TEXT, score INTEGER DEFAULT 0, checked_at TIMESTAMP DEFAULT NOW())`,
+  website_optimization_tasks: `CREATE TABLE IF NOT EXISTS website_optimization_tasks (id SERIAL PRIMARY KEY, user_id VARCHAR(255), url VARCHAR(1000), seo_score INTEGER DEFAULT 0, ai_score INTEGER DEFAULT 0, tech_score INTEGER DEFAULT 0, content_score INTEGER DEFAULT 0, overall_score INTEGER DEFAULT 0, report JSONB, checked_at TIMESTAMP DEFAULT NOW())`,
+};
+
+const ensureTable = async (table) => {
+  if (tableSchemas[table]) {
+    await pool.query(tableSchemas[table]).catch(() => {});
+  }
+};
+
 crudRoutes.forEach(({ path: routePath, table }) => {
   app.get(routePath, async (req, res) => {
     try {
+      await ensureTable(table);
       const result = await pool.query(`SELECT * FROM ${table} WHERE user_id = $1 ORDER BY created_at DESC`, [DEFAULT_USER_ID]);
       res.json(result.rows);
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -132,6 +154,7 @@ crudRoutes.forEach(({ path: routePath, table }) => {
 
   app.get(`${routePath}/:id`, async (req, res) => {
     try {
+      await ensureTable(table);
       const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [req.params.id, DEFAULT_USER_ID]);
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
       res.json(result.rows[0]);
@@ -140,6 +163,7 @@ crudRoutes.forEach(({ path: routePath, table }) => {
 
   app.post(routePath, async (req, res) => {
     try {
+      await ensureTable(table);
       const data = { ...req.body, user_id: DEFAULT_USER_ID };
       const cols = Object.keys(data);
       const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
@@ -150,6 +174,7 @@ crudRoutes.forEach(({ path: routePath, table }) => {
 
   app.put(`${routePath}/:id`, async (req, res) => {
     try {
+      await ensureTable(table);
       const data = req.body;
       const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
       const result = await pool.query(
@@ -163,6 +188,7 @@ crudRoutes.forEach(({ path: routePath, table }) => {
 
   app.delete(`${routePath}/:id`, async (req, res) => {
     try {
+      await ensureTable(table);
       await pool.query(`DELETE FROM ${table} WHERE id = $1 AND user_id = $2`, [req.params.id, DEFAULT_USER_ID]);
       res.json({ success: true });
     } catch (err) { res.status(500).json({ error: err.message }); }
