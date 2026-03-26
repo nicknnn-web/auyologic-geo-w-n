@@ -129,6 +129,8 @@ const route = useRoute()
 const router = useRouter()
 import { getData, getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+
 const tableData = ref([])
 
 // 正序（ oldest first / newest last）+ 筛选
@@ -167,8 +169,17 @@ const selectedRows = ref([])
 const questionSortOrder = ref('') // '' | 'asc' | 'desc'
 
 // 加载数据
-const loadData = () => {
-  tableData.value = getList('questions')
+const loadData = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/questions`)
+    if (res.ok) {
+      tableData.value = await res.json()
+    } else {
+      tableData.value = getList('questions')
+    }
+  } catch {
+    tableData.value = getList('questions')
+  }
 }
 
 onMounted(() => {
