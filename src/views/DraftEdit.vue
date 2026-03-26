@@ -97,7 +97,7 @@ import { ElMessage } from 'element-plus'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { draftsAPI } from '../utils/api'
-import { addItem } from '../utils/storage'
+import { addItem, getList } from '../utils/storage'
 import { ArrowLeft, Check, Edit, Promotion } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -108,6 +108,14 @@ const editTitle = ref('')
 const keywords = ref([])
 const saving = ref(false)
 const loading = ref(true)
+
+// 从 localStorage 获取草稿
+const getDraftFromLocal = (id) => {
+  const localDrafts = getList('drafts')
+  // 支持字符串和数字 ID
+  const targetId = typeof id === 'string' ? parseInt(id, 10) : id
+  return localDrafts.find(d => d.id === targetId)
+}
 
 // 编辑器
 const editor = useEditor({
@@ -144,7 +152,27 @@ onMounted(async () => {
       editor.value?.commands.setContent(data.content || '')
     } catch (e) {
       console.error('加载草稿失败:', e)
-      // 超时、失败或 404 时尝试从 sessionStorage 读取
+      // 先尝试从 localStorage 读取草稿
+      const localDraft = getDraftFromLocal(draftId)
+      if (localDraft) {
+        draft.value = localDraft
+        editTitle.value = localDraft.title || ''
+        loading.value = false
+        if (localDraft.keyword) {
+          keywords.value = localDraft.keyword.split(',').filter(k => k.trim())
+        } else if (localDraft.form?.keywords) {
+          keywords.value = Array.isArray(localDraft.form.keywords) ? localDraft.form.keywords : [localDraft.form.keywords]
+        }
+        // 支持 localStorage 中的 content（旧格式）
+        if (!localDraft.content && localDraft.generatedContent) {
+          localDraft.content = localDraft.generatedContent
+        }
+        editor.value?.commands.setContent(localDraft.content || '')
+        ElMessage.warning('从本地缓存加载草稿（服务器无此记录）')
+        return
+      }
+      
+      // 尝试从 sessionStorage 读取
       const stored = sessionStorage.getItem('editDraft')
       if (stored) {
         try {
@@ -161,7 +189,7 @@ onMounted(async () => {
           }
           editor.value?.commands.setContent(data.content || '')
           sessionStorage.removeItem('editDraft')
-          ElMessage.success('从缓存加载成功（草稿未同步到服务器）')
+          ElMessage.warning('从会话缓存加载草稿')
         } catch {
           ElMessage.error('加载草稿失败：' + e.message)
           loading.value = false
