@@ -14,7 +14,7 @@
           </div>
         </div>
         <div class="flex items-center">
-          <el-link class="mr-4" :underline="false">帮助文档</el-link>
+          <el-link class="mr-4" underline="never">帮助文档</el-link>
           <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2">
             <el-avatar :size="28" class="mr-2">U</el-avatar>
             <span class="text-sm">用户</span>
