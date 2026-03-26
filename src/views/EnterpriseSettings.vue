@@ -277,10 +277,12 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
 import { getData, saveData, addItem } from '../utils/storage'
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 
 const form = ref({
   name: '',
@@ -301,40 +303,74 @@ const kwSearchingText = ref('')
 const kwDialogVisible = ref(false)
 const kwGroups = ref([])
 
-const loadData = () => {
-  const allData = getData()
-  if (allData['enterprise-settings']) {
-    form.value = { ...form.value, ...allData['enterprise-settings'] }
-    if (form.value.website && form.value.website.startsWith('https://')) {
-      form.value.website = form.value.website.replace('https://', '')
+const loadData = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/settings`)
+    if (res.ok) {
+      const data = await res.json()
+      form.value = {
+        name: data.company_name || '',
+        website: (data.website || '').replace('https://', ''),
+        industry: data.industry || '',
+        description: data.description || '',
+        targetAudience: data.target_audience || ''
+      }
     }
-  }
-  if (allData['enterprise-settings']?.lastSaved) {
-    lastSaved.value = new Date(allData['enterprise-settings'].lastSaved)
+  } catch {
+    // 失败则从 localStorage 读取
+    const allData = getData()
+    if (allData['enterprise-settings']) {
+      form.value = { ...form.value, ...allData['enterprise-settings'] }
+      if (form.value.website && form.value.website.startsWith('https://')) {
+        form.value.website = form.value.website.replace('https://', '')
+      }
+    }
   }
 }
 
-loadData()
+onMounted(() => loadData())
 
 const triggerAutoSave = () => {
   clearTimeout(autoSaveTimer)
-  autoSaveTimer = setTimeout(() => {
-    const allData = getData()
-    allData['enterprise-settings'] = { ...form.value, lastSaved: new Date().toISOString() }
-    saveData(allData)
-    lastSaved.value = new Date()
+  autoSaveTimer = setTimeout(async () => {
+    try {
+      await fetch(`${API_BASE_URL}/api/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_name: form.value.name,
+          website: form.value.website,
+          industry: form.value.industry,
+          description: form.value.description,
+          target_audience: form.value.targetAudience
+        })
+      })
+      lastSaved.value = new Date()
+    } catch { /* silent */ }
   }, 800)
 }
 
 const handleSave = async () => {
   saving.value = true
-  await new Promise(r => setTimeout(r, 400))
-  const allData = getData()
-  allData['enterprise-settings'] = { ...form.value, lastSaved: new Date().toISOString() }
-  saveData(allData)
-  lastSaved.value = new Date()
-  saving.value = false
-  ElMessage.success({ message: '企业信息已保存', offset: 80 })
+  try {
+    await fetch(`${API_BASE_URL}/api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company_name: form.value.name,
+        website: form.value.website,
+        industry: form.value.industry,
+        description: form.value.description,
+        target_audience: form.value.targetAudience
+      })
+    })
+    lastSaved.value = new Date()
+    ElMessage.success({ message: '企业信息已保存', offset: 80 })
+  } catch {
+    ElMessage.error('保存失败')
+  } finally {
+    saving.value = false
+  }
 }
 
 const handleReset = () => {

@@ -79,7 +79,13 @@ app.post('/api/auth/login', async (req, res) => {
 // ========== 用户设置 ==========
 app.get('/api/settings', async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, created_at FROM users WHERE id = $1', [DEFAULT_USER_ID]);
+    // 确保表有扩展字段
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS website VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS industry VARCHAR(200),
+      ADD COLUMN IF NOT EXISTS description TEXT,
+      ADD COLUMN IF NOT EXISTS target_audience TEXT`);
+    const result = await pool.query('SELECT id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience, created_at FROM users WHERE id = $1', [DEFAULT_USER_ID]);
     if (result.rows.length === 0) return res.status(404).json({ error: '用户不存在' });
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -87,16 +93,27 @@ app.get('/api/settings', async (req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   try {
-    const { username, deepseek_api_key, doubao_api_key, kimi_api_key } = req.body;
+    // 确保表有扩展字段
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS website VARCHAR(500),
+      ADD COLUMN IF NOT EXISTS industry VARCHAR(200),
+      ADD COLUMN IF NOT EXISTS description TEXT,
+      ADD COLUMN IF NOT EXISTS target_audience TEXT`);
+    const { username, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience } = req.body;
     const result = await pool.query(
       `UPDATE users SET
         username = COALESCE($1, username),
         deepseek_api_key = COALESCE($2, deepseek_api_key),
         doubao_api_key = COALESCE($3, doubao_api_key),
         kimi_api_key = COALESCE($4, kimi_api_key),
+        company_name = COALESCE($6, company_name),
+        website = COALESCE($7, website),
+        industry = COALESCE($8, industry),
+        description = COALESCE($9, description),
+        target_audience = COALESCE($10, target_audience),
         updated_at = NOW()
-       WHERE id = $5 RETURNING id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key`,
-      [username || null, deepseek_api_key || null, doubao_api_key || null, kimi_api_key || null, DEFAULT_USER_ID]
+       WHERE id = $5 RETURNING id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience`,
+      [username || null, deepseek_api_key || null, doubao_api_key || null, kimi_api_key || null, DEFAULT_USER_ID, company_name || null, website || null, industry || null, description || null, target_audience || null]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
