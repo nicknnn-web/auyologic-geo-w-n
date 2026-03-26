@@ -14,6 +14,26 @@ export async function initDB() {
   const client = await pool.connect();
   try {
     await client.query(`
+      -- 用户账户表
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) UNIQUE,
+        username VARCHAR(200),
+        email VARCHAR(200),
+        password_hash VARCHAR(255),
+        deepseek_api_key TEXT,
+        doubao_api_key TEXT,
+        kimi_api_key TEXT,
+        company_name VARCHAR(500),
+        website VARCHAR(500),
+        industry VARCHAR(200),
+        description TEXT,
+        target_audience TEXT,
+        default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
       -- 用户设置（API密钥等）
       CREATE TABLE IF NOT EXISTS user_settings (
         id SERIAL PRIMARY KEY,
@@ -25,6 +45,11 @@ export async function initDB() {
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       );
+
+      -- 确保默认用户存在
+      INSERT INTO users (user_id, username, deepseek_api_key, default_ai_model)
+      VALUES ('default_user', '管理员', 'sk-c8769ba486ee46d799a37a4b8e747159', 'deepseek-chat')
+      ON CONFLICT (user_id) DO NOTHING;
 
       -- 关键词
       CREATE TABLE IF NOT EXISTS keywords (

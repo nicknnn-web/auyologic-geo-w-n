@@ -79,17 +79,6 @@ app.post('/api/auth/login', async (req, res) => {
 // ========== 用户设置 ==========
 app.get('/api/settings', async (req, res) => {
   try {
-    // 逐列添加扩展字段（PostgreSQL 不支持一条 ALT
-    const cols = [
-      ['company_name', 'VARCHAR(500)'],
-      ['website', 'VARCHAR(500)'],
-      ['industry', 'VARCHAR(200)'],
-      ['description', 'TEXT'],
-      ['target_audience', 'TEXT'],
-    ];
-    for (const [col, type] of cols) {
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
-    }
     const result = await pool.query('SELECT id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience, created_at FROM users WHERE id = $1', [DEFAULT_USER_ID]);
     if (result.rows.length === 0) return res.status(404).json({ error: '用户不存在' });
     res.json(result.rows[0]);
@@ -99,28 +88,17 @@ app.get('/api/settings', async (req, res) => {
 app.put('/api/settings', async (req, res) => {
   try {
     const { username, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience } = req.body;
-    // 逐列添加扩展字段
-    const cols = [
-      ['company_name', 'VARCHAR(500)'],
-      ['website', 'VARCHAR(500)'],
-      ['industry', 'VARCHAR(200)'],
-      ['description', 'TEXT'],
-      ['target_audience', 'TEXT'],
-    ];
-    for (const [col, type] of cols) {
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
-    }
     const result = await pool.query(
       `UPDATE users SET
-        username = COALESCE($1, username),
-        deepseek_api_key = COALESCE($2, deepseek_api_key),
-        doubao_api_key = COALESCE($3, doubao_api_key),
-        kimi_api_key = COALESCE($4, kimi_api_key),
-        company_name = COALESCE($6, company_name),
-        website = COALESCE($7, website),
-        industry = COALESCE($8, industry),
-        description = COALESCE($9, description),
-        target_audience = COALESCE($10, target_audience),
+        username = COALESCE(NULLIF($1, ''), username),
+        deepseek_api_key = COALESCE(NULLIF($2, ''), deepseek_api_key),
+        doubao_api_key = COALESCE(NULLIF($3, ''), doubao_api_key),
+        kimi_api_key = COALESCE(NULLIF($4, ''), kimi_api_key),
+        company_name = COALESCE(NULLIF($6, ''), company_name),
+        website = COALESCE(NULLIF($7, ''), website),
+        industry = COALESCE(NULLIF($8, ''), industry),
+        description = COALESCE(NULLIF($9, ''), description),
+        target_audience = COALESCE(NULLIF($10, ''), target_audience),
         updated_at = NOW()
        WHERE id = $5 RETURNING id, username, email, deepseek_api_key, doubao_api_key, kimi_api_key, company_name, website, industry, description, target_audience`,
       [username || null, deepseek_api_key || null, doubao_api_key || null, kimi_api_key || null, DEFAULT_USER_ID, company_name || null, website || null, industry || null, description || null, target_audience || null]
