@@ -45,7 +45,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString('zh-CN') }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="150" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
