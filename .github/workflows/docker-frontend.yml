@@ -40,3 +40,4 @@ jobs:
           push: true
           tags: nicknnndocker/auyologic-geo-frontend:latest
           file: Dockerfile.frontend
+          no-cache: true
