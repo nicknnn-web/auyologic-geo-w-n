@@ -88,7 +88,6 @@ import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 
 // P3: 创作类型常量
 const PROMPT_TYPES = [
