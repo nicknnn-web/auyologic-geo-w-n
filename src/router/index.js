@@ -7,6 +7,7 @@ import Images from '../views/Images.vue'
 import Commands from '../views/Commands.vue'
 import ContentCreate from '../views/ContentCreate.vue'
 import Drafts from '../views/Drafts.vue'
+import DraftEdit from '../views/DraftEdit.vue'
 import MediaAccounts from '../views/MediaAccounts.vue'
 import PublishTasks from '../views/PublishTasks.vue'
 import PublishHistory from '../views/PublishHistory.vue'
@@ -31,6 +32,7 @@ const routes = [
   { path: '/commands', name: 'commands', component: Commands },
   { path: '/content-create', name: 'content-create', component: ContentCreate },
   { path: '/drafts', name: 'drafts', component: Drafts },
+  { path: '/drafts/:id/edit', name: 'draft-edit', component: DraftEdit, props: true },
   
   // 投放管理
   { path: '/publish-tasks', name: 'publish-tasks', component: PublishTasks },

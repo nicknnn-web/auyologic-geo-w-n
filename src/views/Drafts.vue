@@ -59,7 +59,7 @@
       </div>
       <template #footer>
         <el-button @click="previewVisible = false">关闭</el-button>
-        <el-button type="primary" @click="handleEdit(currentDraft)">编辑</el-button>
+        <el-button type="primary" @click="handleEdit(currentDraft); previewVisible = false">编辑</el-button>
         <el-button type="success" @click="handlePublish(currentDraft)">发布</el-button>
       </template>
     </el-dialog>
@@ -124,9 +124,8 @@ const handlePreview = (row) => {
 }
 
 const handleEdit = (row) => {
-  // 保存到 sessionStorage，跳转时带过去（包括 ID）
-  sessionStorage.setItem('editDraft', JSON.stringify({ ...row, isEdit: true }))
-  router.push('/content-create')
+  // 跳转到独立编辑页面
+  router.push(`/drafts/${row.id}/edit`)
 }
 
 const handlePublish = (row) => {
