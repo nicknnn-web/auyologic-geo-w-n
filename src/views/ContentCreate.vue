@@ -3,7 +3,7 @@
     <div class="flex items-center mb-4">
       <div>
         <div class="text-lg font-bold">AI 软文创作</div>
-        <div class="text-sm text-gray-500">智能生成品牌营销软文</div>
+        <div class="text-sm text-gray-500">智能生成品牌营销文章</div>
       </div>
       <div class="ml-auto">
         <el-button @click="$router.push('/drafts')">
