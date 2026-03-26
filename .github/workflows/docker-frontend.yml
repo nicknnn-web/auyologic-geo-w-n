@@ -41,7 +41,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: nicknnndocker/auyologic-geo-frontend:latest
+          tags: |
+            nicknnndocker/auyologic-geo-frontend:latest
+            nicknnndocker/auyologic-geo-frontend:20260326
           file: Dockerfile.frontend
           no-cache: true
           cache-from: ''
