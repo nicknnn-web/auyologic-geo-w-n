@@ -145,6 +145,11 @@ const loadData = async () => {
   }
 }
 
+// 页面加载时获取数据
+onMounted(() => {
+  loadData()
+})
+
 const initDefaultCommands = () => {
   const defaultCommands = [
     {

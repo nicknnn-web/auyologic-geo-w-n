@@ -116,7 +116,15 @@ const loadData = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/api/keywords`)
     if (res.ok) {
-      tableData.value = await res.json()
+      const data = await res.json()
+      tableData.value = data
+      // API 返回空但 localStorage 有数据时，合并（避免旧数据丢失）
+      if (data.length === 0) {
+        const localData = getList('keywords')
+        if (localData.length > 0) {
+          tableData.value = localData
+        }
+      }
     } else {
       tableData.value = getList('keywords')
     }
