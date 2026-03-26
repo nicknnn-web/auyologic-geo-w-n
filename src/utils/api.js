@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-// API 服务层 - 对接后端 Express API
-const BASE_URL = import.meta.env.VITE_API_URL || '/api'
+// API 服务层 - 直连后端公网地址
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://fokgoxfxgyjq.sealoshzh.site/api'
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -42,7 +42,7 @@ export const keywordsAPI = createAPI('keywords')
 export const questionsAPI = createAPI('questions')
 export const knowledgeAPI = createAPI('knowledge')
 export const imagesAPI = createAPI('images')
-export const commandsAPI = createAPI('commands')
+export const commandsAPI = createAPI('instruction-templates')
 export const draftsAPI = createAPI('drafts')
 export const mediaAccountsAPI = createAPI('media_accounts')
 export const publishTasksAPI = createAPI('publish_tasks')
@@ -60,7 +60,7 @@ export const uploadAPI = {
   upload: (file, onProgress) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/upload', formData, {
+    return api.post('/documents/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: (e) => {
         if (onProgress && e.total) {
@@ -74,20 +74,6 @@ export const uploadAPI = {
 // AI 生成
 export const aiAPI = {
   generate: (prompt) => api.post('/ai/generate', { prompt, type: 'content' }),
-}
-
-// GEO 检测
-export const geoDetectionAPI = {
-  detect: (keywords, platforms) => api.post('/geo-detection/detect', { keywords, platforms }),
-  saveReport: (data) => api.post('/geo-reports', data),
-  getReports: () => api.get('/geo-reports'),
-}
-
-// 网站优化
-export const websiteOptimizationAPI = {
-  analyze: (url) => api.post('/website-optimization/analyze', { url }),
-  saveReport: (data) => api.post('/website-optimization', data),
-  getHistory: () => api.get('/website-optimization'),
 }
 
 export default api
