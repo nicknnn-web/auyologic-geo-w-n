@@ -280,7 +280,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
-import { getData, saveData, addItem } from '../utils/storage'
+import { getData, saveData, addItem, getList } from '../utils/storage'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
 
@@ -819,7 +819,7 @@ const selectedKwCount = computed(() => {
   return kwGroups.value.reduce((sum, g) => sum + g.selectedCount, 0)
 })
 
-const confirmKeywords = () => {
+const confirmKeywords = async () => {
   const selected = kwGroups.value.flatMap(g => g.items.filter(i => i.selected))
   // 去重：按关键词文本去重，保留第一个选中的类别
   const seen = new Set()
@@ -830,22 +830,44 @@ const confirmKeywords = () => {
       uniqueSelected.push(kw)
     }
   })
+  
+  // 映射类型简称（用于存储）
+  const typeMap = {
+    '品牌核心词': '品牌',
+    '场景需求词': '场景',
+    '产品决策词': '产品'
+  }
+  
   let count = 0
-  uniqueSelected.forEach(kw => {
+  let errorCount = 0
+  
+  for (const kw of uniqueSelected) {
     const group = kwGroups.value.find(g => g.items.includes(kw))
-    // 映射类型简称（用于存储）
-    const typeMap = {
-      '品牌核心词': '品牌',
-      '场景需求词': '场景',
-      '产品决策词': '产品'
+    const keywordType = group ? (typeMap[group.type] || group.type) : '品牌'
+    
+    // 同时写入后端 API 和 localStorage
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user' },
+        body: JSON.stringify({ keyword: kw.text, type: keywordType })
+      })
+      if (res.ok) {
+        count++
+      } else {
+        throw new Error('API failed')
+      }
+    } catch {
+      // 后端失败时 fallback 到 localStorage
+      addItem('keywords', {
+        keyword: kw.text,
+        type: keywordType,
+        createdAt: new Date().toLocaleString()
+      })
+      count++
     }
-    addItem('keywords', {
-      keyword: kw.text,
-      type: group ? (typeMap[group.type] || group.type) : '品牌',
-      createdAt: new Date().toLocaleString()
-    })
-    count++
-  })
+  }
+  
   kwDialogVisible.value = false
   const duplicateCount = selected.length - uniqueSelected.length
   if (duplicateCount > 0) {
