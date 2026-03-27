@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 // API 服务层 - 直连后端公网地址
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app/api'
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
 
 const api = axios.create({
   baseURL: BASE_URL,
