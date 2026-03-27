@@ -84,7 +84,9 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="80" align="center">
         <template #default="{ row }">
           <el-popconfirm title="确定删除吗?" @confirm="handleDelete(row.id)">
@@ -130,6 +132,15 @@ const router = useRouter()
 import { getData, getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || window.location.origin
+
+const formatDate = (dateStr) => {
+  if (!dateStr || dateStr === '{}') return '-'
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return '-'
+    return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  } catch { return '-' }
+}
 
 const tableData = ref([])
 

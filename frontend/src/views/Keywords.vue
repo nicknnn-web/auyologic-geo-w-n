@@ -46,7 +46,7 @@
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="180">
-        <template #default="{ row }">{{ new Date(row.created_at).toLocaleString('zh-CN') }}</template>
+        <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
       </el-table-column>
       <el-table-column label="操作" width="150" align="center">
         <template #default="{ row }">
@@ -140,6 +140,15 @@ onMounted(() => {
 const getTypeColor = (type) => {
   const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning' }
   return map[type] || 'info'
+}
+
+const formatDate = (dateStr) => {
+  if (!dateStr || dateStr === '{}') return '-'
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return '-'
+    return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  } catch { return '-' }
 }
 
 const cycleType = async (row) => {

@@ -1,36 +1,36 @@
-# 前端静态站点 - Vite 构建
+# 前端静态站点 - Vite 构建（无需任何环境变量）
 FROM node:22-alpine AS build
 
 WORKDIR /src
 
-# 使用运行时 ARG，避免硬编码（Zeabur 会通过 --build-arg 传入或使用默认值）
-ARG VITE_API_URL=https://auyologic.zeabur.app
-ENV VITE_API_URL=$VITE_API_URL
-
-# 复制 package.json 和依赖文件
 COPY package*.json ./
 RUN npm install
 
-# 复制源代码
 COPY . .
 
-# 构建
+# 构建时不设置任何 API 环境变量
 RUN npm run build
 
-# 生产环境 - 使用 Caddy 提供静态文件
+# 生产环境 - Caddy 提供静态文件 + 反向代理
 FROM alpine:latest AS runtime
 
-# 安装 Caddy
 RUN apk add --no-cache caddy
 
-# 从构建阶段复制 dist 文件
 COPY --from=build /src/dist /usr/share/caddy
 
-# Caddy 配置
+# Caddy 配置：静态文件服务 + /api/* 反向代理到后端
 RUN echo '*:8080 {
     root * /usr/share/caddy
     try_files {path} /index.html
     encode gzip
+
+    # /api/* 请求代理到后端（无需前端硬编码 baseURL）
+    @api {
+        path /api/*
+    }
+    reverse_proxy @api https://auyologic.zeabur.app {
+        header_up Host {host}
+    }
 }' > /etc/caddy/Caddyfile
 
 EXPOSE 8080

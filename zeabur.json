@@ -39,12 +39,6 @@
       "region": "auto",
       "runtime": "docker",
       "dockerfile": "Dockerfile",
-      "env": [
-        {
-          "key": "VITE_API_URL",
-          "value": "https://auyologic.zeabur.app"
-        }
-      ],
       "dependencies": ["auyologic-backend"]
     }
   ]
