@@ -20,16 +20,16 @@
         </template>
       </el-table-column>
       <el-table-column prop="name" label="指令名称" />
-      <el-table-column prop="type" label="创作类型" width="150">
+      <el-table-column label="创作类型" width="150">
         <template #default="{ row }">
-          <el-tag :type="getTypeColor(row.type)">{{ row.type }}</el-tag>
+          <el-tag :type="getTypeColor(row.contentType)">{{ row.contentType || '文章创作' }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="Prompt 预览" min-width="200">
         <template #default="{ row }">
-          <el-tooltip :content="row.prompt" placement="top" :max-width="600" show-after="300">
+          <el-tooltip :content="row.content" placement="top" :max-width="600" show-after="300">
             <span class="cursor-pointer text-blue-500 hover:underline">
-              {{ row.prompt.length > 50 ? row.prompt.substring(0, 50) + '...' : row.prompt }}
+              {{ (row.content || '').length > 50 ? row.content.substring(0, 50) + '...' : (row.content || '-') }}
             </span>
           </el-tooltip>
         </template>
@@ -91,9 +91,9 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BA
 
 // P3: 创作类型常量
 const PROMPT_TYPES = [
-  { label: '文章创作', value: '文章创作' },
-  { label: '短视频文案', value: '短视频文案' },
-  { label: '社交媒体', value: '社交媒体' }
+  { label: '产品创作', value: '产品创作' },
+  { label: '种草推荐', value: '种草推荐' },
+  { label: '短视频脚本', value: '短视频脚本' }
 ]
 
 const tableData = ref([])
@@ -116,9 +116,9 @@ const sortedData = computed(() => {
 
 const getTypeColor = (type) => {
   const map = {
-    '文章创作': 'primary',
-    '短视频文案': 'warning',
-    '社交媒体': 'success'
+    '产品创作': 'primary',
+    '种草推荐': 'success',
+    '短视频脚本': 'warning'
   }
   return map[type] || 'info'
 }
@@ -132,8 +132,9 @@ const loadData = async () => {
     })
     if (res.ok) {
       const data = await res.json()
-      tableData.value = data
-      saveList('commands', data)
+      // API 返回 { value: [...], Count: N } 格式
+      tableData.value = Array.isArray(data) ? data : (data.value || [])
+      saveList('commands', tableData.value)
       if (data.length === 0) {
         initDefaultCommands()
         tableData.value = getList('commands')
@@ -295,7 +296,13 @@ const handleAdd = () => {
 }
 
 const handleEdit = (row) => {
-  form.value = { ...row }
+  // API 字段 content/contentType → 表单字段 prompt/type
+  form.value = {
+    id: row.id,
+    name: row.name,
+    prompt: row.content || row.prompt || '',
+    type: row.contentType || row.type || ''
+  }
   isEdit.value = true
   dialogVisible.value = true
 }
@@ -327,7 +334,7 @@ const handleSubmit = async () => {
             'Content-Type': 'application/json',
             'x-user-id': userId
           },
-          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content })
+          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })
         if (res.ok) {
           const updated = await res.json()
@@ -344,7 +351,7 @@ const handleSubmit = async () => {
             'Content-Type': 'application/json',
             'x-user-id': userId
           },
-          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content })
+          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })
         if (res.ok) {
           tableData.value.unshift(await res.json())
