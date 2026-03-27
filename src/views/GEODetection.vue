@@ -1513,9 +1513,9 @@ onMounted(() => {
 
 // 从后端 API 加载问题
 const loadQuestionsFromAPI = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || '1'
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
   try {
-    const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'https://fokgoxfxgyjq.sealoshzh.site'}/api/questions`, {
+    const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || window.location.origin}/api/questions`, {
       headers: { 'x-user-id': userId }
     })
     if (res.ok) {
