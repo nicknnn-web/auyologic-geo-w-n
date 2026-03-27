@@ -1515,7 +1515,7 @@ onMounted(() => {
 const loadQuestionsFromAPI = async () => {
   const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
   try {
-    const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || window.location.origin}/api/questions`, {
+    const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/questions`, {
       headers: { 'x-user-id': userId }
     })
     if (res.ok) {

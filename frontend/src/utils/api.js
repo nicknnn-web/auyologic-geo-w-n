@@ -1,8 +1,7 @@
 import axios from 'axios'
 
-// API 服务层 - 使用当前域名，通过 Caddy 反向代理到后端
-// 前端 Docker 使用 Caddy 代理 /api/* 到后端，无需硬编码 API 地址
-const BASE_URL = import.meta.env.VITE_API_URL || window.location.origin
+// API 服务层 - 直接连接后端（Zeabur 环境下）
+const BASE_URL = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
 
 const api = axios.create({
   baseURL: BASE_URL,

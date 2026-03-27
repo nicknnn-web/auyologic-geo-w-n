@@ -259,7 +259,7 @@ import { Folder, CopyDocument, Refresh, Clock } from '@element-plus/icons-vue'
 const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
 const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
 const DEEPSEEK_MODEL = 'deepseek-chat'
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || window.location.origin
+const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
 
 const router = useRouter()
 const form = ref({
