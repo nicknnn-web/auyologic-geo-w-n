@@ -9,7 +9,7 @@ const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // 构建版本
-const BUILD_VERSION = 'v2026032722';
+const BUILD_VERSION = 'v2026032801';
 
 // 初始化数据库表
 initDB().catch(console.error);
