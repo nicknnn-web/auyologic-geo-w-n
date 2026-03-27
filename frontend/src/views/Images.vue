@@ -278,9 +278,9 @@ const loadImagesFromAPI = async () => {
       tableData.value = data.map(img => ({
         id: img.id,
         name: img.title || img.name || '',
-        preview: img.image_path || img.preview || '',
+        preview: img.imagePath || img.image_path || img.preview || '',
         size: img.size || 0,
-        createdAt: img.created_at ? new Date(img.created_at).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN')
+        createdAt: img.createdAt ? new Date(img.createdAt).toLocaleString('zh-CN') : (img.created_at ? new Date(img.created_at).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN'))
       }))
       // 同步到 localStorage
       saveToStorage()
