@@ -43,7 +43,7 @@
       "env": [
         {
           "key": "VITE_API_URL",
-          "value": "https://auyologic-backend.zeabur.app/api"
+          "value": "https://auyologic.zeabur.app"
         }
       ],
       "dependencies": ["auyologic-backend"]
