@@ -70,6 +70,23 @@ const ensureTable = async (table) => {
 
 // CRUD 路由
 const tables = ['keywords', 'questions', 'knowledge', 'history', 'documents', 'images', 'instruction_templates', 'drafts', 'accounts', 'delivery_tasks', 'publish_records', 'geo_tasks', 'website_tasks'];
+
+// snake_case 转 camelCase
+const toCamelCase = (obj) => {
+  if (Array.isArray(obj)) {
+    return obj.map(item => toCamelCase(item));
+  }
+  if (obj && typeof obj === 'object') {
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+      result[camelKey] = toCamelCase(value);
+    }
+    return result;
+  }
+  return obj;
+};
+
 tables.forEach(table => {
   const routePath = `/api/${table}`;
   const hyphenPath = `/api/${table.replace(/_/g, '-')}`;
@@ -81,7 +98,7 @@ tables.forEach(table => {
         await ensureTable(table);
         const userId = getUserId(req);
         const result = await pool.query(`SELECT * FROM ${table} WHERE user_id = $1 ORDER BY id DESC`, [userId]);
-        res.json(result.rows);
+        res.json(toCamelCase(result.rows));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.post(hyphenPath, async (req, res) => {
@@ -130,7 +147,7 @@ tables.forEach(table => {
       await ensureTable(table);
       const userId = getUserId(req);
       const result = await pool.query(`SELECT * FROM ${table} WHERE user_id = $1 ORDER BY id DESC`, [userId]);
-      res.json(result.rows);
+      res.json(toCamelCase(result.rows));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
   
