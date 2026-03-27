@@ -6,14 +6,27 @@
         <div class="text-sm text-gray-500">管理AI文章创作的提示词指令 · 支持 API 数据持久化</div>
       </div>
       <div class="ml-auto">
+        <el-button 
+          type="danger" 
+          :disabled="selectedRows.length === 0" 
+          @click="handleBatchDelete"
+          class="mr-2"
+        >
+          批量删除 ({{ selectedRows.length }})
+        </el-button>
         <el-button type="primary" @click="handleAdd">
-        <el-icon class="mr-1"><Plus /></el-icon>
-        添加指令
-      </el-button>
+          <el-icon class="mr-1"><Plus /></el-icon>
+          添加指令
+        </el-button>
       </div>
     </div>
 
-    <el-table :data="sortedData" style="width: 100%">
+    <el-table 
+      :data="sortedData" 
+      style="width: 100%"
+      @selection-change="handleSelectionChange"
+    >
+      <el-table-column type="selection" width="50" />
       <el-table-column label="序号" width="80" align="center">
         <template #default="{ $index }">
           {{ $index + 1 }}
@@ -97,6 +110,7 @@ const PROMPT_TYPES = [
 ]
 
 const tableData = ref([])
+const selectedRows = ref([])
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref(null)
@@ -153,6 +167,35 @@ const loadData = async () => {
 onMounted(() => {
   loadData()
 })
+
+// 表格选择变化
+const handleSelectionChange = (selection) => {
+  selectedRows.value = selection
+}
+
+// 批量删除
+const handleBatchDelete = async () => {
+  if (selectedRows.value.length === 0) return
+  
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const ids = selectedRows.value.map(row => row.id)
+  
+  // 逐个删除
+  for (const id of ids) {
+    try {
+      await fetch(`${API_BASE_URL}/api/instruction-templates/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      })
+    } catch { /* silent */ }
+    // 同时从 localStorage 删除
+    deleteItem('commands', id)
+  }
+  
+  tableData.value = tableData.value.filter(r => !ids.includes(r.id))
+  selectedRows.value = []
+  ElMessage.success(`已删除 ${ids.length} 条指令`)
+}
 
 const initDefaultCommands = () => {
   const defaultCommands = [
