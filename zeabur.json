@@ -1,0 +1,52 @@
+{
+  "$schema": "https://zbp.zeabur.com/schema.json",
+  "project": "auyologic-geo",
+  "services": [
+    {
+      "name": "auyologic-backend",
+      "path": "backend",
+      "icon": "🐙",
+      "plan": "pro",
+      "region": "auto",
+      "runtime": "node",
+      "buildCommand": "npm install",
+      "startCommand": "npm start",
+      "env": [
+        {
+          "key": "DATABASE_URL",
+          "reference": {
+            "service": "postgresql",
+            "key": "DATABASE_URL"
+          }
+        }
+      ],
+      "dependencies": ["postgresql"]
+    },
+    {
+      "name": "postgresql",
+      "path": null,
+      "icon": "🗄️",
+      "plan": "pro",
+      "region": "auto",
+      "runtime": "postgres",
+      "version": "15"
+    },
+    {
+      "name": "auyologic-frontend",
+      "path": "frontend",
+      "icon": "🎨",
+      "plan": "pro",
+      "region": "auto",
+      "runtime": "static",
+      "buildCommand": "npm install && npm run build",
+      "outputDir": "dist",
+      "env": [
+        {
+          "key": "VITE_API_URL",
+          "value": "https://auyologic-backend.zeabur.app/api"
+        }
+      ],
+      "dependencies": ["auyologic-backend"]
+    }
+  ]
+}

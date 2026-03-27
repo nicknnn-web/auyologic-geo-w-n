@@ -1,0 +1,33 @@
+[project]
+name = "auyologic-geo"
+
+[service.backend]
+name = "auyologic-backend"
+path = "backend"
+runtime = "node"
+buildCommand = "npm install"
+startCommand = "npm start"
+
+[service.backend.env]
+PORT = { default = "3001" }
+NODE_ENV = { default = "production" }
+DATABASE_URL = { fromDatabase = "postgres", attr = "DATABASE_URL" }
+
+[service.postgres]
+name = "postgres"
+path = "" 
+imutable = true
+preset = "postgres-15"
+
+[service.frontend]
+name = "auyologic-frontend"
+path = "frontend"
+runtime = "static"
+buildCommand = "npm install && npm run build"
+outputDir = "dist"
+
+[service.frontend.env]
+VITE_API_URL = { default = "https://auyologic-backend.zeabur.app/api" }
+
+[service.frontend.dependsOn]
+service = "auyologic-backend"
