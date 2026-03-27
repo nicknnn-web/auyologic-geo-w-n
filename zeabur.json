@@ -37,9 +37,8 @@
       "icon": "🎨",
       "plan": "pro",
       "region": "auto",
-      "runtime": "static",
-      "buildCommand": "npm install && npm run build",
-      "outputDir": "dist",
+      "runtime": "docker",
+      "dockerfile": "Dockerfile",
       "env": [
         {
           "key": "VITE_API_URL",
