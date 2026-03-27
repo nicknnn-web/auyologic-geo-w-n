@@ -3,8 +3,9 @@ FROM node:22-alpine AS build
 
 WORKDIR /src
 
-# 硬编码 API 地址（Zeabur Docker runtime 下 env 变量不会在构建时生效）
-ENV VITE_API_URL=https://auyologic.zeabur.app/api
+# 使用运行时 ARG，避免硬编码（Zeabur 会通过 --build-arg 传入或使用默认值）
+ARG VITE_API_URL=https://auyologic.zeabur.app
+ENV VITE_API_URL=$VITE_API_URL
 
 # 复制 package.json 和依赖文件
 COPY package*.json ./
