@@ -146,20 +146,21 @@ const loadData = async () => {
     })
     if (res.ok) {
       const data = await res.json()
-      // API 返回 { value: [...], Count: N } 格式
-      tableData.value = Array.isArray(data) ? data : (data.value || [])
-      saveList('commands', tableData.value)
-      if (data.length === 0) {
-        initDefaultCommands()
-        tableData.value = getList('commands')
+      // API 返回 { value: [...], Count: N } 格式 或 直接数组
+      const list = Array.isArray(data) ? data : (data.value || [])
+      tableData.value = list
+      
+      // 只有当 API 返回空数组时才初始化默认模板（且只初始化一次）
+      if (list.length === 0) {
+        await initDefaultCommands()
       }
     } else {
+      // API 失败时从 localStorage 读取
       tableData.value = getList('commands')
-      if (tableData.value.length === 0) initDefaultCommands()
     }
   } catch {
+    // 网络错误时从 localStorage 读取
     tableData.value = getList('commands')
-    if (tableData.value.length === 0) initDefaultCommands()
   }
 }
 
@@ -197,7 +198,9 @@ const handleBatchDelete = async () => {
   ElMessage.success(`已删除 ${ids.length} 条指令`)
 }
 
-const initDefaultCommands = () => {
+// 初始化默认指令（返回 Promise，确保全部创建完成）
+const initDefaultCommands = async () => {
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
   const defaultCommands = [
     {
       name: '产品软文模板',
@@ -304,9 +307,9 @@ const initDefaultCommands = () => {
     }
   ]
 
-  // 同时保存到后端和本地
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
-  defaultCommands.forEach(async (cmd) => {
+  // 逐个创建默认指令（使用 for...of 等待每个完成）
+  const savedList = []
+  for (const cmd of defaultCommands) {
     try {
       const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
         method: 'POST',
@@ -314,22 +317,19 @@ const initDefaultCommands = () => {
           'Content-Type': 'application/json',
           'x-user-id': userId
         },
-        body: JSON.stringify({ name: cmd.name, content: cmd.prompt })
+        body: JSON.stringify({ name: cmd.name, content: cmd.prompt, contentType: cmd.type })
       })
       if (res.ok) {
         const saved = await res.json()
-        addItem('commands', { ...cmd, id: saved.id })
+        savedList.push({ ...cmd, id: saved.id, content: saved.content, contentType: saved.contentType })
       }
     } catch (e) {
       console.warn('保存默认指令到后端失败:', e)
-      addItem('commands', cmd)
     }
-  })
-  // 本地也存一份
-  defaultCommands.forEach(cmd => {
-    addItem('commands', cmd)
-  })
-  tableData.value = getList('commands')
+  }
+  
+  // 更新 tableData
+  tableData.value = savedList.length > 0 ? savedList : defaultCommands
 }
 
 const handleAdd = () => {
@@ -401,6 +401,8 @@ const handleSubmit = async () => {
         }
       } catch { /* silent */ }
       ElMessage.success('添加成功')
+      // 刷新数据，确保显示最新内容
+      await loadData()
     }
     dialogVisible.value = false
   } catch { /* silent */ }
