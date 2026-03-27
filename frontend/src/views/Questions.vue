@@ -129,7 +129,7 @@ const route = useRoute()
 const router = useRouter()
 import { getData, getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001'
+const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || window.location.origin
 
 const tableData = ref([])
 
