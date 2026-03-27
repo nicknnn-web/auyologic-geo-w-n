@@ -77,6 +77,24 @@ const ensureTable = async (table) => {
       await pool.query(`ALTER TABLE instruction_templates ADD COLUMN IF NOT EXISTS content_type VARCHAR(50)`).catch(() => {});
     } catch (e) { console.log('Instruction_templates migration:', e.message); }
   }
+  if (table === 'history') {
+    try {
+      await pool.query(`ALTER TABLE history ADD COLUMN IF NOT EXISTS title VARCHAR(500)`).catch(() => {});
+      await pool.query(`ALTER TABLE history ADD COLUMN IF NOT EXISTS keyword VARCHAR(255)`).catch(() => {});
+      await pool.query(`ALTER TABLE history ADD COLUMN IF NOT EXISTS audience TEXT`).catch(() => {});
+      await pool.query(`ALTER TABLE history ADD COLUMN IF NOT EXISTS platforms TEXT[]`).catch(() => {});
+      await pool.query(`ALTER TABLE history ADD COLUMN IF NOT EXISTS command_id INTEGER`).catch(() => {});
+      await pool.query(`ALTER TABLE history ADD COLUMN IF NOT EXISTS local_id VARCHAR(100)`).catch(() => {});
+    } catch (e) { console.log('History migration:', e.message); }
+  }
+  if (table === 'drafts') {
+    try {
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS audience TEXT`).catch(() => {});
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS extra TEXT`).catch(() => {});
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS selected_docs TEXT`).catch(() => {});
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS selected_images TEXT`).catch(() => {});
+    } catch (e) { console.log('Drafts migration:', e.message); }
+  }
 };
 
 // CRUD 路由
