@@ -78,6 +78,7 @@ const tables = ['keywords', 'questions', 'knowledge', 'history', 'documents', 'i
 
 // snake_case 转 camelCase
 const toCamelCase = (obj) => {
+  if (obj instanceof Date) return obj.toISOString();
   if (Array.isArray(obj)) {
     return obj.map(item => toCamelCase(item));
   }
@@ -247,7 +248,7 @@ app.get('/api/settings', async (req, res) => {
     const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
     if (result.rows.length > 0) {
       const user = result.rows[0];
-      // 返回与前端一致的字段名
+      // 返回与前端一致的字段名，Date 对象转 ISO 字符串
       res.json({
         company_name: user.company_name || '',
         website: user.website || '',
@@ -257,7 +258,9 @@ app.get('/api/settings', async (req, res) => {
         deepseek_api_key: user.deepseek_api_key || '',
         doubao_api_key: user.doubao_api_key || '',
         kimi_api_key: user.kimi_api_key || '',
-        default_ai_model: user.default_ai_model || 'deepseek-chat'
+        default_ai_model: user.default_ai_model || 'deepseek-chat',
+        created_at: user.created_at instanceof Date ? user.created_at.toISOString() : user.created_at,
+        updated_at: user.updated_at instanceof Date ? user.updated_at.toISOString() : user.updated_at
       });
     } else {
       res.json({ company_name: '', website: '', industry: '', description: '', target_audience: '' });
