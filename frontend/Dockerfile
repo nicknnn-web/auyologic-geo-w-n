@@ -24,12 +24,17 @@ RUN echo '*:8080 {
     try_files {path} /index.html
     encode gzip
 
-    # /api/* 请求代理到后端（无需前端硬编码 baseURL）
+    # /api/* 请求代理到后端（handle_path 保留原始路径）
     @api {
         path /api/*
     }
-    reverse_proxy @api https://auyologic.zeabur.app {
-        header_up Host {host}
+    handle @api {
+        handle_path /api/* {
+            reverse_proxy https://auyologic.zeabur.app {
+                header_up Host {host}
+                header_up X-Forwarded-Host {host}
+            }
+        }
     }
 }' > /etc/caddy/Caddyfile
 
