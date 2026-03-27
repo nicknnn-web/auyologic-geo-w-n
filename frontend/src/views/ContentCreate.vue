@@ -1145,6 +1145,7 @@ const handleSaveDraft = async () => {
     }
   } else {
     // 创建新草稿
+    const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
     try {
       const res = await fetch(`${API_BASE_URL}/api/drafts`, {
         method: 'POST',
