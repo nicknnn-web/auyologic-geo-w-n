@@ -3,6 +3,10 @@ FROM node:22-alpine AS build
 
 WORKDIR /src
 
+# 接收构建时传入的环境变量
+ARG VITE_API_URL=https://auyologic.zeabur.app/api
+ENV VITE_API_URL=$VITE_API_URL
+
 # 复制 package.json 和依赖文件
 COPY package*.json ./
 RUN npm install
