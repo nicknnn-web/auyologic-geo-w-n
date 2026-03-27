@@ -625,7 +625,7 @@ const handleSubmit = async () => {
     return
   }
   
-  const userId = localStorage.getItem('auyologic_user_id') || '1'
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
   const newItem = {
     question: form.value.question,
     keywordType: form.value.keywordType,
