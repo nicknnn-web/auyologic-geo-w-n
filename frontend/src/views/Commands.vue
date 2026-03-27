@@ -3,7 +3,7 @@
     <div class="flex items-center mb-4">
       <div>
         <div class="text-lg font-bold">AI创作指令</div>
-        <div class="text-sm text-gray-500">管理AI文章创作的提示词指令</div>
+        <div class="text-sm text-gray-500">管理AI文章创作的提示词指令 · 支持 API 数据持久化</div>
       </div>
       <div class="ml-auto">
         <el-button type="primary" @click="handleAdd">
