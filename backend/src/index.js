@@ -71,6 +71,11 @@ const ensureTable = async (table) => {
       await pool.query(`ALTER TABLE images ALTER COLUMN image_path TYPE TEXT`).catch(() => {});
     } catch (e) { console.log('Images migration:', e.message); }
   }
+  if (table === 'instruction_templates') {
+    try {
+      await pool.query(`ALTER TABLE instruction_templates ADD COLUMN IF NOT EXISTS content_type VARCHAR(50)`).catch(() => {});
+    } catch (e) { console.log('Instruction_templates migration:', e.message); }
+  }
 };
 
 // CRUD 路由
