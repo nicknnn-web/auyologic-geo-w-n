@@ -21,20 +21,19 @@ COPY --from=build /src/dist /usr/share/caddy
 # Caddy 配置：静态文件服务 + /api/* 反向代理到后端
 RUN echo '*:8080 {
     root * /usr/share/caddy
-    try_files {path} /index.html
     encode gzip
 
-    # /api/* 请求代理到后端（handle_path 保留原始路径）
-    @api {
-        path /api/*
-    }
-    handle @api {
-        handle_path /api/* {
-            reverse_proxy https://auyologic.zeabur.app {
-                header_up Host {host}
-                header_up X-Forwarded-Host {host}
-            }
+    # /api/* 代理到后端（handle 保持原始路径不变）
+    handle /api/* {
+        reverse_proxy https://auyologic.zeabur.app {
+            header_up Host {host}
+            header_up X-Forwarded-Host {host}
         }
+    }
+
+    # 其他路径：SPA fallback
+    handle {
+        try_files {path} /index.html
     }
 }' > /etc/caddy/Caddyfile
 
