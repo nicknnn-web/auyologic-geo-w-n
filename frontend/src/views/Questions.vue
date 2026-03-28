@@ -27,6 +27,16 @@
           批量删除 ({{ selectedRows.length }})
         </el-button>
         <el-button
+          type="info"
+          plain
+          class="ml-2"
+          @click="handleClearAll"
+          :disabled="tableData.length === 0 || isLoading"
+        >
+          <el-icon class="mr-1"><Delete /></el-icon>
+          清空全部
+        </el-button>
+        <el-button
           type="success"
           class="ml-0"
           @click="handleAIExpand"
@@ -124,8 +134,8 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Plus, MagicStick, SortUp, SortDown, Rank } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, MagicStick, SortUp, SortDown, Rank, Delete } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -680,6 +690,47 @@ const handleBatchDelete = async () => {
   tableData.value = tableData.value.filter(item => !idsToDelete.includes(item.id))
   ElMessage.success(`已删除 ${selectedRows.value.length} 条记录`)
   selectedRows.value = []
+}
+
+// 清空全部问题
+const handleClearAll = async () => {
+  if (tableData.value.length === 0) return
+  
+  try {
+    await ElMessageBox.confirm(
+      `确定要清空全部 ${tableData.value.length} 条问题吗？此操作不可恢复！`,
+      '清空确认',
+      {
+        confirmButtonText: '确认清空',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger'
+      }
+    )
+  } catch {
+    return // 用户取消
+  }
+  
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const count = tableData.value.length
+  
+  // 逐个从后端删除
+  for (const row of tableData.value) {
+    try {
+      await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      })
+    } catch (e) {
+      console.warn('从后端删除失败:', e)
+    }
+  }
+  
+  // 清空本地列表
+  tableData.value = []
+  selectedRows.value = []
+  
+  ElMessage.success(`已清空全部 ${count} 条问题`)
 }
 
 const handleAdd = () => {
