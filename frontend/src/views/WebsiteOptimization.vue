@@ -80,6 +80,15 @@
             </el-button>
             <el-button
               size="small"
+              type="warning"
+              :disabled="selectedHistory.length !== 1"
+              @click="handleRecheckSelected"
+            >
+              <el-icon class="mr-1"><RefreshRight /></el-icon>
+              重新检测
+            </el-button>
+            <el-button
+              size="small"
               type="danger"
               :disabled="selectedHistory.length === 0"
               @click="handleBatchDelete"
@@ -502,6 +511,22 @@ const handleViewReport = (r) => {
   report.value = r
   inputUrl.value = r.url
   selectedHistory.value = []
+}
+
+// 重新检测选中的记录
+const handleRecheckSelected = async () => {
+  if (selectedHistory.value.length === 0) {
+    ElMessage.warning('请先选择要重新检测的记录')
+    return
+  }
+  if (selectedHistory.value.length > 1) {
+    ElMessage.warning('每次只能重新检测一个网址，请只选择一个')
+    return
+  }
+  // 获取选中的记录
+  const idx = selectedHistory.value[0]
+  const record = reportHistory.value[idx]
+  await handleRecheck(record.url)
 }
 
 const handleRecheck = async (url) => {
