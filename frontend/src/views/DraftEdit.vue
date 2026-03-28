@@ -12,6 +12,10 @@
         <div class="text-sm text-gray-500">{{ draft?.title || '加载中...' }}</div>
       </div>
       <div class="ml-auto flex gap-3">
+        <el-button @click="handleSaveAsNew" :loading="saving" type="warning">
+          <el-icon class="mr-1"><DocumentCopy /></el-icon>
+          另存为新
+        </el-button>
         <el-button @click="handleSave" :loading="saving" class="btn-primary">
           <el-icon class="mr-1"><Check /></el-icon>
           保存
@@ -98,7 +102,7 @@ import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { draftsAPI } from '../utils/api'
 import { addItem, getList } from '../utils/storage'
-import { ArrowLeft, Check, Edit, Promotion } from '@element-plus/icons-vue'
+import { ArrowLeft, Check, Edit, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -282,6 +286,27 @@ const handleSave = async () => {
       createdAt: new Date().toLocaleString()
     })
     ElMessage.warning('服务器保存失败，已保存到本地')
+  } finally {
+    saving.value = false
+  }
+}
+
+const handleSaveAsNew = async () => {
+  saving.value = true
+  try {
+    // 创建新草稿（不更新现有记录）
+    const newDraft = await draftsAPI.create({
+      title: editTitle.value + ' (副本)',
+      content: draft.value?.content || '',
+      status: '草稿'
+    })
+    draft.value = { ...draft.value, id: newDraft.id }
+    ElMessage.success('已另存为新草稿')
+    // 跳转到新草稿的编辑页
+    router.replace(`/drafts/${newDraft.id}/edit`)
+  } catch (e) {
+    console.error('另存失败:', e)
+    ElMessage.error('另存失败：' + e.message)
   } finally {
     saving.value = false
   }
