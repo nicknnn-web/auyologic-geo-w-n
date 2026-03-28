@@ -191,17 +191,24 @@
           </span>
           <span class="text-sm text-gray-500">可在此处直接编辑</span>
         </div>
+        
+        <!-- 分段优化按钮 -->
         <div class="flex gap-2">
-          <el-button size="small" @click="copyContent" type="primary" plain>
-            <el-icon class="mr-1"><CopyDocument /></el-icon>复制
-          </el-button>
-          <el-button size="small" @click="handleSaveDraft" type="success" plain>
-            <el-icon class="mr-1"><Folder /></el-icon>保存草稿
-          </el-button>
-          <el-button size="small" @click="handleSaveAsNew" type="warning" plain>
-            <el-icon class="mr-1"><DocumentCopy /></el-icon>另存为新
-          </el-button>
+          <el-button size="small" type="info" plain @click="regenerateSection('开头')">重写开头</el-button>
+          <el-button size="small" type="info" plain @click="regenerateSection('结尾')">重写结尾</el-button>
+          <el-button size="small" type="info" plain @click="switchStyle">切换风格</el-button>
+          <el-button size="small" type="info" plain @click="adjustLength('精简')">精简版</el-button>
+          <el-button size="small" type="info" plain @click="adjustLength('扩展')">扩展版</el-button>
         </div>
+      </div>
+      
+      <div class="flex gap-2 mb-3">
+        <el-button size="small" @click="copyContent" type="primary" plain>
+          <el-icon class="mr-1"><CopyDocument /></el-icon>复制
+        </el-button>
+        <el-button size="small" @click="handleSaveDraft" type="success" plain>
+          <el-icon class="mr-1"><Folder /></el-icon>保存草稿
+        </el-button>
       </div>
 
       <!-- Step 5: 质量预估标签 -->
@@ -226,11 +233,19 @@
         </div>
       </div>
       
+      <!-- 选中文字重写提示 -->
+      <div v-if="selectedText" class="mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded flex items-center justify-between">
+        <span class="text-sm text-yellow-700">已选中 {{ selectedText.length }} 字</span>
+        <el-button size="small" type="warning" @click="regenerateSelection">AI重写选中文字</el-button>
+      </div>
+      
       <textarea
         v-model="generatedContent"
+        ref="contentTextarea"
         class="text-gray-700 w-full border rounded-lg p-3 outline-none focus:ring-2 focus:ring-purple-300 focus:border-purple-400"
         style="min-height: 300px; font-family: inherit; white-space: pre-wrap; resize: vertical;"
         placeholder="在这里直接编辑生成的内容..."
+        @mouseup="checkSelection"
       ></textarea>
     </div>
 
@@ -306,6 +321,8 @@ const generatedTitle = ref('')
 const isGenerating = ref(false)
 const keywords = ref([])
 const commands = ref([])
+const selectedText = ref('')
+const contentTextarea = ref(null)
 const activeScene = ref(null)
 
 // ========== 快速场景快捷入口 ==========
@@ -1179,10 +1196,145 @@ const copyContent = () => {
   })
 }
 
-// Step 5: 重写段落（模拟功能）
-const regenerateParagraph = () => {
-  ElMessage.info('段落重写功能开发中...')
-  // TODO: 实现段落级编辑功能
+// 检测文本选中
+const checkSelection = () => {
+  const selection = window.getSelection()
+  const text = selection.toString()
+  if (text && text.length > 5) {
+    selectedText.value = text
+  } else {
+    selectedText.value = ''
+  }
+}
+
+// AI 重写选中文字
+const regenerateSelection = async () => {
+  if (!selectedText.value) return
+  
+  isGenerating.value = true
+  progressText.value = '正在重写选中文字...'
+  
+  try {
+    // 提取选中文字在全文中的位置，获取上下文
+    const content = generatedContent.value
+    const selectStart = content.indexOf(selectedText.value)
+    const selectEnd = selectStart + selectedText.value.length
+    
+    const before = content.slice(Math.max(0, selectStart - 100), selectStart)
+    const after = content.slice(selectEnd, Math.min(content.length, selectEnd + 100))
+    
+    const prompt = `参考前文："${before}"
+需要重写的段落："${selectedText.value}"
+参考后文："${after}"
+
+要求：保持前后文风格一致，重写这段文字使更吸引人。只输出重写后的内容，不要其他解释。`
+    
+    const result = await callDeepSeekAPI(prompt)
+    
+    // 替换选中的文字
+    const newContent = content.slice(0, selectStart) + result.trim() + content.slice(selectEnd)
+    generatedContent.value = newContent
+    selectedText.value = ''
+    
+    ElMessage.success('重写完成')
+  } catch (e) {
+    ElMessage.error('重写失败：' + e.message)
+  } finally {
+    isGenerating.value = false
+    progressText.value = '正在准备生成...'
+  }
+}
+
+// 重写开头/结尾
+const regenerateSection = async (section) => {
+  if (!generatedContent.value) return
+  
+  isGenerating.value = true
+  progressText.value = `正在重写${section}...`
+  
+  try {
+    const content = generatedContent.value
+    let prompt = ''
+    
+    if (section === '开头') {
+      const firstPara = content.split('\n')[0]
+      prompt = `请重写以下文案的开头部分，要求：\n1. 更加吸睛、有吸引力\n2. 与原文案风格一致\n3. 50字以内\n\n当前文案：\n${content}\n\n请只输出重写后的开头，不要输出其他内容。`
+    } else if (section === '结尾') {
+      prompt = `请重写以下文案的结尾部分，要求：\n1. 有行动号召或互动引导\n2. 与原文案风格一致\n3. 30字以内\n\n当前文案：\n${content}\n\n请只输出重写后的结尾，不要输出其他内容。`
+    }
+    
+    const result = await callDeepSeekAPI(prompt)
+    
+    if (section === '开头') {
+      const lines = content.split('\n')
+      lines[0] = result.trim()
+      generatedContent.value = lines.join('\n')
+    } else {
+      generatedContent.value = content.trim() + '\n\n' + result.trim()
+    }
+    
+    ElMessage.success(`${section}重写完成`)
+  } catch (e) {
+    ElMessage.error('重写失败：' + e.message)
+  } finally {
+    isGenerating.value = false
+    progressText.value = '正在准备生成...'
+  }
+}
+
+// 切换风格
+const switchStyle = async () => {
+  if (!generatedContent.value) return
+  
+  isGenerating.value = true
+  progressText.value = '正在切换风格...'
+  
+  try {
+    const styles = [
+      { name: '小红书种草', style: '口语化、真实感、emoji点缀、行动号召' },
+      { name: '公众号深度', style: '专业冷静、数据说话、结构清晰、有深度' },
+      { name: '知乎风格', style: '问题导向、干货充足、引用权威、逻辑性强' },
+      { name: '品牌故事', style: '情感丰富、画面感强、情怀满满' }
+    ]
+    const target = styles[Math.floor(Math.random() * styles.length)]
+    
+    const prompt = `请将以下文案改写为【${target.name}】风格，要求：\n风格：${target.style}\n\n原文案：\n${generatedContent.value}\n\n请直接输出改写后的文案。`
+    
+    const result = await callDeepSeekAPI(prompt)
+    generatedContent.value = result.trim()
+    ElMessage.success(`已切换为${target.name}风格`)
+  } catch (e) {
+    ElMessage.error('切换风格失败：' + e.message)
+  } finally {
+    isGenerating.value = false
+    progressText.value = '正在准备生成...'
+  }
+}
+
+// 精简/扩展
+const adjustLength = async (type) => {
+  if (!generatedContent.value) return
+  
+  isGenerating.value = true
+  progressText.value = `正在生成${type}版本...`
+  
+  try {
+    let prompt = ''
+    if (type === '精简') {
+      prompt = `请将以下文案精简为简洁版本，要求：\n1. 保留核心信息\n2. 删除冗余表达\n3. 控制在100字以内\n\n原文案：\n${generatedContent.value}`
+    } else {
+      prompt = `请将以下文案扩展为更详细版本，要求：\n1. 增加更多细节和案例\n2. 丰富内容但不要啰嗦\n3. 控制在300字以内\n\n原文案：\n${generatedContent.value}`
+    }
+    
+    const result = await callDeepSeekAPI(prompt)
+    generatedContent.value = result.trim()
+    ElMessage.success(`${type}版生成完成`)
+  } catch (e) {
+    ElMessage.error('调整长度失败：' + e.message)
+  } finally {
+    isGenerating.value = false
+    progressText.value = '正在准备生成...'
+  }
 }
 
 const handleSaveDraft = async () => {
