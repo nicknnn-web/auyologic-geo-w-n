@@ -547,14 +547,32 @@ const handleAIExpand = async () => {
           continue
         }
 
-        questions.forEach(q => {
-          tableData.value = addItem('questions', {
+        questions.forEach(async q => {
+          const newQuestion = {
             question: q,
             keywordType: kw.type,
             sourceKeyword: kw.keyword,
             status: '待审核'
-          })
+          }
+          
+          // 先保存到 localStorage
+          tableData.value = addItem('questions', newQuestion)
           successCount++
+          
+          // 同时同步到后端 API
+          const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+          try {
+            await fetch(`${API_BASE_URL}/api/questions`, {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'x-user-id': userId
+              },
+              body: JSON.stringify(newQuestion)
+            })
+          } catch (e) {
+            console.warn('同步到后端失败:', e)
+          }
         })
       } catch (error) {
         console.error(`生成关键词"${kw.keyword}"的问题失败:`, error)
