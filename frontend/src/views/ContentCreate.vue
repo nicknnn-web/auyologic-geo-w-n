@@ -33,7 +33,7 @@
 
       <!-- 基础配置：默认展开 -->
       <div class="bg-gray-50 rounded-lg p-4 mb-4">
-        <div class="text-sm font-medium text-gray-600 mb-3">📝 基础配置</div>
+        <div class="text-sm font-medium text-gray-600 mb-3">基础配置</div>
         
         <el-form-item label="选择关键词">
           <el-select v-model="form.keyword" placeholder="请选择品牌/产品关键词" style="width: 300px;" @change="onKeywordChange">
@@ -68,7 +68,7 @@
 
       <!-- 高级配置：默认折叠 -->
       <el-collapse class="mb-4">
-        <el-collapse-item title="⚙️ 高级配置（可选）" name="advanced">
+        <el-collapse-item title="高级配置（可选）" name="advanced">
           <el-form-item label="关联文档">
             <el-select 
               v-model="form.selectedDocs" 
@@ -161,17 +161,17 @@
 
       <el-form-item>
         <el-button type="primary" @click="handleGenerate" :loading="isGenerating" size="large">
-          {{ isGenerating ? '生成中...' : '🚀 开始生成' }}
+          {{ isGenerating ? '生成中...' : '开始生成' }}
         </el-button>
         <el-button @click="togglePromptPreview" :disabled="!form.keyword || !form.command" size="default">
-          {{ showPromptPreview ? '隐藏预览' : '🔍 预览 prompt' }}
+          {{ showPromptPreview ? '隐藏预览' : '预览 prompt' }}
         </el-button>
       </el-form-item>
 
       <!-- 预览 prompt 面板 -->
       <el-form-item v-if="showPromptPreview">
         <div class="bg-gray-100 p-4 rounded-lg" style="width: 700px; max-height: 300px; overflow-y: auto;">
-          <div class="text-sm font-bold mb-2 text-gray-600">📝 实际发送给 AI 的完整 prompt（可自由编辑）：</div>
+          <div class="text-sm font-bold mb-2 text-gray-600">实际发送给 AI 的完整 prompt（可自由编辑）：</div>
           <textarea
             v-model="previewPrompt"
             class="text-xs whitespace-pre-wrap text-gray-700 bg-transparent border-0 resize-none w-full outline-none"
@@ -187,7 +187,7 @@
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-3">
           <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
-            ✨ 生成完成
+            生成完成
           </span>
           <span class="text-sm text-gray-500">可在此处直接编辑</span>
         </div>
@@ -240,7 +240,7 @@
         <template #title>
           <div class="flex items-center">
             <el-icon class="mr-2"><Clock /></el-icon>
-            <span>📜 生成历史 ({{ generateHistory.length }})</span>
+            <span>生成历史 ({{ generateHistory.length }})</span>
           </div>
         </template>
         <div class="space-y-2">
@@ -272,7 +272,7 @@
       </el-collapse-item>
     </el-collapse>
 
-    <el-empty v-else-if="!isGenerating" description="💡 选择关键词和内容类型，点击开始生成" />
+    <el-empty v-else-if="!isGenerating" description="选择关键词和内容类型，点击开始生成" />
   </div>
 </template>
 
@@ -1254,7 +1254,7 @@ const handleSaveDraft = async () => {
         ...draftData,
         createdAt: new Date().toLocaleString('zh-CN')
       })
-      ElMessage.success('💾 已保存到草稿箱（不跳转，可继续编辑）')
+      ElMessage.success('已保存到草稿箱（不跳转，可继续编辑）')
     }
   }
   // 不再跳转，原地继续编辑
@@ -1298,7 +1298,7 @@ const handleSaveAsNew = async () => {
     })
   }
   
-  ElMessage.success('💾 已另存为新草稿（不跳转，可继续编辑）')
+  ElMessage.success('已另存为新草稿（不跳转，可继续编辑）')
   form.value.editId = null
   // 不再跳转，原地继续编辑
 }
