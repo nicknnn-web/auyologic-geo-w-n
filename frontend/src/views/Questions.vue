@@ -468,14 +468,31 @@ const handleAIExpand = async () => {
   let keywords
   if (route.query.keywordIds) {
     const ids = route.query.keywordIds.split(',').map(Number)
-    const allKeywords = getList('keywords')
-    keywords = allKeywords.filter(k => ids.includes(k.id))
+    
+    // 优先从 API 获取关键词
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+        headers: { 'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user' }
+      })
+      if (res.ok) {
+        const allKeywords = await res.json()
+        keywords = allKeywords.filter(k => ids.includes(k.id))
+      }
+    } catch (e) {
+      console.warn('从 API 获取关键词失败，尝试从 localStorage', e)
+    }
+    
+    // 如果 API 失败或没数据，回退到 localStorage
+    if (!keywords || keywords.length === 0) {
+      const localKeywords = getList('keywords')
+      keywords = localKeywords.filter(k => ids.includes(k.id))
+    }
   } else {
     keywords = getList('keywords')
   }
 
   if (keywords.length === 0) {
-    ElMessage.warning('请先在蒸馏词页面添加关键词')
+    ElMessage.warning('请先在关键词页面添加关键词')
     return
   }
 
