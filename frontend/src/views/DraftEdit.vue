@@ -99,6 +99,23 @@ import StarterKit from '@tiptap/starter-kit'
 import { draftsAPI } from '../utils/api'
 import { addItem, getList } from '../utils/storage'
 import { ArrowLeft, Check, Edit, Promotion } from '@element-plus/icons-vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
+
+// 配置 marked
+marked.use({ gfm: true, breaks: true })
+
+// 判断内容是否为 Markdown 并解析
+const parseContent = (content) => {
+  if (!content) return ''
+  // 如果内容已经包含 HTML 标签（<p>, <h1> 等），认为是 HTML 直接返回
+  if (/<[a-z][\s\S]*>/i.test(content)) {
+    return content
+  }
+  // 否则认为是 Markdown，转换为 HTML
+  const html = marked.parse(content)
+  return DOMPurify.sanitize(html)
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -149,7 +166,7 @@ onMounted(async () => {
       }
       
       // 设置编辑器内容
-      editor.value?.commands.setContent(data.content || '')
+      editor.value?.commands.setContent(parseContent(data.content) || '')
     } catch (e) {
       console.error('加载草稿失败:', e)
       // 先尝试从 localStorage 读取草稿
@@ -167,7 +184,7 @@ onMounted(async () => {
         if (!localDraft.content && localDraft.generatedContent) {
           localDraft.content = localDraft.generatedContent
         }
-        editor.value?.commands.setContent(localDraft.content || '')
+        editor.value?.commands.setContent(parseContent(localDraft.content) || '')
         ElMessage.warning('从本地缓存加载草稿（服务器无此记录）')
         return
       }
@@ -187,7 +204,7 @@ onMounted(async () => {
           if (!data.content && data.generatedContent) {
             data.content = data.generatedContent
           }
-          editor.value?.commands.setContent(data.content || '')
+          editor.value?.commands.setContent(parseContent(data.content) || '')
           sessionStorage.removeItem('editDraft')
           ElMessage.warning('从会话缓存加载草稿')
         } catch {
@@ -214,7 +231,7 @@ onMounted(async () => {
         keywords.value = Array.isArray(data.form.keywords) ? data.form.keywords : [data.form.keywords]
       }
       
-      editor.value?.commands.setContent(data.content || '')
+      editor.value?.commands.setContent(parseContent(data.content) || '')
       sessionStorage.removeItem('editDraft')
     } else {
       ElMessage.error('未找到草稿')
