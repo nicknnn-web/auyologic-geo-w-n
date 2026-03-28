@@ -218,7 +218,7 @@ onMounted(() => {
 })
 
 const getTypeColor = (type) => {
-  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning' }
+  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning', '企业': 'danger' }
   return map[type] || 'info'
 }
 
@@ -408,6 +408,15 @@ ${existingQuestions.join('、')}`
 - 生成5个不同角度的问题
 - 每个不超过20字
 - 侧重：场景需求、痛点解决、用户决策
+直接输出问题列表，每行一个，不要编号。`,
+
+    '企业': `请基于以下企业背景，针对企业/公司"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+
+要求：
+- 生成5个不同角度的问题
+- 每个不超过20字
+- 侧重：公司口碑、行业评价、实力对比、专业程度
+- 注意：公司名可能包含"科技"、"集团"等后缀，生成问题时要自然融入，不能写成"XX这个牌子"、"XX牌子怎么样"
 直接输出问题列表，每行一个，不要编号。`
   }
 

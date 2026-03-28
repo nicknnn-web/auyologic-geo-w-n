@@ -72,6 +72,7 @@
             <el-option label="品牌词" value="品牌" />
             <el-option label="产品词" value="产品" />
             <el-option label="场景词" value="场景" />
+            <el-option label="企业词" value="企业" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -138,7 +139,7 @@ onMounted(() => {
 })
 
 const getTypeColor = (type) => {
-  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning' }
+  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning', '企业': 'danger' }
   return map[type] || 'info'
 }
 
@@ -152,7 +153,7 @@ const formatDate = (dateStr) => {
 }
 
 const cycleType = async (row) => {
-  const typeOrder = ['品牌', '产品', '场景']
+  const typeOrder = ['品牌', '产品', '场景', '企业']
   const currentIndex = typeOrder.indexOf(row.type)
   const nextIndex = (currentIndex + 1) % typeOrder.length
   row.type = typeOrder[nextIndex]
