@@ -89,10 +89,13 @@ const ensureTable = async (table) => {
   }
   if (table === 'drafts') {
     try {
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS title VARCHAR(500)`).catch(() => {});
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS brand VARCHAR(255)`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS audience TEXT`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS extra TEXT`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS selected_docs TEXT`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS selected_images TEXT`).catch(() => {});
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS command_id INTEGER`).catch(() => {});
     } catch (e) { console.log('Drafts migration:', e.message); }
   }
 };
