@@ -206,10 +206,13 @@ const loadData = async () => {
 
 onMounted(() => {
   loadData()
-  // 检查是否有传递过来的关键词ID
+  // 检查是否有传递过来的关键词ID（只执行一次，执行后清除参数）
   if (route.query.keywordIds) {
     setTimeout(() => {
-      handleAIExpand()
+      handleAIExpand().then(() => {
+        // 生成完成后清除 URL 参数，避免刷新时重复生成
+        router.replace({ path: '/questions' })
+      })
     }, 500)
   }
 })
