@@ -199,18 +199,11 @@ const loadData = async () => {
     if (res.ok) {
       const data = await res.json()
       tableData.value = data
-      // API 返回空但 localStorage 有数据时，合并（避免旧数据丢失）
-      if (data.length === 0) {
-        const localData = getList('questions')
-        if (localData.length > 0) {
-          tableData.value = localData
-        }
-      }
     } else {
-      tableData.value = getList('questions')
+      tableData.value = []
     }
   } catch {
-    tableData.value = getList('questions')
+    tableData.value = []
   }
 }
 
@@ -435,9 +428,8 @@ ${existingQuestions.join('、')}`
 
 // 调用 DeepSeek API 生成问题（加入企业上下文 + 搜索结果 + 去重）
 const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
-  // 获取该关键词已有的问题（用于去重）
-  const allQuestions = getList('questions')
-  const existingQuestions = allQuestions
+  // 获取该关键词已有的问题（用于去重）- 使用API数据
+  const existingQuestions = tableData.value
     .filter(q => q.sourceKeyword === keyword)
     .map(q => q.question)
   
