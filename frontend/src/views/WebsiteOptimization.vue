@@ -294,6 +294,9 @@ import {
 } from '@element-plus/icons-vue'
 import { getData, saveData } from '../utils/storage'
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const WEBSITE_REPORTS_API = `${API_BASE_URL}/api/website-reports`
+
 const router = useRouter()
 import { analyzeWebsite } from '../utils/websiteAnalyzer'
 
@@ -465,6 +468,39 @@ const handleStartCheck = async (force = false) => {
   checking.value = false
   if (report.value) {
     syncToDashboard()
+    // 自动保存到后端
+    await autoSaveReport()
+  }
+}
+
+// 自动保存报告到后端
+const autoSaveReport = async () => {
+  if (!report.value) return
+  
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const reportData = {
+    url: report.value.url,
+    score: report.value.score,
+    items: JSON.stringify(report.value.items),
+    issues: JSON.stringify(report.value.issues),
+    details: JSON.stringify(report.value.details),
+    checkedAt: report.value.checkedAt
+  }
+  
+  try {
+    const res = await fetch(WEBSITE_REPORTS_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': userId
+      },
+      body: JSON.stringify(reportData)
+    })
+    if (res.ok) {
+      console.log('✅ 报告已自动保存到后端')
+    }
+  } catch (e) {
+    console.warn('自动保存失败:', e)
   }
 }
 
@@ -474,7 +510,7 @@ const handleNewCheck = () => {
   selectedHistory.value = []
 }
 
-const handleSaveReport = () => {
+const handleSaveReport = async () => {
   const allData = getData()
 
   // 保存到历史记录
@@ -491,6 +527,10 @@ const handleSaveReport = () => {
 
   saveData(allData)
   loadHistory()
+  
+  // 同时保存到后端
+  await autoSaveReport()
+  
   ElMessage.success({ message: '报告已保存', offset: 80 })
 }
 
@@ -541,7 +581,18 @@ const handleRecheck = async (url) => {
   await handleStartCheck(true) // 强制重新检测
 }
 
-const handleClearHistory = () => {
+const handleClearHistory = async () => {
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  // 同步删除后端全部记录
+  try {
+    await fetch(WEBSITE_REPORTS_API, {
+      method: 'DELETE',
+      headers: { 'x-user-id': userId }
+    })
+  } catch (e) {
+    console.warn('从后端删除失败:', e)
+  }
+  
   const allData = getData()
   allData['website-reports'] = []
   saveData(allData)
@@ -550,7 +601,30 @@ const handleClearHistory = () => {
   ElMessage.success({ message: '历史已清空', offset: 80 })
 }
 
-const loadHistory = () => {
+const loadHistory = async () => {
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  try {
+    const res = await fetch(WEBSITE_REPORTS_API, {
+      headers: { 'x-user-id': userId }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      // 转换后端数据格式
+      reportHistory.value = data.map(r => ({
+        id: r.id, // 后端返回的记录ID
+        url: r.url,
+        score: r.score,
+        items: JSON.parse(r.items || '{}'),
+        issues: JSON.parse(r.issues || '{"warn":[],"pass":[]}'),
+        details: JSON.parse(r.details || '[]'),
+        checkedAt: r.checkedAt
+      }))
+      return
+    }
+  } catch (e) {
+    console.warn('从后端加载历史失败:', e)
+  }
+  // 回退到 localStorage
   const allData = getData()
   reportHistory.value = allData['website-reports'] || []
 }
@@ -564,7 +638,22 @@ const toggleSelect = (idx) => {
   }
 }
 
-const handleBatchDelete = () => {
+const handleBatchDelete = async () => {
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  
+  // 从后端删除选中的记录
+  const idsToDelete = selectedHistory.value.map(i => reportHistory.value[i].id).filter(Boolean)
+  for (const id of idsToDelete) {
+    try {
+      await fetch(`${API_BASE_URL}/api/website_reports/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      })
+    } catch (e) {
+      console.warn('从后端删除失败:', e)
+    }
+  }
+  
   const allData = getData()
   const filtered = allData['website-reports'].filter((_, i) => !selectedHistory.value.includes(i))
   allData['website-reports'] = filtered
