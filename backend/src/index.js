@@ -235,6 +235,17 @@ tables.forEach(table => {
       res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
+  
+  // 新增：GET 单条记录
+  app.get(`${routePath}/:id`, async (req, res) => {
+    try {
+      await ensureTable(table);
+      const userId = getUserId(req);
+      const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [req.params.id, userId]);
+      if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+      res.json(toCamelCase(result.rows[0]));
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
 });
 
 // 健康检查
