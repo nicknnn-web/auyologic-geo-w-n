@@ -365,48 +365,63 @@ const buildEnterpriseContext = (searchKeywords = []) => {
 请基于以上企业信息生成问题，问题要符合该企业的业务范围。生成的问题中必须体现【核心业务词】和【搜索识别业务】中提到的业务。`
 }
 
-// 根据关键词类型生成对应的 prompt（加入企业上下文）
-const generatePrompt = (keyword, type, enterpriseContext) => {
+// 根据关键词类型生成对应的 prompt（加入企业上下文 + 去重 + 真实搜索行为）
+const generatePrompt = (keyword, type, enterpriseContext, existingQuestions = []) => {
+  // 构建已有问题约束
+  const existingConstraint = existingQuestions.length > 0 
+    ? `\n已有类似问题（请生成不同角度的，不要重复）：
+${existingQuestions.join('、')}`
+    : ''
+
+  // 真实用户搜索特点约束
+  const searchBehaviorConstraint = `
+\n\n真实用户搜索行为特点（必须遵守）：
+- 口语化、碎片化（如"xxx怎么样"、"xxx好用吗"）
+- 带情绪（如"xxx坑不坑"、"xxx值不值"）  
+- 决策导向（如"xxx和xxx哪个好"、"xxx推荐"）
+- 问题简短（不超过20字）
+- 禁止写成正式提问（如"请分析xxx的优缺点"）`
+
   const typePrompts = {
-    '品牌': `请基于以下企业背景，针对品牌"${keyword}"生成用户真实会搜索的问题。
-
-${enterpriseContext}
+    '品牌': `请基于以下企业背景，针对品牌"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
-- 问题要像真实用户写的，口语化
-- 3-5个问题，每个不超过25个字
-- 侧重品牌口碑、对比、推荐
+- 生成5个不同角度的问题
+- 每个不超过20字
+- 侧重：品牌口碑、对比推荐、用户体验
 直接输出问题列表，每行一个，不要编号。`,
 
-    '产品': `请基于以下企业背景，针对产品/服务"${keyword}"生成用户真实会搜索的问题。
-
-${enterpriseContext}
+    '产品': `请基于以下企业背景，针对产品/服务"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
-- 问题要像真实用户写的，口语化
-- 3-5个问题，每个不超过25个字
-- 侧重产品性能、选购建议、决策
+- 生成5个不同角度的问题
+- 每个不超过20字
+- 侧重：产品性能、选购决策、真实体验
 直接输出问题列表，每行一个，不要编号。`,
 
-    '场景': `请基于以下企业背景，针对使用场景"${keyword}"生成用户真实会搜索的问题。
-
-${enterpriseContext}
+    '场景': `请基于以下企业背景，针对使用场景"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
-- 问题要像真实用户写的，口语化
-- 3-5个问题，每个不超过25个字
-- 侧重使用场景、解决问题、用户需求
+- 生成5个不同角度的问题
+- 每个不超过20字
+- 侧重：场景需求、痛点解决、用户决策
 直接输出问题列表，每行一个，不要编号。`
   }
 
   return typePrompts[type] || typePrompts['产品']
 }
 
-// 调用 DeepSeek API 生成问题（加入企业上下文 + 搜索结果）
+// 调用 DeepSeek API 生成问题（加入企业上下文 + 搜索结果 + 去重）
 const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
+  // 获取该关键词已有的问题（用于去重）
+  const allQuestions = getList('questions')
+  const existingQuestions = allQuestions
+    .filter(q => q.sourceKeyword === keyword)
+    .map(q => q.question)
+  
   // 先读取企业信息，构建上下文
   const enterpriseContext = buildEnterpriseContext(searchKeywords)
-  const prompt = generatePrompt(keyword, type, enterpriseContext)
+  const prompt = generatePrompt(keyword, type, enterpriseContext, existingQuestions)
 
   const response = await fetch(DEEPSEEK_ENDPOINT, {
     method: 'POST',
