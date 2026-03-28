@@ -66,8 +66,8 @@
         </el-form-item>
       </div>
 
-      <!-- 高级配置：默认折叠 -->
-      <el-collapse class="mb-4">
+      <!-- 高级配置：默认展开 -->
+      <el-collapse class="mb-4" :model-value="['advanced']">
         <el-collapse-item title="高级配置（可选）" name="advanced">
           <el-form-item label="关联文档">
             <el-select 
