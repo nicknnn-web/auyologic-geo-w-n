@@ -35,13 +35,12 @@
           type="primary"
           size="large"
           class="wo-check-btn"
-          @click="handleStartCheck(forceCheck)"
+          @click="handleStartCheck(true)"
           :loading="checking"
           :disabled="!inputUrl.trim()"
         >
           {{ checking ? '检测中...' : '开始检测' }}
         </el-button>
-        <el-checkbox v-model="forceCheck" class="ml-2">强制重新检测</el-checkbox>
       </div>
 
       <!-- 检测维度说明 -->
@@ -315,7 +314,7 @@ const dimColors = {
 
 // ===== 状态 =====
 const inputUrl = ref('')
-const forceCheck = ref(false) // 强制重新检测
+
 const checking = ref(false)
 const report = ref(null)
 const activeIssueTab = ref('warn')
