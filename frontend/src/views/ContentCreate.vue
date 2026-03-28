@@ -14,119 +14,143 @@
     </div>
 
     <el-form :model="form" label-width="100px" class="mb-6">
-      <el-form-item label="选择关键词">
-        <el-select v-model="form.keyword" placeholder="请选择品牌/产品关键词" style="width: 300px;">
-          <el-option v-for="kw in keywords" :key="kw.id" :label="kw.keyword" :value="kw.keyword" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="目标受众">
-        <el-select v-model="form.audience" placeholder="请选择目标受众" style="width: 300px;">
-          <el-option label="职场白领" value="职场白领" />
-          <el-option label="年轻妈妈" value="年轻妈妈" />
-          <el-option label="学生群体" value="学生群体" />
-          <el-option label="科技爱好者" value="科技爱好者" />
-        </el-select>
-      </el-form-item>
-
-      <el-form-item label="投放平台">
-        <el-checkbox-group v-model="form.platforms" style="width: 500px;">
-          <el-checkbox label="微信公众号">微信公众号</el-checkbox>
-          <el-checkbox label="小红书">小红书</el-checkbox>
-          <el-checkbox label="知乎">知乎</el-checkbox>
-          <el-checkbox label="微博">微博</el-checkbox>
-        </el-checkbox-group>
-      </el-form-item>
-
-      <el-form-item label="指令模板">
-        <el-select v-model="form.command" placeholder="请选择指令模板" style="width: 400px;">
-          <el-option v-for="cmd in commands" :key="cmd.id" :label="cmd.name" :value="cmd.id" />
-        </el-select>
-      </el-form-item>
-
-      <!-- Step 2: 知识库文档集成 -->
-      <el-form-item label="关联文档">
-        <el-select 
-          v-model="form.selectedDocs" 
-          multiple 
-          placeholder="选择知识库文档(可多选)" 
-          style="width: 400px;"
-          collapse-tags
-          collapse-tags-tooltip
-        >
-          <!-- 选中后在输入框显示的标签 -->
-          <template #label="{ label }">
-            <div class="flex items-center gap-1">
-              <el-tag 
-                v-for="docId in form.selectedDocs" 
-                :key="docId"
-                :type="getDocAnalyzedType(docId)"
-                size="small"
-                effect="plain"
-              >
-                {{ getDocName(docId) }}
-              </el-tag>
-            </div>
-          </template>
-          <!-- 下拉选项 -->
-          <el-option 
-            v-for="doc in knowledgeDocs" 
-            :key="doc.docId" 
-            :label="doc.docName" 
-            :value="doc.docId"
+      <!-- ========== 快速场景快捷入口 ========== -->
+      <div class="mb-6">
+        <div class="text-sm text-gray-500 mb-3">💡 快速开始（点击自动填充配置）</div>
+        <div class="flex flex-wrap gap-3">
+          <div 
+            v-for="scene in quickScenes" 
+            :key="scene.id"
+            class="scene-card"
+            :class="{ 'scene-card-active': activeScene === scene.id }"
+            @click="applyScene(scene)"
           >
-            <div class="flex items-center justify-between w-full">
-              <span>{{ doc.docName }}</span>
-              <el-tag 
-                v-if="doc.analyzedAt" 
-                type="success" 
-                size="small" 
-                effect="plain"
-              >
-                已分析
-              </el-tag>
-              <el-tag 
-                v-else 
-                type="warning" 
-                size="small" 
-                effect="plain"
-              >
-                待分析
-              </el-tag>
-            </div>
-          </el-option>
-        </el-select>
-        <span class="ml-2 text-sm text-gray-500">已选 {{ form.selectedDocs?.length || 0 }} 篇</span>
-      </el-form-item>
+            <div class="text-lg mb-1">{{ scene.icon }}</div>
+            <div class="font-medium text-sm">{{ scene.name }}</div>
+            <div class="text-xs text-gray-400">{{ scene.desc }}</div>
+          </div>
+        </div>
+      </div>
 
-      <!-- Step 3: 图库集成 -->
-      <el-form-item label="选择配图">
-        <el-select 
-          v-model="form.selectedImages" 
-          multiple 
-          placeholder="选择配图(可多选)" 
-          style="width: 400px;"
-          collapse-tags
-          collapse-tags-tooltip
-        >
-          <el-option 
-            v-for="img in images" 
-            :key="img.id" 
-            :label="img.name || '图片 ' + img.id" 
-            :value="img.url" 
-          >
-            <div class="flex items-center">
-              <img :src="img.url" class="w-8 h-8 object-cover mr-2 rounded" />
-              <span>{{ img.name || '图片 ' + img.id }}</span>
-            </div>
-          </el-option>
-        </el-select>
-        <span class="ml-2 text-sm text-gray-500">已选 {{ form.selectedImages?.length || 0 }} 张</span>
-      </el-form-item>
+      <!-- 基础配置：默认展开 -->
+      <div class="bg-gray-50 rounded-lg p-4 mb-4">
+        <div class="text-sm font-medium text-gray-600 mb-3">📝 基础配置</div>
+        
+        <el-form-item label="选择关键词">
+          <el-select v-model="form.keyword" placeholder="请选择品牌/产品关键词" style="width: 300px;" @change="onKeywordChange">
+            <el-option v-for="kw in keywords" :key="kw.id" :label="kw.keyword" :value="kw.keyword" />
+          </el-select>
+        </el-form-item>
 
-      <el-form-item label="补充说明">
-        <el-input v-model="form.extra" type="textarea" :rows="3" placeholder="额外要求" style="width: 500px;" />
-      </el-form-item>
+        <el-form-item label="内容类型">
+          <el-select v-model="form.command" placeholder="请选择内容类型" style="width: 300px;" @change="onCommandChange">
+            <el-option v-for="cmd in commands" :key="cmd.id" :label="cmd.name" :value="cmd.id" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="目标受众">
+          <el-select v-model="form.audience" placeholder="请选择目标受众" style="width: 300px;">
+            <el-option label="职场白领" value="职场白领" />
+            <el-option label="年轻妈妈" value="年轻妈妈" />
+            <el-option label="学生群体" value="学生群体" />
+            <el-option label="科技爱好者" value="科技爱好者" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="投放平台">
+          <el-checkbox-group v-model="form.platforms" style="width: 500px;">
+            <el-checkbox label="微信公众号">微信公众号</el-checkbox>
+            <el-checkbox label="小红书">小红书</el-checkbox>
+            <el-checkbox label="知乎">知乎</el-checkbox>
+            <el-checkbox label="微博">微博</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+      </div>
+
+      <!-- 高级配置：默认折叠 -->
+      <el-collapse class="mb-4">
+        <el-collapse-item title="⚙️ 高级配置（可选）" name="advanced">
+          <el-form-item label="关联文档">
+            <el-select 
+              v-model="form.selectedDocs" 
+              multiple 
+              placeholder="选择知识库文档(可多选)" 
+              style="width: 400px;"
+              collapse-tags
+              collapse-tags-tooltip
+            >
+              <template #label="{ label }">
+                <div class="flex items-center gap-1">
+                  <el-tag 
+                    v-for="docId in form.selectedDocs" 
+                    :key="docId"
+                    :type="getDocAnalyzedType(docId)"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ getDocName(docId) }}
+                  </el-tag>
+                </div>
+              </template>
+              <el-option 
+                v-for="doc in knowledgeDocs" 
+                :key="doc.docId" 
+                :label="doc.docName" 
+                :value="doc.docId"
+              >
+                <div class="flex items-center justify-between w-full">
+                  <span>{{ doc.docName }}</span>
+                  <el-tag 
+                    v-if="doc.analyzedAt" 
+                    type="success" 
+                    size="small" 
+                    effect="plain"
+                  >
+                    已分析
+                  </el-tag>
+                  <el-tag 
+                    v-else 
+                    type="warning" 
+                    size="small" 
+                    effect="plain"
+                  >
+                    待分析
+                  </el-tag>
+                </div>
+              </el-option>
+            </el-select>
+            <span class="ml-2 text-sm text-gray-500">已选 {{ form.selectedDocs?.length || 0 }} 篇</span>
+          </el-form-item>
+
+          <el-form-item label="选择配图">
+            <el-select 
+              v-model="form.selectedImages" 
+              multiple 
+              placeholder="选择配图(可多选)" 
+              style="width: 400px;"
+              collapse-tags
+              collapse-tags-tooltip
+            >
+              <el-option 
+                v-for="img in images" 
+                :key="img.id" 
+                :label="img.name || '图片 ' + img.id" 
+                :value="img.url"
+              >
+                <div class="flex items-center">
+                  <img :src="img.url" class="w-8 h-8 object-cover mr-2 rounded" />
+                  <span>{{ img.name || '图片 ' + img.id }}</span>
+                </div>
+              </el-option>
+            </el-select>
+            <span class="ml-2 text-sm text-gray-500">已选 {{ form.selectedImages?.length || 0 }} 张</span>
+          </el-form-item>
+
+          <el-form-item label="补充说明">
+            <el-input v-model="form.extra" type="textarea" :rows="3" placeholder="额外要求，如：重点突出性价比、语气要轻松活泼" style="width: 500px;" />
+          </el-form-item>
+        </el-collapse-item>
+      </el-collapse>
 
       <!-- Step 5: UI/UX 打磨 - 进度条 -->
       <el-form-item v-if="isGenerating">
@@ -137,14 +161,12 @@
       </el-form-item>
 
       <el-form-item>
-        <el-button type="primary" @click="handleGenerate" :loading="isGenerating">
-          {{ isGenerating ? '生成中...' : '开始生成' }}
+        <el-button type="primary" @click="handleGenerate" :loading="isGenerating" size="large">
+          {{ isGenerating ? '生成中...' : '🚀 开始生成' }}
         </el-button>
-        <el-button @click="togglePromptPreview" :disabled="!form.keyword || !form.command">
-          {{ showPromptPreview ? '隐藏预览' : '预览 prompt' }}
+        <el-button @click="togglePromptPreview" :disabled="!form.keyword || !form.command" size="default">
+          {{ showPromptPreview ? '隐藏预览' : '🔍 预览 prompt' }}
         </el-button>
-        <el-button @click="handleSaveDraft" :disabled="!generatedContent">保存草稿</el-button>
-        <el-button @click="handleSaveAsNew" :disabled="!generatedContent" type="warning">另存为新</el-button>
       </el-form-item>
 
       <!-- 预览 prompt 面板 -->
@@ -161,13 +183,65 @@
       </el-form-item>
     </el-form>
 
+    <!-- ========== 生成结果区（原地编辑，不跳转）========== -->
+    <div v-if="generatedContent" class="border border-purple-200 rounded-lg p-4 mb-4 bg-gradient-to-br from-purple-50 to-white">
+      <div class="flex items-center justify-between mb-3">
+        <div class="flex items-center gap-3">
+          <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-700">
+            ✨ 生成完成
+          </span>
+          <span class="text-sm text-gray-500">可在此处直接编辑</span>
+        </div>
+        <div class="flex gap-2">
+          <el-button size="small" @click="copyContent" type="primary" plain>
+            <el-icon class="mr-1"><CopyDocument /></el-icon>复制
+          </el-button>
+          <el-button size="small" @click="handleSaveDraft" type="success" plain>
+            <el-icon class="mr-1"><Folder /></el-icon>保存草稿
+          </el-button>
+          <el-button size="small" @click="handleSaveAsNew" type="warning" plain>
+            <el-icon class="mr-1"><DocumentCopy /></el-icon>另存为新
+          </el-button>
+        </div>
+      </div>
+
+      <!-- Step 5: 质量预估标签 -->
+      <div class="flex gap-2 mb-3">
+        <el-tag type="success" effect="plain" size="small">原创度: {{ qualityScores.originality }}%</el-tag>
+        <el-tag type="warning" effect="plain" size="small">GEO评分: {{ qualityScores.geoScore }}</el-tag>
+        <el-tag type="info" effect="plain" size="small">E-E-A-T: {{ qualityScores.eeat }}</el-tag>
+      </div>
+      
+      <div v-if="generatedTitle" class="text-lg font-bold text-purple-600 mb-3">{{ generatedTitle }}</div>
+      
+      <!-- Step 3: 图库集成 - 展示配图 -->
+      <div v-if="form.selectedImages?.length" class="mb-4">
+        <div class="text-sm text-gray-500 mb-2">配图预览：</div>
+        <div class="flex flex-wrap gap-2">
+          <img 
+            v-for="(imgUrl, idx) in form.selectedImages" 
+            :key="idx"
+            :src="imgUrl" 
+            class="w-32 h-32 object-cover rounded-lg border"
+          />
+        </div>
+      </div>
+      
+      <textarea
+        v-model="generatedContent"
+        class="text-gray-700 w-full border rounded-lg p-3 outline-none focus:ring-2 focus:ring-purple-300 focus:border-purple-400"
+        style="min-height: 300px; font-family: inherit; white-space: pre-wrap; resize: vertical;"
+        placeholder="在这里直接编辑生成的内容..."
+      ></textarea>
+    </div>
+
     <!-- 生成历史记录面板 -->
     <el-collapse v-if="generateHistory.length > 0" class="mb-4">
       <el-collapse-item name="history">
         <template #title>
           <div class="flex items-center">
             <el-icon class="mr-2"><Clock /></el-icon>
-            <span>生成历史 ({{ generateHistory.length }})</span>
+            <span>📜 生成历史 ({{ generateHistory.length }})</span>
           </div>
         </template>
         <div class="space-y-2">
@@ -199,51 +273,7 @@
       </el-collapse-item>
     </el-collapse>
 
-    <!-- Step 5: UI/UX 打磨 - 质量预估标签 -->
-    <div v-if="generatedContent" class="border rounded-lg p-4">
-      <div class="flex items-center justify-between mb-2">
-        <div class="font-bold">生成结果</div>
-        <!-- Step 5: 质量预估标签 -->
-        <div class="flex gap-2">
-          <el-tag type="success" effect="plain">原创度: {{ qualityScores.originality }}%</el-tag>
-          <el-tag type="warning" effect="plain">GEO评分: {{ qualityScores.geoScore }}</el-tag>
-          <el-tag type="info" effect="plain">E-E-A-T: {{ qualityScores.eeat }}</el-tag>
-        </div>
-      </div>
-      
-      <div v-if="generatedTitle" class="text-lg font-bold text-purple-600 mb-3">{{ generatedTitle }}</div>
-      
-      <!-- Step 3: 图库集成 - 展示配图 -->
-      <div v-if="form.selectedImages?.length" class="mb-4">
-        <div class="text-sm text-gray-500 mb-2">配图预览：</div>
-        <div class="flex flex-wrap gap-2">
-          <img 
-            v-for="(imgUrl, idx) in form.selectedImages" 
-            :key="idx"
-            :src="imgUrl" 
-            class="w-32 h-32 object-cover rounded-lg border"
-          />
-        </div>
-      </div>
-      
-      <!-- Step 5: 段落级编辑按钮 -->
-      <div class="mb-3">
-        <el-button size="small" @click="copyContent" type="primary" plain>
-          <el-icon class="mr-1"><CopyDocument /></el-icon>复制全文
-        </el-button>
-        <el-button size="small" @click="regenerateParagraph" type="warning" plain>
-          <el-icon class="mr-1"><Refresh /></el-icon>重写段落
-        </el-button>
-      </div>
-      
-      <textarea
-        v-model="generatedContent"
-        class="text-gray-700 w-full border rounded-lg p-3 outline-none focus:border-purple-400"
-        style="min-height: 300px; font-family: inherit; white-space: pre-wrap; resize: vertical;"
-      ></textarea>
-    </div>
-
-    <el-empty v-else description="填写上方表单开始AI创作" />
+    <el-empty v-else-if="!isGenerating" description="💡 选择关键词和内容类型，点击开始生成" />
   </div>
 </template>
 
@@ -253,7 +283,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getList, addItem, saveList } from '../utils/storage'
 import { knowledgeAPI, historyAPI } from '../utils/api'
-import { Folder, CopyDocument, Refresh, Clock } from '@element-plus/icons-vue'
+import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 
 // ========== DeepSeek API 配置 ==========
 const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
@@ -277,6 +307,68 @@ const generatedTitle = ref('')
 const isGenerating = ref(false)
 const keywords = ref([])
 const commands = ref([])
+const activeScene = ref(null)
+
+// ========== 快速场景快捷入口 ==========
+const quickScenes = [
+  { 
+    id: 'xhs', 
+    name: '小红书种草', 
+    icon: '📕',
+    desc: '短平快，真实感',
+    platforms: ['小红书'],
+    commandHint: '选择种草型模板'
+  },
+  { 
+    id: 'wxgzh', 
+    name: '公众号推文', 
+    icon: '📰',
+    desc: '深度内容，干货足',
+    platforms: ['微信公众号'],
+    commandHint: '选择深度分析型模板'
+  },
+  { 
+    id: 'zh', 
+    name: '知乎问答', 
+    icon: '💬',
+    desc: '专业有料，有观点',
+    platforms: ['知乎'],
+    commandHint: '选择知识科普型模板'
+  },
+  { 
+    id: 'pc', 
+    name: '产品评测', 
+    icon: '🔬',
+    desc: '客观全面，数据驱动',
+    platforms: ['微信公众号', '知乎'],
+    commandHint: '选择评测对比型模板'
+  },
+  { 
+    id: 'gg', 
+    name: '品牌软文', 
+    icon: '📝',
+    desc: '润物无声，情怀足',
+    platforms: ['微信公众号', '微博'],
+    commandHint: '选择品牌故事型模板'
+  }
+]
+
+// 应用快速场景配置
+const applyScene = (scene) => {
+  activeScene.value = scene.id
+  form.value.platforms = scene.platforms
+  ElMessage.success(`已应用「${scene.name}」场景配置：${scene.platforms.join('+')}`)
+}
+
+// 关键词变化时清除场景选中状态
+const onKeywordChange = () => {
+  activeScene.value = null
+}
+
+// 内容类型变化时清除场景选中状态
+const onCommandChange = () => {
+  activeScene.value = null
+}
 
 // ========== 预览 prompt 功能 ==========
 const showPromptPreview = ref(false)
@@ -1168,10 +1260,10 @@ const handleSaveDraft = async () => {
         ...draftData,
         createdAt: new Date().toLocaleString('zh-CN')
       })
-      ElMessage.success('已保存到草稿箱')
+      ElMessage.success('💾 已保存到草稿箱（不跳转，可继续编辑）')
     }
   }
-  router.push('/drafts')
+  // 不再跳转，原地继续编辑
 }
 
 const handleSaveAsNew = async () => {
@@ -1212,8 +1304,38 @@ const handleSaveAsNew = async () => {
     })
   }
   
-  ElMessage.success('已另存为新草稿')
+  ElMessage.success('💾 已另存为新草稿（不跳转，可继续编辑）')
   form.value.editId = null
-  router.push('/drafts')
+  // 不再跳转，原地继续编辑
 }
 </script>
+
+<style scoped>
+/* 快速场景卡片样式 */
+.scene-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 20px;
+  min-width: 100px;
+  background: white;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.scene-card:hover {
+  border-color: #8b5cf6;
+  background: #f5f3ff;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.15);
+}
+
+.scene-card-active {
+  border-color: #8b5cf6;
+  background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
+}
+</style>
