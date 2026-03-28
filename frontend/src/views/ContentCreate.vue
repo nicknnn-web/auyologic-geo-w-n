@@ -16,7 +16,7 @@
     <el-form :model="form" label-width="100px" class="mb-6">
       <!-- ========== 快速场景快捷入口 ========== -->
       <div class="mb-6">
-        <div class="text-sm text-gray-500 mb-3">💡 快速开始（点击自动填充配置）</div>
+        <div class="text-sm text-gray-500 mb-3">快速开始（点击自动填充配置）</div>
         <div class="flex flex-wrap gap-3">
           <div 
             v-for="scene in quickScenes" 
@@ -25,7 +25,6 @@
             :class="{ 'scene-card-active': activeScene === scene.id }"
             @click="applyScene(scene)"
           >
-            <div class="text-lg mb-1">{{ scene.icon }}</div>
             <div class="font-medium text-sm">{{ scene.name }}</div>
             <div class="text-xs text-gray-400">{{ scene.desc }}</div>
           </div>
@@ -314,7 +313,6 @@ const quickScenes = [
   { 
     id: 'xhs', 
     name: '小红书种草', 
-    icon: '📕',
     desc: '短平快，真实感',
     platforms: ['小红书'],
     commandHint: '选择种草型模板'
@@ -322,7 +320,6 @@ const quickScenes = [
   { 
     id: 'wxgzh', 
     name: '公众号推文', 
-    icon: '📰',
     desc: '深度内容，干货足',
     platforms: ['微信公众号'],
     commandHint: '选择深度分析型模板'
@@ -330,7 +327,6 @@ const quickScenes = [
   { 
     id: 'zh', 
     name: '知乎问答', 
-    icon: '💬',
     desc: '专业有料，有观点',
     platforms: ['知乎'],
     commandHint: '选择知识科普型模板'
@@ -338,7 +334,6 @@ const quickScenes = [
   { 
     id: 'pc', 
     name: '产品评测', 
-    icon: '🔬',
     desc: '客观全面，数据驱动',
     platforms: ['微信公众号', '知乎'],
     commandHint: '选择评测对比型模板'
@@ -346,7 +341,6 @@ const quickScenes = [
   { 
     id: 'gg', 
     name: '品牌软文', 
-    icon: '📝',
     desc: '润物无声，情怀足',
     platforms: ['微信公众号', '微博'],
     commandHint: '选择品牌故事型模板'
