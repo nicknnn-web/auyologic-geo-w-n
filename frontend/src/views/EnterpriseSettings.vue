@@ -603,6 +603,53 @@ const buildProductDecisionKeywords = (name, industry, productWords, categoryWord
   return [...keywords]
 }
 
+// 构建企业关键词（针对公司/企业名类型的关键词）
+// 侧重：公司口碑、行业评价、实力对比、专业程度
+const buildEnterpriseKeywords = (name, industry, searchKeywords = []) => {
+  const keywords = new Set()
+  
+  // 1. 公司名本身可能是搜索词（如"XX科技怎么样"）
+  if (name && name.length >= 2) {
+    // 不直接添加公司名，让AI生成问题时自然融入
+  }
+  
+  // 2. 行业词（用户会搜索"XX行业哪家好"）
+  if (industry && industry.length >= 2) {
+    keywords.add(`${industry}公司`)
+    keywords.add(`${industry}行业`)
+    if (industry.length <= 4) {
+      keywords.add(industry)
+    }
+  }
+  
+  // 3. 企业口碑相关词
+  const repWords = ['口碑', '评价', '怎么样', '靠谱吗', '正规吗', '实力']
+  repWords.forEach(w => {
+    if (name && name.length >= 2 && name.length <= 6) {
+      keywords.add(`${name}${w}`)
+    }
+  })
+  
+  // 4. 对比相关词
+  if (name && name.length >= 2) {
+    keywords.add(`${name}对比`)
+    keywords.add(`${name}哪家强`)
+  }
+  
+  // 5. 专业程度词
+  const proWords = ['专业', '排名', '排行榜', 'top']
+  proWords.forEach(w => {
+    if (name && name.length >= 2 && name.length <= 6) {
+      keywords.add(`${name}${w}`)
+    }
+    if (industry && industry.length >= 2) {
+      keywords.add(`${industry}${w}`)
+    }
+  })
+  
+  return [...keywords].filter(k => k.length >= 2 && k.length <= 10)
+}
+
 // 从企业描述中提取核心业务词（包含专业术语如GEO、SEO等）
 // 这些词直接来自企业对自己的描述，必须纳入关键词生成范围
 const extractCoreBusinessWords = (description) => {
@@ -754,6 +801,7 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
   const brandKeywords = buildBrandKeywords(name, industry, categoryWords, coreBusinessWords, searchKeywords)
   const scenarioKeywords = buildScenarioKeywords(name, industry, scenarioWords, extractedWords, coreBusinessWords, searchKeywords)
   const productDecisionKeywords = buildProductDecisionKeywords(name, industry, productDecisionWords, categoryWords, coreBusinessWords, searchKeywords)
+  const enterpriseKeywords = buildEnterpriseKeywords(name, industry, searchKeywords)
   
   // 构建返回格式（每类独立去重，不再跨类去重）
   const makeGroup = (keywords, type) => ({
@@ -765,7 +813,8 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
   return [
     makeGroup(brandKeywords, '品牌核心词'),
     makeGroup(scenarioKeywords, '场景需求词'),
-    makeGroup(productDecisionKeywords, '产品决策词')
+    makeGroup(productDecisionKeywords, '产品决策词'),
+    makeGroup(enterpriseKeywords, '企业词')
   ]
 }
 
@@ -858,7 +907,8 @@ const confirmKeywords = async () => {
   const typeMap = {
     '品牌核心词': '品牌',
     '场景需求词': '场景',
-    '产品决策词': '产品'
+    '产品决策词': '产品',
+    '企业词': '企业'
   }
   
   let count = 0
