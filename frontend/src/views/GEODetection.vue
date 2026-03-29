@@ -1110,10 +1110,26 @@ const removeCustomKeyword = (kw) => {
   saveCustomKeywords()
 }
 
-const saveCustomKeywords = () => {
+const saveCustomKeywords = async () => {
   const allData = getData()
   allData['geo-custom-keywords'] = customKeywords.value
   saveData(allData)
+  
+  // 同时保存到后端数据库
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  try {
+    await fetch(`${import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'}/api/keywords`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      body: JSON.stringify({
+        keyword: customKeywords.value[customKeywords.value.length - 1] || '',
+        type: '品牌',
+        source: 'geo手动添加'
+      })
+    })
+  } catch (e) {
+    console.warn('保存关键词到后端失败:', e)
+  }
 }
 
 const filteredQuestions = computed(() => {
