@@ -488,16 +488,42 @@ const autoSaveReport = async () => {
   }
   
   try {
-    const res = await fetch(WEBSITE_REPORTS_API, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': userId
-      },
-      body: JSON.stringify(reportData)
+    // 先检查是否已存在相同 URL 的记录
+    const checkRes = await fetch(WEBSITE_REPORTS_API, {
+      headers: { 'x-user-id': userId }
     })
+    let existingId = null
+    if (checkRes.ok) {
+      const existingReports = await checkRes.json()
+      const existing = existingReports.find(r => r.url === report.value.url)
+      existingId = existing?.id
+    }
+    
+    let res
+    if (existingId) {
+      // 存在则更新
+      res = await fetch(`${WEBSITE_REPORTS_API}/${existingId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId
+        },
+        body: JSON.stringify(reportData)
+      })
+    } else {
+      // 不存在则新增
+      res = await fetch(WEBSITE_REPORTS_API, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId
+        },
+        body: JSON.stringify(reportData)
+      })
+    }
+    
     if (res.ok) {
-      console.log('✅ 报告已自动保存到后端')
+      console.log('✅ 报告已保存到后端')
     }
   } catch (e) {
     console.warn('自动保存失败:', e)

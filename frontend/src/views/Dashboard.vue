@@ -242,9 +242,12 @@ import {
   Monitor, Search, EditPen, Promotion, ArrowRight,
   ChatDotRound, Document, Histogram, Link
 } from '@element-plus/icons-vue'
-import { getData } from '../utils/storage'
+import { getData, saveData } from '../utils/storage'
 
 const router = useRouter()
+
+// 后端 API 地址
+const API_BASE_URL = 'https://auyologic.zeabur.app'
 
 // ===== 网站健康度 =====
 const siteScore = ref('--')
@@ -320,13 +323,37 @@ const formatHistoryDate = (dateStr) => {
 }
 
 // ===== 初始化 =====
-onMounted(() => {
+onMounted(async () => {
   const allData = getData()
 
-  // 网站健康度
+  // 网站健康度 - 优先从本地存储读取，其次从后端 API 获取
   if (allData['dashboard-site-score']) {
     siteScore.value = allData['dashboard-site-score'].score
     siteUrl.value = allData['dashboard-site-score'].url
+  }
+  
+  // 尝试从后端获取最新的网站报告
+  try {
+    const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+    const res = await fetch(`${API_BASE_URL}/api/website-reports?user_id=${userId}`)
+    if (res.ok) {
+      const reports = await res.json()
+      if (reports && reports.length > 0) {
+        // 取最新的报告
+        const latestReport = reports[0]
+        siteScore.value = latestReport.score
+        siteUrl.value = latestReport.url
+        // 同时保存到本地存储
+        allData['dashboard-site-score'] = {
+          score: latestReport.score,
+          url: latestReport.url,
+          updatedAt: latestReport.checkedAt
+        }
+        saveData(allData) // 保存到本地存储
+      }
+    }
+  } catch (e) {
+    console.warn('获取网站报告失败:', e)
   }
 
   // 关键词

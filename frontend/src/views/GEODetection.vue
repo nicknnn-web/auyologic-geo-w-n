@@ -85,7 +85,7 @@
               <el-button v-if="selectedQuestions.length > 0" size="small" class="w-full mt-2" @click="clearAllQuestions">清空全部</el-button>
             </div>
             <div class="keyword-panel">
-              <div class="panel-header"><span class="panel-title">品牌关键词</span><div class="flex gap-1"><el-button size="small" text @click="selectAllKeywords">全选</el-button><el-button size="small" text @click="clearAllKeywords">清空</el-button></div></div>
+              <div class="panel-header"><span class="panel-title">命中关键词</span><div class="flex gap-1"><el-button size="small" text @click="selectAllKeywords">全选</el-button><el-button size="small" text @click="clearAllKeywords">清空</el-button></div></div>
               <div class="keyword-hint">已从关键词管理页面加载，点击选择要检测的关键词</div>
               <el-input v-model="newKeyword" placeholder="手动添加关键词..." size="small" class="mb-3" @keyup.enter="addKeyword"><template #append><el-button @click="addKeyword">添加</el-button></template></el-input>
               <div class="keyword-chips">
@@ -131,7 +131,7 @@
         <div class="confirm-cards">
           <div class="confirm-card"><div class="confirm-card-header"><el-icon><ChatDotRound /></el-icon>检测问题 ({{ selectedQuestions.length }})</div><div class="confirm-card-body"><div v-for="q in selectedQuestions.slice(0,5)" :key="q.id" class="confirm-line">{{ q.text }}</div><div v-if="selectedQuestions.length > 5" class="confirm-more">还有 {{ selectedQuestions.length - 5 }} 个问题...</div></div></div>
           <div class="confirm-card"><div class="confirm-card-header"><el-icon><Monitor /></el-icon>检测平台 ({{ selectedPlatforms.length }})</div><div class="confirm-card-body"><div class="flex flex-wrap gap-2"><el-tag v-for="p in selectedPlatforms" :key="p.id" type="success">{{ p.icon }} {{ p.name }}</el-tag></div></div></div>
-          <div class="confirm-card"><div class="confirm-card-header"><el-icon><Collection /></el-icon>品牌关键词 ({{ selectedKeywords.length }})</div><div class="confirm-card-body"><div class="flex flex-wrap gap-2"><el-tag v-for="kw in selectedKeywords" :key="kw">{{ kw }}</el-tag></div></div></div>
+          <div class="confirm-card"><div class="confirm-card-header"><el-icon><Collection /></el-icon>命中关键词 ({{ selectedKeywords.length }})</div><div class="confirm-card-body"><div class="flex flex-wrap gap-2"><el-tag v-for="kw in selectedKeywords" :key="kw">{{ kw }}</el-tag></div></div></div>
         </div>
         <div class="confirm-summary"><div class="summary-row"><span class="summary-label">检测组合</span><span class="summary-value">{{ selectedQuestions.length }} × {{ selectedPlatforms.length }} = {{ selectedQuestions.length * selectedPlatforms.length }} 次</span></div><div class="summary-row"><span class="summary-label">预计耗时</span><span class="summary-value">约 {{ Math.ceil(selectedQuestions.length * selectedPlatforms.length * 0.5) }} 分钟</span></div></div>
         <div class="step-footer">
@@ -1489,7 +1489,7 @@ const getCategoryColor = (cat) => {
   return map[cat] || 'info'
 }
 
-onMounted(() => {
+onMounted(async () => {
   // 加载历史记录
   loadHistory()
 
@@ -1499,17 +1499,40 @@ onMounted(() => {
     handleHistoryCardClick(historyId)
   }
 
+  // 从后端 API 加载关键词（优先）
+  await loadKeywordsFromAPI()
+  
   // 从后端 API 加载已审核的问题
   loadQuestionsFromAPI()
   
-  const rawKeywords = getList('keywords')
+  // 补充本地自定义关键词
   const storedCustomKws = getData()['geo-custom-keywords'] || []
-  const managedKws = rawKeywords.map(k => k.keyword || k)
-  // 去掉已删除的管理词（防止管理页删了但GEO页还有旧缓存）
+  const managedKws = keywords.value
   const validCustomKws = storedCustomKws.filter(kw => !managedKws.includes(kw))
   customKeywords.value = validCustomKws
   keywords.value = [...managedKws, ...validCustomKws]
 })
+
+// 从后端 API 加载关键词
+const loadKeywordsFromAPI = async () => {
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/keywords`, {
+      headers: { 'x-user-id': userId }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      // 提取关键词
+      keywords.value = data.map(k => k.keyword || k.keyword || '')
+      keywords.value = keywords.value.filter(k => k) // 过滤空值
+    }
+  } catch (e) {
+    console.warn('从后端加载关键词失败:', e)
+    // 回退到本地存储
+    const rawKeywords = getList('keywords')
+    keywords.value = rawKeywords.map(k => k.keyword || k)
+  }
+}
 
 // 从后端 API 加载问题
 const loadQuestionsFromAPI = async () => {
