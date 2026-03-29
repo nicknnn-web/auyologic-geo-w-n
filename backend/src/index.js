@@ -8,8 +8,10 @@ const { Pool } = pg;
 const app = express();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// 构建版本
-const BUILD_VERSION = 'v2026032801';
+// 设置默认时区为中国时区
+process.env.TZ = 'Asia/Shanghai';
+
+const BUILD_VERSION = 'v2026032901';
 
 // 初始化数据库表
 initDB().catch(console.error);

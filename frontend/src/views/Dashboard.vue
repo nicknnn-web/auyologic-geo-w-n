@@ -319,7 +319,9 @@ const geoHistory = ref([])
 const formatHistoryDate = (dateStr) => {
   if (!dateStr) return ''
   const d = new Date(dateStr)
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`
+  // 转换为北京时间 (UTC+8)
+  const beijingTime = new Date(d.getTime() + (8 * 60 * 60 * 1000))
+  return `${beijingTime.getMonth() + 1}/${beijingTime.getDate()} ${beijingTime.getHours().toString().padStart(2, '0')}:${beijingTime.getMinutes().toString().padStart(2, '0')}`
 }
 
 // ===== 初始化 =====

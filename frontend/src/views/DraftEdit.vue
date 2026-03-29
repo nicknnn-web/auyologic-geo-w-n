@@ -251,7 +251,7 @@ onBeforeUnmount(() => {
 
 const formatDate = (dateStr) => {
   if (!dateStr) return '-'
-  return new Date(dateStr).toLocaleString('zh-CN')
+  return new Date(dateStr).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
 }
 
 const handleSave = async () => {

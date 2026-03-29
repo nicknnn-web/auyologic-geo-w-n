@@ -935,7 +935,7 @@ const confirmKeywords = async () => {
       addItem('keywords', {
         keyword: kw.text,
         type: keywordType,
-        createdAt: new Date().toLocaleString()
+        createdAt: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
       })
       count++
     }
