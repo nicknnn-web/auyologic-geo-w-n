@@ -463,82 +463,20 @@ const INDUSTRY_KEYWORDS = {
 // 从文本中提取有效关键词（排除停用词）
 const extractKeywords = (text) => {
   if (!text) return []
-
+  
   // 提取2-4个字符的中文词
   const matches = text.match(/[\u4e00-\u9fa5]{2,4}/g) || []
-
+  
   // 过滤停用词和重复
   const filtered = matches.filter(w => !STOP_WORDS.has(w))
   return [...new Set(filtered)]
 }
 
-// ===== 新增：从目标受众提取关键词 =====
-// 目标受众：年龄、职业、需求痛点、消费习惯
-const extractAudienceKeywords = (audience) => {
-  if (!audience) return []
-
-  const audienceKeywords = []
-
-  // 从受众描述中提取人群特征词
-  const audiencePatterns = {
-    // 人群
-    '人群': ['学生', '大学生', '研究生', '考研', '留学', '少儿', 'K12', '家长', '白领', '职场人', '创业者', '老板', '管理层', '技术', '销售', '教师', '医生', '设计师', '程序员'],
-    // 痛点
-    '痛点': ['焦虑', '迷茫', '困惑', '压力', '低效', '困难', '问题', '瓶颈', '难', '贵', '麻烦'],
-    // 需求
-    '需求': ['提升', '学习', '培训', '考证', '就业', '跳槽', '加薪', '晋升', '转型', '副业', '创业', '赚钱', '效率', '便捷', '省时'],
-    // 场景
-    '场景': ['职场', '求职', '面试', '晋升', '加薪', '学习', '备考', '考研', '留学', '留学', '出国', '职场', '工作', '生活', '家庭', '育儿']
-  }
-
-  // 匹配人群词
-  const upperAudience = audience.toUpperCase()
-  Object.values(audiencePatterns).flat().forEach(keyword => {
-    if (upperAudience.includes(keyword.toUpperCase())) {
-      audienceKeywords.push(keyword)
-    }
-  })
-
-  // 提取2-4字的有效词
-  const matches = audience.match(/[\u4e00-\u9fa5]{2,4}/g) || []
-  matches.forEach(w => {
-    if (!STOP_WORDS.has(w) && w.length >= 2) {
-      audienceKeywords.push(w)
-    }
-  })
-
-  return [...new Set(audienceKeywords)]
-}
-
-// ===== 新增：从官网提取关键词 =====
-// 从网站URL或域名中提取品牌/产品相关词
-const extractWebsiteKeywords = (website) => {
-  if (!website) return []
-
-  const keywords = []
-
-  // 移除常见域名后缀
-  const cleanUrl = website
-    .replace(/^(https?:\/\/)?(www\.)?/, '')
-    .replace(/\.(com|cn|org|net|io|co|ai|cc|me|us|uk|ru|jp|kr|fr|de|es|it|nl|br|au|in|sg|hk|tw)/gi, '')
-    .replace(/\//g, '')
-
-  // 提取有意义的词
-  const parts = cleanUrl.split(/[.-]/).filter(p => p.length >= 2 && p.length <= 10)
-  parts.forEach(p => {
-    if (!STOP_WORDS.has(p) && !/^\d+$/.test(p)) {
-      keywords.push(p)
-    }
-  })
-
-  return [...new Set(keywords)]
-}
-
 // 构建品牌核心词（关键词：品牌名 + 品类核心词 + 品牌相关词）
 // 侧重：用户搜索品牌时用的词
-const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [], searchKeywords = [], websiteKeywords = []) => {
+const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [], searchKeywords = []) => {
   const keywords = new Set()
-
+  
   // 1. 品牌名本身就是核心词（2-6字）
   if (name && name.length >= 2) {
     keywords.add(name)
@@ -546,7 +484,7 @@ const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [
       keywords.add(name.slice(0, Math.min(4, name.length)))
     }
   }
-
+  
   // 2. 品类核心词（只取前3个，避免太泛）
   if (categoryWords && categoryWords.length > 0) {
     categoryWords.slice(0, 3).forEach(cat => {
@@ -555,7 +493,7 @@ const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [
       }
     })
   }
-
+  
   // 3. 核心业务词（只取前3个）
   if (coreBusinessWords && coreBusinessWords.length > 0) {
     coreBusinessWords.slice(0, 3).forEach(w => {
@@ -564,7 +502,7 @@ const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [
       }
     })
   }
-
+  
   // 4. 搜索关键词（只取前2个）
   if (searchKeywords && searchKeywords.length > 0) {
     searchKeywords.slice(0, 2).forEach(kw => {
@@ -573,24 +511,15 @@ const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [
       }
     })
   }
-
-  // 5. 官网关键词（新增：品牌相关词）
-  if (websiteKeywords && websiteKeywords.length > 0) {
-    websiteKeywords.slice(0, 2).forEach(w => {
-      if (w.length >= 2 && w.length <= 6) {
-        keywords.add(w)
-      }
-    })
-  }
-
+  
   return [...keywords]
 }
 
 // 构建场景需求词（关键词：使用场景 + 痛点问题 + 需求词）
 // 侧重：用户描述使用场景/问题时的搜索词
-const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [], coreBusinessWords = [], searchKeywords = [], audienceKeywords = []) => {
+const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [], coreBusinessWords = [], searchKeywords = []) => {
   const keywords = new Set()
-
+  
   // 1. 场景词（取前5个，差异化核心）
   if (scenarioWords && scenarioWords.length > 0) {
     scenarioWords.slice(0, 5).forEach(sw => {
@@ -599,7 +528,7 @@ const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [
       }
     })
   }
-
+  
   // 2. 从描述中提取的场景相关词（取前4个）
   if (extractedWords && extractedWords.length > 0) {
     extractedWords.slice(0, 4).forEach(w => {
@@ -608,7 +537,7 @@ const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [
       }
     })
   }
-
+  
   // 3. 核心业务词（取前2个，补充场景相关）
   if (coreBusinessWords && coreBusinessWords.length > 0) {
     coreBusinessWords.slice(0, 2).forEach(w => {
@@ -617,7 +546,7 @@ const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [
       }
     })
   }
-
+  
   // 4. 搜索关键词（取前2个）
   if (searchKeywords && searchKeywords.length > 0) {
     searchKeywords.slice(0, 2).forEach(kw => {
@@ -626,16 +555,7 @@ const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [
       }
     })
   }
-
-  // 5. 目标受众关键词（新增：从目标受众提取的场景词）
-  if (audienceKeywords && audienceKeywords.length > 0) {
-    audienceKeywords.slice(0, 3).forEach(w => {
-      if (w.length >= 2 && w.length <= 6) {
-        keywords.add(w)
-      }
-    })
-  }
-
+  
   return [...keywords]
 }
 
@@ -785,71 +705,64 @@ const extractCoreBusinessWords = (description) => {
   return [...new Set([...coreWords, ...additionalWords])]
 }
 
-// ===== Step 1: AI分析企业画像（综合分析所有字段）=====
-const AI_PROXY_ENDPOINT = `${API_BASE_URL}/api/ai/generate`
-
-const analyzeEnterpriseProfile = async (name, industry, description, targetAudience, website) => {
+// ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
+// 用 DeepSeek API 分析企业描述，提取核心业务词
+// 比 Web 搜索更可靠，不受跨域限制
+const analyzeEnterpriseProfile = async (name, industry, description) => {
+  const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
+  const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
+  
   try {
-    // 增强版 prompt：综合分析所有输入字段
-    const prompt = `你是一个企业营销关键词专家。请根据以下企业信息，生成GEO优化的关键词。
+    const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          {
+            role: 'user',
+            content: `你是一个企业业务关键词分析师。请根据以下企业信息，提取出10-15个核心业务关键词。
 
-【重要】必须综合分析所有字段，提取用户真实搜索时会用的关键词：
+【重要】如果企业描述中提到了以下任何术语，必须包含在关键词列表中：
+- GEO、SEO、搜索优化、搜索引擎优化、谷歌优化
+- 数字化营销、海外营销、跨境营销
+- SaaS、软件开发、小程序
+- 独立站、跨境电商、亚马逊
 
 企业名称：${name}
 所属行业：${industry}
 企业描述：${description || '无'}
-目标受众：${targetAudience || '未填写'}
-官网：${website || '无'}
 
-请生成4类关键词（每类5-8个，共20-32个）：
+要求：
+- 只输出关键词，每行一个
+- 必须是该企业实际从事的业务领域的专业词汇
+- 必须包含企业描述中提到的所有专业术语（如GEO、SEO等）
+- SEO、GEO、S包含中英文（如aaS、Google优化等）
+- 不要输出企业名称本身
+- 不要输出"公司"、"服务"等泛泛的词
 
-1. **品牌核心词**（用户搜索品牌时的词）：
-   - 品牌名相关
-   - 口碑评价词（"XX怎么样""XX好吗""XX靠谱吗"）
-   - 排行榜词（"XX十大""XX排名""XX推荐"）
-
-2. **场景需求词**（用户描述问题/需求时的词）：
-   - 使用场景（"在...情况下""需要...时"）
-   - 痛点问题（"不会..." "没有..." "很难..."）
-   - 决策阶段词（"XX和XX哪个好""XX怎么选"）
-
-3. **产品决策词**（用户比较/决策时的词）：
-   - 对比词（"XX对比""XX区别""XX优缺点"）
-   - 价格词（"XX价格""XX收费""XX多少钱"）
-   - 评测词（"XX测评""XX评测""XX体验"）
-
-4. **行业专业词**（GEO搜索引擎会引用的专业词）：
-   - 核心业务词（来自描述和官网）
-   - 技术术语（如SEO、GEO、SaaS等）
-   - 行业专属词
-
-格式要求：
-- 每行一个关键词
-- 关键词2-6个字
-- 直接输出，不要解释
-- 如果企业描述中有GEO/SEO，相关词必须包含`
-
-    const response = await fetch(AI_PROXY_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': getUserId()
-      },
-      body: JSON.stringify({ prompt, type: 'analysis' })
+直接输出关键词列表，不要解释。如果描述中提到了GEO或SEO，相关词汇必须出现在列表中！`
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 500
+      })
     })
-
+    
     if (!response.ok) return null
-
+    
     const data = await response.json()
-    const content = data.content || ''
-
-    // 解析AI返回的关键词（按类分组）
-    const lines = content.split('\n').map(l => l.trim()).filter(l => l.length >= 2 && l.length <= 8)
-
-    // 简单分类：取前8个作为品牌核心词，后8个作为场景需求词...
-    // 这里简化处理，实际上AI返回的关键词需要更好的分类
-    const keywords = lines.map(l => l.replace(/^[0-9a-zA-Z.。、]+/, '').trim()).filter(l => l.length >= 2)
-
+    const content = data.choices?.[0]?.message?.content || ''
+    
+    // 解析关键词（每行一个）
+    const keywords = content
+      .split('\n')
+      .map(l => l.trim().replace(/^[0-9a-zA-Z.。、]+/, '').trim())
+      .filter(l => l.length >= 2 && l.length <= 10)
+    
     return keywords.length > 0 ? keywords : null
   } catch (error) {
     console.error('AI分析企业画像失败:', error)
@@ -857,56 +770,46 @@ const analyzeEnterpriseProfile = async (name, industry, description, targetAudie
   }
 }
 
-// 关键词生成算法 - 综合所有输入字段
+// 关键词生成算法 - 基于奥呦GEO三类关键词体系
 // 1. 品牌核心词：用户搜索品牌时用的词（品牌名、口碑、排行榜等）
-// 2. 场景需求词：用户描述使用场景/问题的词（痛点、需求）
+// 2. 场景需求词：用户描述使用场景/问题的词（替代方案、解决问题）
 // 3. 产品决策词：用户在决策阶段搜索的词（对比、评测、价格）
-// 4. 企业词：公司口碑、行业评价、实力对比
-// 关键改进：整合目标受众和企业官网信息
+// 关键改进：必须从企业描述中提取核心业务词（如GEO、SEO）并纳入生成范围
+// 第二步改进：加入Web搜索提取的企业业务关键词
 const buildKeywordGroups = (f, searchKeywords = []) => {
   const name = f.name?.trim() || ''
   const industry = f.industry?.trim() || '其他'
   const description = f.description?.trim() || ''
-  const targetAudience = f.targetAudience?.trim() || ''
-  const website = f.website?.trim() || ''
-
+  
   // 从描述中提取有效关键词
   const extractedWords = extractKeywords(description)
-
-  // 从企业描述中提取核心业务词（如GEO、SEO、数字化营销等）
+  
+  // 【关键改进】从企业描述中提取核心业务词（如GEO、SEO、数字化营销等）
+  // 这些是企业自己描述的业务，必须纳入关键词生成范围
   const coreBusinessWords = extractCoreBusinessWords(description)
-
-  // ===== 新增：整合目标受众信息 =====
-  const audienceKeywords = extractAudienceKeywords(targetAudience)
-
-  // ===== 新增：整合官网信息 =====
-  const websiteKeywords = extractWebsiteKeywords(website)
-
+  
   // 获取行业词库
   const industryData = INDUSTRY_KEYWORDS[industry] || INDUSTRY_KEYWORDS['其他']
   const productDecisionWords = industryData.productDecision || []
   const scenarioWords = industryData.scenario || []
   const categoryWords = industryData.category || []
-
-  // 品牌核心词：品牌名 + 品类词 + 核心业务词 + 官网关键词
-  const brandKeywords = buildBrandKeywords(name, industry, categoryWords, coreBusinessWords, searchKeywords, websiteKeywords)
-
-  // 场景需求词：场景词 + 提取词 + 核心业务词 + 目标受众词
-  const scenarioKeywords = buildScenarioKeywords(name, industry, scenarioWords, extractedWords, coreBusinessWords, searchKeywords, audienceKeywords)
-
+  
+  // 【修复】三类关键词使用差异化来源，减少重叠
+  // 品牌核心词：品牌名 + 品类词 + 核心业务词
+  // 场景需求词：场景词 + 提取词 + 核心业务词
   // 产品决策词：决策词 + 品类词 + 核心业务词
+  const brandKeywords = buildBrandKeywords(name, industry, categoryWords, coreBusinessWords, searchKeywords)
+  const scenarioKeywords = buildScenarioKeywords(name, industry, scenarioWords, extractedWords, coreBusinessWords, searchKeywords)
   const productDecisionKeywords = buildProductDecisionKeywords(name, industry, productDecisionWords, categoryWords, coreBusinessWords, searchKeywords)
-
-  // 企业词：公司口碑、行业评价、实力对比
   const enterpriseKeywords = buildEnterpriseKeywords(name, industry, searchKeywords)
-
+  
   // 构建返回格式（每类独立去重，不再跨类去重）
   const makeGroup = (keywords, type) => ({
     type,
     items: keywords.slice(0, 15).map(kw => ({ text: kw, selected: false })),
     get selectedCount() { return this.items.filter(i => i.selected).length }
   })
-
+  
   return [
     makeGroup(brandKeywords, '品牌核心词'),
     makeGroup(scenarioKeywords, '场景需求词'),
@@ -916,17 +819,16 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
 }
 
 const handleGenerateKeywords = async () => {
-  // 强制同步读取 localStorage，确保获取最新数据
+  // 【修复】强制同步读取 localStorage，确保获取最新数据
+  // 解决用户点击生成时 form.value 可能是旧数据的问题
   const allData = getData()
   const savedData = allData['enterprise-settings'] || {}
-
+  
   // 优先使用表单中的最新值，如果为空则使用 localStorage 中的值
   const name = form.value.name || savedData.name || ''
   const industry = form.value.industry || savedData.industry || ''
   const description = form.value.description || savedData.description || ''
-  const targetAudience = form.value.targetAudience || savedData.targetAudience || ''
-  const website = form.value.website || savedData.website || ''
-
+  
   if (!name) {
     ElMessage.warning('请先填写企业名称')
     return
@@ -935,49 +837,48 @@ const handleGenerateKeywords = async () => {
     ElMessage.warning('请先在"品牌简介"填写企业描述，再点击生成关键词')
     return
   }
-
+  
+  // 【修复】调试日志：确认 description 包含 GEO/SEO
+  console.log('🔍 [关键词生成] 品牌简介内容:', description)
+  console.log('🔍 [关键词生成] 是否包含GEO:', description.toUpperCase().includes('GEO'))
+  console.log('🔍 [关键词生成] 是否包含SEO:', description.toUpperCase().includes('SEO'))
+  
   kwGenerating.value = true
   kwSearching.value = true
-  kwSearchingText.value = '🔍 正在综合分析企业信息（预计5-10秒）...'
+  kwSearchingText.value = '🔍 正在分析企业属性（预计5-10秒）...'
   kwDialogVisible.value = true
   kwGroups.value = []
 
-  // ===== Step 1: AI综合分析所有字段 =====
+  // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
   let searchKeywords = []
-
+  
   try {
     searchKeywords = await analyzeEnterpriseProfile(
       name,
       industry,
-      description,
-      targetAudience,
-      website
+      description
     )
     if (searchKeywords && searchKeywords.length > 0) {
-      kwSearchingText.value = `✅ 已识别企业关键词：${searchKeywords.slice(0, 5).join('、')}...`
+      console.log('🔍 AI识别到企业业务关键词:', searchKeywords)
+      kwSearchingText.value = `✅ 已识别企业业务：${searchKeywords.slice(0, 5).join('、')}...`
     } else {
-      kwSearchingText.value = '⚠️ AI识别较弱，将基于表单数据生成'
+      kwSearchingText.value = '⚠️ 未能深度识别，将基于表单描述生成'
     }
   } catch (error) {
     console.error('AI分析失败:', error)
-    kwSearchingText.value = '⚠️ AI分析失败，将基于表单数据生成'
+    kwSearchingText.value = '⚠️ AI分析失败，将基于表单描述生成'
     searchKeywords = []
   }
 
-  // ===== Step 2: 基于综合信息生成关键词 =====
+  // ===== Step 2: 基于业务画像生成关键词 =====
   await new Promise(r => setTimeout(r, 500))
-
-  // 构建关键词组时使用所有字段数据
-  const formData = {
-    name,
-    industry,
-    description,
-    targetAudience,
-    website
-  }
+  
+  // 【修复】构建关键词组时使用同步后的数据
+  const formData = { name, industry, description, targetAudience: form.value.targetAudience || savedData.targetAudience || '' }
   kwSearching.value = false
   kwGroups.value = buildKeywordGroups(formData, searchKeywords)
-
+  
+  // 【修复】调试日志：输出最终生成的关键词
   console.log('🔍 [关键词生成] 最终关键词组:', JSON.stringify(kwGroups.value))
   kwGenerating.value = false
 }

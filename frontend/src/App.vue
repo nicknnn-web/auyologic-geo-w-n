@@ -169,6 +169,10 @@
               <el-icon><ChatDotRound /></el-icon>
               <template #title>拓展问题</template>
             </el-menu-item>
+            <el-menu-item index="/geo-detection">
+              <el-icon><Aim /></el-icon>
+              <template #title>可见度检测</template>
+            </el-menu-item>
 
             <div class="px-4 py-0.5 text-xs text-gray-400">AI创作</div>
             <el-menu-item index="/commands">
