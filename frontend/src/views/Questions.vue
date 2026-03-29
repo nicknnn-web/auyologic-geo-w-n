@@ -140,6 +140,7 @@ import { Plus, MagicStick, SortUp, SortDown, Rank, Delete } from '@element-plus/
 const route = useRoute()
 const router = useRouter()
 import { getData, getList, addItem, deleteItem, updateItem } from '../utils/storage'
+import { handleError } from '../utils/errorHandler'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
 
@@ -230,25 +231,13 @@ const getStatusType = (status) => {
   return map[status] || 'info'
 }
 
-// DeepSeek API 配置
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions'
+// AI 代理 API（后端代理，避免前端硬编码 API Key）
+const AI_PROXY_ENDPOINT = `${API_BASE_URL}/api/ai/generate`
 
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
 const analyzeEnterpriseProfileForQuestions = async (name, industry, description) => {
   try {
-    const response = await fetch(DEEPSEEK_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'user',
-            content: `你是一个企业业务分析师。请根据以下企业信息，提取出该企业核心从事的业务领域的专业词汇。
+    const prompt = `你是一个企业业务分析师。请根据以下企业信息，提取出该企业核心从事的业务领域的专业词汇。
 
 企业名称：${name}
 所属行业：${industry}
@@ -262,17 +251,20 @@ const analyzeEnterpriseProfileForQuestions = async (name, industry, description)
 - 如果企业描述中提到了具体业务词，必须包含进去
 
 直接输出关键词列表，不要解释。`
-          }
-        ],
-        temperature: 0.3,
-        max_tokens: 300
-      })
+
+    const response = await fetch(AI_PROXY_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user'
+      },
+      body: JSON.stringify({ prompt, type: 'analysis' })
     })
 
     if (!response.ok) return null
 
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content || ''
+    const content = data.content || ''
 
     const keywords = content
       .split('\n')
@@ -432,25 +424,18 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   const existingQuestions = tableData.value
     .filter(q => q.sourceKeyword === keyword)
     .map(q => q.question)
-  
+
   // 先读取企业信息，构建上下文
   const enterpriseContext = buildEnterpriseContext(searchKeywords)
   const prompt = generatePrompt(keyword, type, enterpriseContext, existingQuestions)
 
-  const response = await fetch(DEEPSEEK_ENDPOINT, {
+  const response = await fetch(AI_PROXY_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user'
     },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 500
-    })
+    body: JSON.stringify({ prompt, type: 'questions' })
   })
 
   if (!response.ok) {
@@ -458,7 +443,7 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   }
 
   const data = await response.json()
-  const content = data.choices[0].message.content
+  const content = data.content || ''
 
   // 解析返回的问题列表
   const questions = content
@@ -665,23 +650,32 @@ const handleSelectionChange = (selection) => {
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
-  
+
   // 同步删除后端
   const idsToDelete = selectedRows.value.map(r => r.id)
+  let successCount = 0
+
   for (const row of selectedRows.value) {
     try {
-      await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
+      const res = await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
         method: 'DELETE',
         headers: { 'x-user-id': userId }
       })
+      if (res.ok) successCount++
     } catch (e) {
       console.warn('从后端删除失败:', e)
     }
   }
+
   // 直接从列表中移除选中项
   tableData.value = tableData.value.filter(item => !idsToDelete.includes(item.id))
-  ElMessage.success(`已删除 ${selectedRows.value.length} 条记录`)
   selectedRows.value = []
+
+  if (successCount > 0) {
+    ElMessage.success(`已删除 ${successCount} 条记录`)
+  } else {
+    ElMessage.error('删除失败')
+  }
 }
 
 // 清空全部问题
@@ -740,7 +734,7 @@ const handleSubmit = async () => {
     ElMessage.warning('该问题已存在')
     return
   }
-  
+
   const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
   const newItem = {
     question: form.value.question,
@@ -748,45 +742,43 @@ const handleSubmit = async () => {
     sourceKeyword: '-',
     status: '待审核'
   }
-  
+
   // 同步到后端
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions`, {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'x-user-id': userId
       },
       body: JSON.stringify(newItem)
     })
-    if (res.ok) {
-      const saved = await res.json()
-      // 直接添加到列表，不重新加载
-      tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
-    }
-  } catch (e) {
-    console.warn('同步到后端失败:', e)
-    tableData.value.unshift({ ...newItem, id: Date.now(), createdAt: new Date().toLocaleString('zh-CN') })
+    if (!res.ok) throw new Error('添加失败')
+    const saved = await res.json()
+    // 直接添加到列表，不重新加载
+    tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
+    ElMessage.success('添加成功')
+    dialogVisible.value = false
+  } catch (error) {
+    handleError(error, '添加失败')
   }
-  
-  ElMessage.success('添加成功')
-  dialogVisible.value = false
 }
 
 const handleDelete = async (id) => {
   const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
   // 同步删除后端
   try {
-    await fetch(`${API_BASE_URL}/api/questions/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/questions/${id}`, {
       method: 'DELETE',
       headers: { 'x-user-id': userId }
     })
-  } catch (e) {
-    console.warn('从后端删除失败:', e)
+    if (!res.ok) throw new Error('删除失败')
+    // 直接从列表中移除，不重新加载
+    tableData.value = tableData.value.filter(item => item.id !== id)
+    ElMessage.success('删除成功')
+  } catch (error) {
+    handleError(error, '删除失败')
   }
-  // 直接从列表中移除，不重新加载
-  tableData.value = tableData.value.filter(item => item.id !== id)
-  ElMessage.success('删除成功')
 }
 </script>
 

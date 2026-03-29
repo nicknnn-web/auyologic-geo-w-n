@@ -3,6 +3,8 @@ import cors from 'cors';
 import pg from 'pg';
 import 'dotenv/config';
 import { initDB } from './db.js';
+import { validate, schemas } from './middleware/validation.js';
+import { runMigrations } from './migrations.js';
 
 const { Pool } = pg;
 const app = express();
@@ -200,6 +202,36 @@ tables.forEach(table => {
           delete data[key];
         }
       }
+
+      // 根据表名选择验证规则
+      const schemaMap = {
+        keywords: schemas.keyword,
+        questions: schemas.question,
+        knowledge: schemas.knowledge,
+        instruction_templates: schemas.instructionTemplate,
+        drafts: schemas.draft
+      };
+
+      if (schemaMap[table]) {
+        const { error, value } = schemaMap[table].validate(data, {
+          abortEarly: false,
+          stripUnknown: true,
+          convert: true
+        });
+
+        if (error) {
+          const errors = error.details.map(detail => ({
+            field: detail.path.join('.'),
+            message: detail.message
+          }));
+          return res.status(400).json({
+            error: '参数验证失败',
+            details: errors
+          });
+        }
+        Object.assign(data, value);
+      }
+
       const cols = Object.keys(data);
       const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
       const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
@@ -219,6 +251,36 @@ tables.forEach(table => {
           delete data[key];
         }
       }
+
+      // 根据表名选择验证规则
+      const schemaMap = {
+        keywords: schemas.keyword,
+        questions: schemas.question,
+        knowledge: schemas.knowledge,
+        instruction_templates: schemas.instructionTemplate,
+        drafts: schemas.draft
+      };
+
+      if (schemaMap[table]) {
+        const { error, value } = schemaMap[table].validate(data, {
+          abortEarly: false,
+          stripUnknown: true,
+          convert: true
+        });
+
+        if (error) {
+          const errors = error.details.map(detail => ({
+            field: detail.path.join('.'),
+            message: detail.message
+          }));
+          return res.status(400).json({
+            error: '参数验证失败',
+            details: errors
+          });
+        }
+        Object.assign(data, value);
+      }
+
       const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
       const result = await pool.query(
         `UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} AND user_id = $${Object.keys(data).length + 2} RETURNING *`,
@@ -345,10 +407,12 @@ app.put('/api/settings', async (req, res) => {
 import contentGeneratorRouter from './routes/contentGenerator.js';
 import geoDetectionRouter from './routes/geoDetection.js';
 import websiteAnalyzerRouter from './routes/websiteAnalyzer.js';
+import aiProxyRouter from './routes/aiProxy.js';
 
 app.use('/api', contentGeneratorRouter);
 app.use('/api', geoDetectionRouter);
 app.use('/api', websiteAnalyzerRouter);
+app.use('/api', aiProxyRouter);
 
 // 启动
 const PORT = process.env.PORT || 3001;

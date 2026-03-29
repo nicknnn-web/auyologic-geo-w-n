@@ -89,6 +89,7 @@ import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
+import { handleError } from '../utils/errorHandler'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
 
@@ -115,22 +116,11 @@ const form = ref({ keyword: '', type: '' })
 // 加载数据
 const loadData = async () => {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/keywords`)
-    if (res.ok) {
-      const data = await res.json()
-      tableData.value = data
-      // API 返回空但 localStorage 有数据时，合并（避免旧数据丢失）
-      if (data.length === 0) {
-        const localData = getList('keywords')
-        if (localData.length > 0) {
-          tableData.value = localData
-        }
-      }
-    } else {
-      tableData.value = getList('keywords')
-    }
-  } catch {
-    tableData.value = getList('keywords')
+    const data = await keywordsAPI.list()
+    tableData.value = data
+  } catch (error) {
+    handleError(error, '加载关键词失败')
+    tableData.value = []
   }
 }
 
@@ -152,7 +142,7 @@ const formatDate = (dateStr) => {
   } catch { return '-' }
 }
 
-const cycleType = async (row) => {
+const/cycleType = async (row) => {
   const typeOrder = ['品牌', '产品', '场景', '企业']
   const currentIndex = typeOrder.indexOf(row.type)
   const nextIndex = (currentIndex + 1) % typeOrder.length
@@ -163,8 +153,12 @@ const cycleType = async (row) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: row.type })
     })
-  } catch { /* silent */ }
-  ElMessage.success('类型已更新')
+    ElMessage.success('类型已更新')
+  } catch (error) {
+    handleError(error, '类型更新失败')
+    // 回滚类型
+    row.type = typeOrder[currentIndex]
+  }
 }
 
 const handleSelectionChange = (selection) => {
@@ -199,23 +193,36 @@ const handleEdit = (row) => {
 
 const handleDelete = async (id) => {
   try {
-    await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
-  } catch { /* silent */ }
-  tableData.value = tableData.value.filter(r => r.id !== id)
-  ElMessage.success('删除成功')
+    await keywordsAPI.delete(id)
+    tableData.value = tableData.value.filter(r => r.id !== id)
+    ElMessage.success('删除成功')
+  } catch (error) {
+    handleError(error, '删除失败')
+  }
 }
 
 const handleBatchDelete = async () => {
   if (selectedKeywords.value.length === 0) return
   const ids = selectedKeywords.value.map(r => r.id)
+  let successCount = 0
+
   for (const id of ids) {
     try {
-      await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
-    } catch { /* silent */ }
+      await keywordsAPI.delete(id)
+      successCount++
+    } catch (error) {
+      console.error('删除失败:', error)
+    }
   }
+
   tableData.value = tableData.value.filter(r => !ids.includes(r.id))
-  ElMessage.success(`已删除 ${selectedKeywords.value.length} 条记录`)
   selectedKeywords.value = []
+
+  if (successCount > 0) {
+    ElMessage.success(`已删除 ${successCount} 条记录`)
+  } else {
+    ElMessage.error('删除失败')
+  }
 }
 
 const handleSubmit = async () => {
@@ -228,34 +235,28 @@ const handleSubmit = async () => {
     ElMessage.warning('该关键词已存在')
     return
   }
-  if (isEdit.value) {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/keywords/${form.value.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
+
+  try {
+    if (isEdit.value) {
+      const updated = await keywordsAPI.update(form.value.id, {
+        keyword: form.value.keyword,
+        type: form.value.type
       })
-      if (res.ok) {
-        const updated = await res.json()
-        const idx = tableData.value.findIndex(r => r.id === updated.id)
-        if (idx > -1) tableData.value[idx] = updated
-      }
-    } catch { /* silent */ }
-    ElMessage.success('编辑成功')
-  } else {
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
+      const idx = tableData.value.findIndex(r => r.id === updated.id)
+      if (idx > -1) tableData.value[idx] = updated
+      ElMessage.success('编辑成功')
+    } else {
+      const created = await keywordsAPI.create({
+        keyword: form.value.keyword,
+        type: form.value.type
       })
-      if (res.ok) {
-        tableData.value.unshift(await res.json())
-      }
-    } catch { /* silent */ }
-    ElMessage.success('添加成功')
+      tableData.value.unshift(created)
+      ElMessage.success('添加成功')
+    }
+    dialogVisible.value = false
+  } catch (error) {
+    handleError(error, isEdit.value ? '编辑失败' : '添加失败')
   }
-  dialogVisible.value = false
 }
 </script>
 

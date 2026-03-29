@@ -442,10 +442,8 @@ const formatFileSize = (bytes) => {
 }
 
 // ==================== AI 分析功能 ====================
-// DeepSeek API 配置
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
-const DEEPSEEK_MODEL = 'deepseek-chat'
+// AI 代理 API（后端代理，避免前端硬编码 API Key）
+const AI_PROXY_ENDPOINT = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
 
 // AI 分析状态
 const analyzingIds = ref(new Set()) // 正在分析的文档ID集合
@@ -474,20 +472,13 @@ ${content}
 - summary 要包含品牌/产品的核心卖点
 - keyPoints 是用户真正关心的价值点`
 
-  const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
+  const response = await fetch(AI_PROXY_ENDPOINT, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user'
     },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      messages: [
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 1000
-    })
+    body: JSON.stringify({ prompt, type: 'analysis' })
   })
 
   if (!response.ok) {
@@ -495,8 +486,8 @@ ${content}
   }
 
   const data = await response.json()
-  const resultText = data.choices?.[0]?.message?.content || ''
-  
+  const resultText = data.content || ''
+
   // 解析 JSON 响应
   try {
     // 尝试提取 JSON 部分

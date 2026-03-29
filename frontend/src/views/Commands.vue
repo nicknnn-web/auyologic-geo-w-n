@@ -67,13 +67,13 @@
         <el-form-item label="指令名称" prop="name">
           <el-input v-model="form.name" placeholder="请输入指令名称" />
         </el-form-item>
-        <el-form-item label="创作类型" prop="type">
-          <el-select v-model="form.type" placeholder="请选择类型">
+        <el-form-item label="创作类型" prop="contentType">
+          <el-select v-model="form.contentType" placeholder="请选择类型">
             <el-option v-for="item in PROMPT_TYPES" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
-        <el-form-item label="提示词内容" prop="prompt">
-          <el-input v-model="form.prompt" type="textarea" :rows="6" placeholder="请输入AI提示词" />
+        <el-form-item label="提示词内容" prop="content">
+          <el-input v-model="form.content" type="textarea" :rows="6" placeholder="请输入AI提示词" />
           <div class="text-xs text-gray-400 mt-1">
             支持变量:
             <el-tooltip content="品牌名称，例：苹果、华为" placement="top"><el-tag size="small" class="mx-1 cursor-help">{brand}</el-tag></el-tooltip>
@@ -114,13 +114,13 @@ const selectedRows = ref([])
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref(null)
-const form = ref({ name: '', type: '', prompt: '' })
+const form = ref({ name: '', contentType: '', content: '' })
 
 // P2: 表单校验规则
 const formRules = {
   name: [{ required: true, message: '请输入指令名称', trigger: 'blur' }],
-  type: [{ required: true, message: '请选择创作类型', trigger: 'change' }],
-  prompt: [{ required: true, message: '请输入 Prompt 内容', trigger: 'blur' }]
+  contentType: [{ required: true, message: '请选择创作类型', trigger: 'change' }],
+  content: [{ required: true, message: '请输入 Prompt 内容', trigger: 'blur' }]
 }
 
 // 正序排列（新添加的在最后）
@@ -333,18 +333,18 @@ const initDefaultCommands = async () => {
 }
 
 const handleAdd = () => {
-  form.value = { name: '', type: '', prompt: '' }
+  form.value = { name: '', contentType: '', content: '' }
   isEdit.value = false
   dialogVisible.value = true
 }
 
 const handleEdit = (row) => {
-  // API 字段 content/contentType → 表单字段 prompt/type
+  // 统一使用 contentType 和 content
   form.value = {
     id: row.id,
     name: row.name,
-    prompt: row.content || row.prompt || '',
-    type: row.contentType || row.type || ''
+    content: row.content || row.prompt || '',
+    contentType: row.contentType || row.type || ''
   }
   isEdit.value = true
   dialogVisible.value = true
@@ -373,11 +373,11 @@ const handleSubmit = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
           method: 'PUT',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             'x-user-id': userId
           },
-          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
+          body: JSON.stringify({ name: form.value.name, content: form.value.content, contentType: form.value.contentType })
         })
         if (res.ok) {
           const updated = await res.json()
@@ -390,18 +390,18 @@ const handleSubmit = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
           method: 'POST',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             'x-user-id': userId
           },
-          body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
+          body: JSON.stringify({ name: form.value.name, content: form.value.content, contentType: form.value.contentType })
         })
         if (res.ok) {
           tableData.value.unshift(await res.json())
         }
       } catch { /* silent */ }
       ElMessage.success('添加成功')
-      // 刷新数据，确保显示最新内容
+      // 刷新 fancyp，确保显示最新内容
       await loadData()
     }
     dialogVisible.value = false
