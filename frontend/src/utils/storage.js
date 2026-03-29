@@ -13,7 +13,8 @@ const defaultData = {
   mediaOfficial: [],
   mediaSocial: [],
   publishTasks: [],
-  publishHistory: []
+  publishHistory: [],
+  'geo-custom-keywords': []
 }
 
 // 获取数据
