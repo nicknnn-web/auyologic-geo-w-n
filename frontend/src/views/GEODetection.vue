@@ -198,9 +198,9 @@
       <!-- 品牌可见 -->
       <div v-if="resultTab === 'visible'" class="result-list">
         <div v-if="filteredVisibleQuestions.length === 0" class="result-empty"><el-icon size="40" color="#dcdfe6"><SuccessFilled /></el-icon><p>暂无数据</p></div>
-        <div v-for="item in filteredVisibleQuestions" :key="item.questionId" class="result-card visible" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">
+        <div v-for="item in filteredVisibleQuestions" :key="item.questionId" class="result-card visible" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">
           <div class="result-card-header">
-            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">{{ item.category }}</el-tag>
+            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">{{ item.category }}</el-tag>
             <div class="result-score" :class="getScoreClass(item.avgScore)">
               <span class="score-num">{{ item.avgScore }}</span>
               <span class="score-label">分</span>
@@ -231,9 +231,9 @@
       <div v-if="resultTab === 'missing'" class="result-list">
         <div v-if="filteredMissingCount > 0" class="missing-header"><div class="missing-info"><el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon><span>共 <strong>{{ filteredMissingCount }}</strong> 个问题中您的品牌未被提及，这些是需要重点覆盖的内容缺口</span></div></div>
         <div v-if="filteredMissingQuestions.length === 0" class="result-empty"><el-icon size="40" color="#67c23a"><SuccessFilled /></el-icon><p>太棒了！该类型问题中您的品牌都已被提及</p></div>
-        <div v-for="item in filteredMissingQuestions" :key="item.questionId" class="result-card missing" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">
+        <div v-for="item in filteredMissingQuestions" :key="item.questionId" class="result-card missing" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">
           <div class="result-card-header">
-            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : 'scene')">{{ item.category }}</el-tag>
+            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">{{ item.category }}</el-tag>
             <div class="result-score missing-score">
               <span class="score-num">0</span>
               <span class="score-label">分</span>
@@ -1485,7 +1485,7 @@ const handleExportResult = () => {
 }
 
 const getCategoryColor = (cat) => {
-  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning' }
+  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning', '企业': 'danger' }
   return map[cat] || 'info'
 }
 
@@ -1647,12 +1647,14 @@ const loadQuestionsFromAPI = async () => {
 .result-card.cat-brand{border-left-color:#b37feb}
 .result-card.cat-product{border-left-color:#52c41a}
 .result-card.cat-scene{border-left-color:#fa8c16}
+.result-card.cat-enterprise{border-left-color:#f89898}
 
 /* 卡片头部 */
 .result-card-header{display:flex;justify-content:space-between;align-items:center}
 .cat-tag-brand{background:#f3e8ff;color:#722ed1;border-color:#b37feb}
 .cat-tag-product{background:#f6ffed;color:#52c41a;border-color:#95de64}
 .cat-tag-scene{background:#fff7e6;color:#fa8c16;border-color:#ffd591}
+.cat-tag-enterprise{background:#fef0f0;color:#f56c6c;border-color:#f89898}
 
 /* 得分显示 */
 .result-score{display:flex;align-items:baseline;gap:2px;padding:4px 12px;border-radius:20px;background:#f0f9eb}
