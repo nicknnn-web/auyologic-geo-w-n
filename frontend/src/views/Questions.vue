@@ -230,25 +230,12 @@ const getStatusType = (status) => {
   return map[status] || 'info'
 }
 
-// DeepSeek API 配置
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1/chat/completions'
-
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
+const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
+
 const analyzeEnterpriseProfileForQuestions = async (name, industry, description) => {
   try {
-    const response = await fetch(DEEPSEEK_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'user',
-            content: `你是一个企业业务分析师。请根据以下企业信息，提取出该企业核心从事的业务领域的专业词汇。
+    const prompt = `你是一个企业业务分析师。请根据以下企业信息，提取出该企业核心从事的业务领域的专业词汇。
 
 企业名称：${name}
 所属行业：${industry}
@@ -262,8 +249,13 @@ const analyzeEnterpriseProfileForQuestions = async (name, industry, description)
 - 如果企业描述中提到了具体业务词，必须包含进去
 
 直接输出关键词列表，不要解释。`
-          }
-        ],
+
+    const response = await fetch(AI_PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        prompt,
         temperature: 0.3,
         max_tokens: 300
       })
@@ -272,7 +264,7 @@ const analyzeEnterpriseProfileForQuestions = async (name, industry, description)
     if (!response.ok) return null
 
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content || ''
+    const content = data.content || ''
 
     const keywords = content
       .split('\n')
@@ -426,7 +418,7 @@ ${existingQuestions.join('、')}`
   return typePrompts[type] || typePrompts['产品']
 }
 
-// 调用 DeepSeek API 生成问题（加入企业上下文 + 搜索结果 + 去重）
+// 调用 AI 代理生成问题（加入企业上下文 + 搜索结果 + 去重）
 const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   // 获取该关键词已有的问题（用于去重）- 使用API数据
   const existingQuestions = tableData.value
@@ -437,17 +429,12 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   const enterpriseContext = buildEnterpriseContext(searchKeywords)
   const prompt = generatePrompt(keyword, type, enterpriseContext, existingQuestions)
 
-  const response = await fetch(DEEPSEEK_ENDPOINT, {
+  const response = await fetch(AI_PROXY_URL, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'deepseek-chat',
-      messages: [
-        { role: 'user', content: prompt }
-      ],
+      prompt,
       temperature: 0.7,
       max_tokens: 500
     })
@@ -458,7 +445,7 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   }
 
   const data = await response.json()
-  const content = data.choices[0].message.content
+  const content = data.content || ''
 
   // 解析返回的问题列表
   const questions = content

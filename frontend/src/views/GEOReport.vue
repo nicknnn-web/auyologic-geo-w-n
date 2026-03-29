@@ -211,8 +211,8 @@ import { DataAnalysis, Histogram, Monitor, RefreshRight, Document, WarningFilled
 import { getData, saveData } from '../utils/storage'
 
 // API配置
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
+const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
 
 const router = useRouter()
 const route = useRoute()
@@ -383,15 +383,13 @@ ${detectionData.techDetails.issues.warn.map(i => `- ${i.title}: ${i.desc}`).join
 }`
 
   try {
-    const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
+    const response = await fetch(AI_PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DEEPSEEK_API_KEY}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: '你是一个专业的GEO优化顾问，擅长生成结构化的改进方案报告。请严格按照JSON格式返回。' },
-          { role: 'user', content: prompt }
-        ],
+        systemPrompt: '你是一个专业的GEO优化顾问，擅长生成结构化的改进方案报告。请严格按照JSON格式返回。',
+        prompt,
         temperature: 0.5,
         max_tokens: 3000
       })
@@ -400,7 +398,7 @@ ${detectionData.techDetails.issues.warn.map(i => `- ${i.title}: ${i.desc}`).join
     if (!response.ok) throw new Error(`API请求失败: ${response.status}`)
     
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
+    const content = data.content || ''
     if (!content) throw new Error('API返回内容为空')
     
     let result
@@ -413,7 +411,7 @@ ${detectionData.techDetails.issues.warn.map(i => `- ${i.title}: ${i.desc}`).join
     }
     return result
   } catch (error) {
-    console.error('DeepSeek API调用失败:', error)
+    console.error('AI代理调用失败:', error)
     return getDefaultReport(detectionData)
   }
 }

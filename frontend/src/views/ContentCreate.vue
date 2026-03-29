@@ -299,11 +299,9 @@ import { getList, addItem, saveList } from '../utils/storage'
 import { knowledgeAPI, historyAPI } from '../utils/api'
 import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 
-// ========== DeepSeek API 配置 ==========
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
-const DEEPSEEK_MODEL = 'deepseek-chat'
+// ========== API 配置 ==========
 const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
 
 const router = useRouter()
 const form = ref({
@@ -1050,23 +1048,15 @@ ${randomStyle}
 }
 // ========== buildGeoPrompt 改造结束 ==========
 
-// Step 1: DeepSeek API 调用
+// Step 1: AI 代理调用
 const callDeepSeekAPI = async (prompt) => {
   try {
-    const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
+    const response = await fetch(AI_PROXY_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: DEEPSEEK_MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
+        model: 'deepseek-chat',
+        prompt,
         temperature: 0.7,
         max_tokens: 2000
       })
@@ -1078,7 +1068,7 @@ const callDeepSeekAPI = async (prompt) => {
     }
     
     const data = await response.json()
-    return data.choices[0]?.message?.content || ''
+    return data.content || ''
   } catch (error) {
     console.error('DeepSeek API 调用失败:', error)
     throw error

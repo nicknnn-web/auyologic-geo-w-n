@@ -706,25 +706,12 @@ const extractCoreBusinessWords = (description) => {
 }
 
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
-// 用 DeepSeek API 分析企业描述，提取核心业务词
+// 用 AI 代理分析企业描述，提取核心业务词
 // 比 Web 搜索更可靠，不受跨域限制
+const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
+
 const analyzeEnterpriseProfile = async (name, industry, description) => {
-  const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-  const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
-  
-  try {
-    const response = await fetch(`${DEEPSEEK_ENDPOINT}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          {
-            role: 'user',
-            content: `你是一个企业业务关键词分析师。请根据以下企业信息，提取出10-15个核心业务关键词。
+  const prompt = `你是一个企业业务关键词分析师。请根据以下企业信息，提取出10-15个核心业务关键词。
 
 【重要】如果企业描述中提到了以下任何术语，必须包含在关键词列表中：
 - GEO、SEO、搜索优化、搜索引擎优化、谷歌优化
@@ -745,8 +732,14 @@ const analyzeEnterpriseProfile = async (name, industry, description) => {
 - 不要输出"公司"、"服务"等泛泛的词
 
 直接输出关键词列表，不要解释。如果描述中提到了GEO或SEO，相关词汇必须出现在列表中！`
-          }
-        ],
+
+  try {
+    const response = await fetch(AI_PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        prompt,
         temperature: 0.3,
         max_tokens: 500
       })
@@ -755,7 +748,7 @@ const analyzeEnterpriseProfile = async (name, industry, description) => {
     if (!response.ok) return null
     
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content || ''
+    const content = data.content || ''
     
     // 解析关键词（每行一个）
     const keywords = content

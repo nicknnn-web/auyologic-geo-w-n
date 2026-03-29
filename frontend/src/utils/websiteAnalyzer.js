@@ -583,9 +583,10 @@ const checkHttps = (url) => {
   return { isHttps, status: isHttps ? 'secure' : 'insecure' }
 }
 
-// DeepSeek API 配置
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com/v1'
+// AI 代理配置
+const getAIBaseURL = () => {
+  return (window.VITE_API_URL || window.VITE_API_BASE_URL || 'https://auyologic.zeabur.app') + '/api/ai/generate'
+}
 
 /**
  * 从HTML提取纯文本
@@ -746,17 +747,13 @@ const checkAIFriendlinessDeep = async (html, url) => {
       systemPrompt = '你是一个专业的SEO和AI亲和性分析专家。请严格按JSON格式返回分析结果。'
     }
     
-    const response = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+    const response = await fetch(getAIBaseURL(), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `请分析以下网页内容，${scoringRules}
+        systemPrompt,
+        prompt: `请分析以下网页内容，${scoringRules}
 
 网址：${url}
 内容摘要：${truncatedText}
@@ -770,8 +767,7 @@ const checkAIFriendlinessDeep = async (html, url) => {
   "geo": 数字,
   "issues": ["问题1", "问题2"],
   "suggestions": ["建议1", "建议2"]
-}` }
-        ],
+}`,
         temperature: 0.3,
         max_tokens: 1000
       })
@@ -782,7 +778,7 @@ const checkAIFriendlinessDeep = async (html, url) => {
     }
 
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
+    const content = data.content || ''
     
     if (!content) {
       throw new Error('API返回内容为空')
@@ -797,7 +793,7 @@ const checkAIFriendlinessDeep = async (html, url) => {
     }
     throw new Error('无法解析API返回的JSON')
   } catch (error) {
-    console.error('DeepSeek API调用失败:', error)
+    console.error('AI代理调用失败:', error)
     return {
       score: 0,
       quality: 0,

@@ -385,9 +385,8 @@ const RadarChart = {
   }
 }
 
-// ==================== DeepSeek API 配置 ====================
-const DEEPSEEK_API_KEY = 'sk-c8769ba486ee46d799a37a4b8e747159'
-const DEEPSEEK_ENDPOINT = 'https://api.deepseek.com/v1'
+// ==================== AI 代理配置 ====================
+const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
 
 // ==================== 权威网站白名单 ====================
 // 这些是行业知名品牌官网，检测时有额外加权
@@ -583,29 +582,24 @@ const setCachedResult = (question, keyword, platformId, result) => {
  */
 const detectDeepseekReal = async (question, keywords) => {
   try {
-    // 直接将用户问题发给 DeepSeek，不做任何分析指令
-    const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
+    // 直接将用户问题发给 AI 代理，不做任何分析指令
+    const response = await fetch(AI_PROXY_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        messages: [
-          { role: 'user', content: question }
-        ],
+        prompt: question,
         temperature: 0.7,
         max_tokens: 800
       })
     })
 
     if (!response.ok) {
-      throw new Error(`DeepSeek API请求失败: ${response.status}`)
+      throw new Error(`AI代理请求失败: ${response.status}`)
     }
 
     const data = await response.json()
-    const answerText = data.choices?.[0]?.message?.content
+    const answerText = data.content || ''
 
     if (!answerText) {
       throw new Error('DeepSeek 返回内容为空')
@@ -771,18 +765,13 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
 请返回一个JSON对象，包含以上所有字段。不要添加任何解释或markdown格式。`
 
   try {
-    const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
+    const response = await fetch(AI_PROXY_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: '你是一个专业的AI内容分析助手，擅长分析品牌在AI平台回答中的可见度。' },
-          { role: 'user', content: prompt }
-        ],
+        systemPrompt: '你是一个专业的AI内容分析助手，擅长分析品牌在AI平台回答中的可见度。',
+        prompt,
         temperature: 0.3,
         max_tokens: 1000
       })
@@ -793,7 +782,7 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
     }
     
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
+    const content = data.content || ''
     
     if (!content) {
       throw new Error('API返回内容为空')
@@ -830,7 +819,7 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
     
     return result
   } catch (error) {
-    console.error('DeepSeek API调用失败:', error)
+    console.error('AI代理调用失败:', error)
     throw error
   }
 }
