@@ -111,7 +111,7 @@
         <div class="step-panel-header"><div class="step-title">选择AI平台</div><div class="step-desc">选择要检测的AI平台</div></div>
         <div class="platform-grid">
           <div v-for="p in platforms" :key="p.id" class="platform-card" :class="{ selected: isPlatformSelected(p.id) }" @click="togglePlatform(p)">
-            <div class="platform-icon">{{ p.icon }}</div>
+            <div class="platform-icon" :style="{ backgroundColor: p.color }">{{ p.icon }}</div>
             <div class="platform-name">{{ p.name }}</div>
             <div class="platform-desc">{{ p.desc }}</div>
             <div class="platform-check" v-if="isPlatformSelected(p.id)"><el-icon><Check /></el-icon></div>
@@ -130,7 +130,7 @@
         <div class="step-panel-header"><div class="step-title">确认检测配置</div><div class="step-desc">确认后系统将开始执行检测</div></div>
         <div class="confirm-cards">
           <div class="confirm-card"><div class="confirm-card-header"><el-icon><ChatDotRound /></el-icon>检测问题 ({{ selectedQuestions.length }})</div><div class="confirm-card-body"><div v-for="q in selectedQuestions.slice(0,5)" :key="q.id" class="confirm-line">{{ q.text }}</div><div v-if="selectedQuestions.length > 5" class="confirm-more">还有 {{ selectedQuestions.length - 5 }} 个问题...</div></div></div>
-          <div class="confirm-card"><div class="confirm-card-header"><el-icon><Monitor /></el-icon>检测平台 ({{ selectedPlatforms.length }})</div><div class="confirm-card-body"><div class="flex flex-wrap gap-2"><el-tag v-for="p in selectedPlatforms" :key="p.id" type="success">{{ p.icon }} {{ p.name }}</el-tag></div></div></div>
+          <div class="confirm-card"><div class="confirm-card-header"><el-icon><Monitor /></el-icon>检测平台 ({{ selectedPlatforms.length }})</div><div class="confirm-card-body"><div class="flex flex-wrap gap-2"><span v-for="p in selectedPlatforms" :key="p.id" class="platform-badge-icon" :style="{ backgroundColor: p.color, padding: '2px 8px', borderRadius: '12px', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: p.color, border: `1px solid ${p.color}` }"><span style="color: white; font-weight: 600;">{{ p.icon }}</span>{{ p.name }}</span></div></div></div>
           <div class="confirm-card"><div class="confirm-card-header"><el-icon><Collection /></el-icon>命中关键词 ({{ selectedKeywords.length }})</div><div class="confirm-card-body"><div class="flex flex-wrap gap-2"><el-tag v-for="kw in selectedKeywords" :key="kw">{{ kw }}</el-tag></div></div></div>
         </div>
         <div class="confirm-summary"><div class="summary-row"><span class="summary-label">检测组合</span><span class="summary-value">{{ selectedQuestions.length }} × {{ selectedPlatforms.length }} = {{ selectedQuestions.length * selectedPlatforms.length }} 次</span></div><div class="summary-row"><span class="summary-label">预计耗时</span><span class="summary-value">约 {{ Math.ceil(selectedQuestions.length * selectedPlatforms.length * 0.5) }} 分钟</span></div></div>
@@ -218,7 +218,7 @@
           </div>
           <div class="result-card-platforms">
             <div v-for="p in item.platforms" :key="p.name" class="platform-badge" :class="{ mentioned: p.mentioned, 'not-mentioned': !p.mentioned }">
-              <span class="platform-badge-icon">{{ p.icon }}</span><span class="platform-badge-name">{{ p.name }}</span>
+              <span class="platform-badge-icon" :style="{ backgroundColor: p.color }">{{ p.icon }}</span><span class="platform-badge-name">{{ p.name }}</span>
               <el-icon v-if="p.mentioned" color="#67c23a"><SuccessFilled /></el-icon>
               <el-icon v-else color="#dcdfe6"><Close /></el-icon>
             </div>
@@ -245,7 +245,7 @@
           </div>
           <div class="result-card-platforms">
             <div v-for="p in item.platforms" :key="p.name" class="platform-badge not-mentioned">
-              <span class="platform-badge-icon">{{ p.icon }}</span><span class="platform-badge-name">{{ p.name }}</span>
+              <span class="platform-badge-icon" :style="{ backgroundColor: p.color }">{{ p.icon }}</span><span class="platform-badge-name">{{ p.name }}</span>
               <el-icon color="#dcdfe6"><Close /></el-icon>
             </div>
           </div>
@@ -1193,14 +1193,14 @@ const addKeyword = () => {
 }
 
 const platforms = ref([
-  { id: 'kimi',     name: 'Kimi',       icon: '🌙',  desc: '月之暗面AI助手' },
-  { id: 'doubao',   name: '豆包',      icon: '🫛',  desc: '字节跳动AI助手' },
-  { id: 'yuanbao',  name: '腾讯元宝',   icon: '🐧',  desc: '腾讯AI助手' },
-  { id: 'tongyi',   name: '通义千问',   icon: '🏫',  desc: '阿里AI助手' },
-  { id: 'yiyan',    name: '文心一言',   icon: '🔍',  desc: '百度AI助手' },
-  { id: 'deepseek', name: 'DeepSeek',  icon: '🔮',  desc: '深度求索AI' },
-  { id: 'zhipu',    name: '智谱清言',   icon: '💎',  desc: '智谱AI助手' },
-  { id: 'spark',    name: '讯飞星火',   icon: '🔥',  desc: '科大讯飞AI助手' },
+  { id: 'kimi',     name: 'Kimi',       icon: 'K',  color: '#06B6D4', desc: '月之暗面AI助手' },
+  { id: 'doubao',   name: '豆包',      icon: '豆', color: '#EA580C', desc: '字节跳动AI助手' },
+  { id: 'yuanbao',  name: '腾讯元宝',   icon: '元', color: '#0EA5E9', desc: '腾讯AI助手' },
+  { id: 'tongyi',   name: '通义千问',   icon: '通', color: '#8B5CF6', desc: '阿里AI助手' },
+  { id: 'yiyan',    name: '文心一言',   icon: '文', color: '#EF4444', desc: '百度AI助手' },
+  { id: 'deepseek', name: 'DeepSeek',  icon: 'D',  color: '#4F46E5', desc: '深度求索AI' },
+  { id: 'zhipu',    name: '智谱清言',   icon: '智', color: '#10B981', desc: '智谱AI助手' },
+  { id: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', desc: '科大讯飞AI助手' },
 ])
 
 const selectedPlatforms = ref([])
@@ -1679,7 +1679,7 @@ const loadQuestionsFromAPI = async () => {
 .platform-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;font-size:12px;border:1px solid #e4e7ed;background:white}
 .platform-badge.mentioned{border-color:#67c23a;background:#f0f9eb;color:#67c23a}
 .platform-badge.not-mentioned{color:#c0c4cc}
-.platform-badge-icon{font-size:13px}
+.platform-badge-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;font-size:11px;font-weight:600;color:white}
 .platform-badge-name{font-size:12px}
 .result-card-action{display:flex;justify-content:flex-end}
 
@@ -1747,7 +1747,7 @@ const loadQuestionsFromAPI = async () => {
 .platform-card{background:#fafbfc;border:2px solid #ebeef5;border-radius:12px;padding:16px;text-align:center;cursor:pointer;transition:all .2s;position:relative}
 .platform-card:hover{border-color:#c0c4cc}
 .platform-card.selected{border-color:#409eff;background:#ecf5ff}
-.platform-icon{font-size:28px;margin-bottom:8px}
+.platform-icon{width:48px;height:48px;margin:0 auto 8px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;color:white}
 .platform-name{font-size:14px;font-weight:600;color:#303133;margin-bottom:4px}
 .platform-desc{font-size:11px;color:#909399}
 .platform-check{position:absolute;top:8px;right:8px;width:20px;height:20px;border-radius:50%;background:#409eff;color:white;display:flex;align-items:center;justify-content:center}
