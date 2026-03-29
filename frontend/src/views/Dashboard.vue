@@ -326,76 +326,104 @@ const formatHistoryDate = (dateStr) => {
 
 // ===== 初始化 =====
 onMounted(async () => {
-  const allData = getData()
+  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
 
-  // 网站健康度 - 优先从本地存储读取，其次从后端 API 获取
-  if (allData['dashboard-site-score']) {
-    siteScore.value = allData['dashboard-site-score'].score
-    siteUrl.value = allData['dashboard-site-score'].url
-  }
-  
-  // 尝试从后端获取最新的网站报告
+  // 网站健康度 - 从后端 API 获取
   try {
-    const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
-    const res = await fetch(`${API_BASE_URL}/api/website-reports?user_id=${userId}`)
+    const res = await fetch(`${API_BASE_URL}/api/website-reports`, {
+      headers: { 'x-user-id': userId }
+    })
     if (res.ok) {
       const reports = await res.json()
       if (reports && reports.length > 0) {
-        // 取最新的报告
         const latestReport = reports[0]
         siteScore.value = latestReport.score
         siteUrl.value = latestReport.url
-        // 同时保存到本地存储
-        allData['dashboard-site-score'] = {
-          score: latestReport.score,
-          url: latestReport.url,
-          updatedAt: latestReport.checkedAt
-        }
-        saveData(allData) // 保存到本地存储
       }
     }
   } catch (e) {
     console.warn('获取网站报告失败:', e)
   }
 
-  // 关键词
-  const keywords = allData['keywords'] || []
-  keywordStats.value.total = keywords.length
-  keywordStats.value.brand = keywords.filter(k => k.type === '品牌').length
-  keywordStats.value.product = keywords.filter(k => k.type === '产品').length
-  keywordStats.value.industry = keywords.filter(k => k.type === '行业').length
-
-  // 问题
-  const questions = allData['questions'] || []
-  keywordStats.value.questions = questions.length
-  keywordStats.value.questionsApproved = questions.filter(q => q.status === '已审核').length
-  totalQuestions.value = questions.length
-
-  // GEO检测结果
-  const geoResult = allData['geo-detection-result']
-  if (geoResult) {
-    // 从可见/缺失数量推算总问题数
-    const total = geoResult.visibleCount + geoResult.missingCount
-    totalQuestions.value = total
-    // 按比例分配（暂时全部算在可见里，细节等后端）
-    const visibleCount = geoResult.visibleCount
-    geoPlatforms.value.forEach(p => {
-      p.count = visibleCount
-      p.pct = total > 0 ? Math.round((visibleCount / total) * 100) : 0
+  // 关键词 - 从后端 API
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+      headers: { 'x-user-id': userId }
     })
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.length > 0) {
+        keywordStats.value.total = data.length
+        keywordStats.value.brand = data.filter(k => k.type === '品牌').length
+        keywordStats.value.product = data.filter(k => k.type === '产品').length
+        keywordStats.value.industry = data.filter(k => k.type === '行业').length
+      }
+    }
+  } catch (e) {
+    console.warn('获取关键词失败:', e)
   }
 
-  // 草稿
-  const drafts = allData['drafts'] || []
-  contentStats.value.drafts = drafts.length
+  // 问题 - 从后端 API
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/questions`, {
+      headers: { 'x-user-id': userId }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.length > 0) {
+        keywordStats.value.questions = data.length
+        keywordStats.value.questionsApproved = data.filter(q => q.status === '已审核').length
+        totalQuestions.value = data.length
+      }
+    }
+  } catch (e) {
+    console.warn('获取问题失败:', e)
+  }
 
-  // 发布历史
-  const history = allData['publishHistory'] || []
-  contentStats.value.published = history.length
+  // 草稿 - 从后端 API
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/drafts`, {
+      headers: { 'x-user-id': userId }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.length > 0) {
+        contentStats.value.drafts = data.length
+      }
+    }
+  } catch (e) {
+    console.warn('获取草稿失败:', e)
+  }
 
-  // GEO检测历史
-  const geoHistoryData = allData['geo-detection-history'] || []
-  geoHistory.value = geoHistoryData.slice(-10).reverse()
+  // 发布历史 - 从后端 API
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/publish-history`, {
+      headers: { 'x-user-id': userId }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.length > 0) {
+        contentStats.value.published = data.length
+      }
+    }
+  } catch (e) {
+    console.warn('获取发布历史失败:', e)
+  }
+
+  // GEO检测历史 - 从后端 API
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-detection-history`, {
+      headers: { 'x-user-id': userId }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (data && data.length > 0) {
+        geoHistory.value = data.slice(-10).reverse()
+      }
+    }
+  } catch (e) {
+    console.warn('获取GEO检测历史失败:', e)
+  }
 })
 </script>
 
