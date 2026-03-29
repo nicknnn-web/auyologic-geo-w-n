@@ -578,10 +578,10 @@ const setCachedResult = (question, keyword, platformId, result) => {
 /**
  * 真实检测：直接将问题发给 DeepSeek，从真实回答中分析关键词可见度
  * @param {string} question - 用户问题
- * @param {string} keyword - 品牌关键词
+ * @param {string[]} keywords - 关键词数组
  * @returns {Promise<object>} 检测结果
  */
-const detectDeepseekReal = async (question, keyword) => {
+const detectDeepseekReal = async (question, keywords) => {
   try {
     // 直接将用户问题发给 DeepSeek，不做任何分析指令
     const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
@@ -613,23 +613,118 @@ const detectDeepseekReal = async (question, keyword) => {
 
     console.log(`[GEO真实检测] DeepSeek 回答: ${answerText.slice(0, 80)}...`)
 
-    // ===== 纯前端文本分析 =====
+    // ===== 纯前端文本分析（支持多关键词） =====
     const text = answerText
     const lowerText = text.toLowerCase()
-    const lowerKeyword = keyword.toLowerCase()
 
-    // 1. mentioned - 是否提及
-    const mentioned = lowerText.includes(lowerKeyword)
+    // 检查每个关键词是否被提及
+    const keywordResults = keywords.map(kw => {
+      const lowerKw = kw.toLowerCase()
+      const mentioned = lowerText.includes(lowerKw)
+      
+      let mentionType = 'none'
+      if (mentioned) {
+        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const exactPattern = new RegExp(`\\b${escaped}\\b`, 'i')
+        mentionType = exactPattern.test(text) ? 'explicit' : 'implicit'
+      }
+      
+      return { keyword: kw, mentioned, mentionType }
+    })
 
+    // 任一关键词提及就算 mentioned
+    const mentioned = keywordResults.some(r => r.mentioned)
+    
+    // 统计命中情况
+    const mentionedCount = keywordResults.filter(r => r.mentioned).length
+    const allMentioned = mentionedCount === keywords.length  // 全部命中
+    const partialMentioned = mentioned && !allMentioned        // 部分命中
+
+    // 1. mentioned - 是否提及（任一就算）
     // 2. mentionType - 提及类型
     let mentionType = 'none'
     if (mentioned) {
-      // 检查是完整词匹配还是部分词匹配（手动转义特殊字符）
-      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const exactPattern = new RegExp(`\\b${escaped}\\b`, 'i')
-      if (exactPattern.test(text)) {
-        mentionType = 'explicit'
-      } else {
+      const explicitCount = keywordResults.filter(r => r.mentionType === 'explicit').length
+      if (explicitCount === mentionedCount) mentionType = 'explicit'
+      else if (explicitCount > 0) mentionType = 'partial_explicit'
+      else mentionType = 'implicit'
+    }
+
+    // 3. firstMentionPosition - 首次提及位置（取第一个命中的）
+    let firstMentionPosition = 1.0
+    if (mentioned) {
+      const firstMatch = keywordResults.find(r => r.mentioned)
+      if (firstMatch) {
+        const idx = lowerText.indexOf(firstMatch.keyword.toLowerCase())
+        firstMentionPosition = idx / text.length
+      }
+    }
+
+    // 4. positionRank - 位置等级
+    let positionRank = 'below_fold'
+    if (mentioned) {
+      if (firstMentionPosition < 0.1) positionRank = 'top'
+      else if (firstMentionPosition < 0.5) positionRank = 'above_fold'
+      else positionRank = 'below_fold'
+    }
+
+    // 5. sentiment - 情感分析（基于第一个命中的关键词）
+    let sentiment = 'neutral'
+    if (mentioned) {
+      const firstMatch = keywordResults.find(r => r.mentioned)
+      if (firstMatch) {
+        const idx = lowerText.indexOf(firstMatch.keyword.toLowerCase())
+        const contextStart = Math.max(0, idx - 50)
+        const contextEnd = Math.min(text.length, idx + firstMatch.keyword.length + 50)
+        const context = text.slice(contextStart, contextEnd)
+
+        const positiveWords = ['推荐', '优秀', '最好', '领先', '强大', '创新', '值得', '赞', '好', '棒', '不错', '出色', '优质', '信赖', '喜欢', '支持', '首选', '推荐', '最佳', '第一']
+        const negativeWords = ['差', '问题', '坑', '烂', '失望', '后悔', '不推荐', '避雷', '骗局', '垃圾', '缺点', '失败', '糟糕', '差劲', '投诉']
+
+        const posCount = positiveWords.filter(w => context.includes(w)).length
+        const negCount = negativeWords.filter(w => context.includes(w)).length
+
+        if (posCount > negCount) sentiment = 'positive'
+        else if (negCount > posCount) sentiment = 'negative'
+        else sentiment = 'neutral'
+      }
+    }
+
+    // 6. semanticRelevance - 语义相关性
+    let semanticRelevance = 0
+    if (mentioned) {
+      const totalMatches = keywordResults.reduce((sum, r) => {
+        const escaped = r.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        return sum + (lowerText.match(new RegExp(escaped, 'g')) || []).length
+      }, 0)
+      const density = totalMatches / (text.length / 100)
+      semanticRelevance = Math.min(1.0, density * 0.8)
+    }
+
+    // 7. competitivePosition - 竞品分析
+    let competitivePosition = null
+    const competitorsMentioned = []
+    const competitorKeywords = ['苹果', 'Apple', '华为', 'Huawei', '小米', 'Xiaomi', '三星', 'Samsung', 'OPPO', 'vivo', '一加', 'OnePlus', '荣耀', 'Honor', '谷歌', 'Google', '微软', 'Microsoft', '特斯拉', 'Tesla', '比亚迪', 'BYD']
+    competitorKeywords.forEach(comp => {
+      if (!keywords.some(kw => kw.toLowerCase() === comp.toLowerCase()) && lowerText.includes(comp.toLowerCase())) {
+        competitorsMentioned.push(comp)
+      }
+    })
+
+    if (competitorsMentioned.length > 0 && mentioned) {
+      const firstMatch = keywordResults.find(r => r.mentioned)
+      if (firstMatch) {
+        const keywordIdx = lowerText.indexOf(firstMatch.keyword.toLowerCase())
+        const compIdx = lowerText.indexOf(competitorsMentioned[0].toLowerCase())
+        if (keywordIdx < compIdx) {
+          competitivePosition = 'winner'
+        } else {
+          competitivePosition = 'loser'
+        }
+      }
+    } else if (mentioned) {
+      competitivePosition = 'mentioned'
+    }
         mentionType = 'implicit'
       }
     }
@@ -713,7 +808,12 @@ const detectDeepseekReal = async (question, keyword) => {
       semanticRelevance: Math.round(semanticRelevance * 100) / 100,
       competitivePosition,
       competitorsMentioned,
-      rawAnswer: answerText
+      rawAnswer: answerText,
+      // 新增：多关键词命中统计
+      keywordsMatched: keywordResults ? keywordResults.filter(r => r.mentioned).length : 0,
+      keywordsTotal: keywords.length,
+      allMentioned: keywordResults ? keywordResults.every(r => r.mentioned) : false,
+      partialMentioned: keywordResults ? (keywordResults.some(r => r.mentioned) && !keywordResults.every(r => r.mentioned)) : false
     }
 
     console.log(`[GEO真实检测] 分析结果:`, result)
@@ -732,7 +832,8 @@ const detectDeepseekReal = async (question, keyword) => {
  * @param {string} platformId - 平台ID
  * @returns {Promise<object>} 检测结果
  */
-const detectWithDeepSeek = async (question, keyword, platformId) => {
+const detectWithDeepSeek = async (question, keywords, platformId) => {
+  const keyword = keywords[0] || ''
   // 检查缓存
   const cached = getCachedResult(question, keyword, platformId)
   if (cached) {
@@ -742,7 +843,7 @@ const detectWithDeepSeek = async (question, keyword, platformId) => {
 
   // ===== 真实检测：DeepSeek 平台直接发问题并分析回答 =====
   if (platformId === 'deepseek') {
-    const result = await detectDeepseekReal(question, keyword)
+    const result = await detectDeepseekReal(question, keywords)
     setCachedResult(question, keyword, platformId, result)
     console.log(`[GEO检测] DeepSeek 真实检测完成: ${question.slice(0, 20)}...`)
     return result
@@ -1257,6 +1358,12 @@ const progressPercent = computed(() => {
  * 开始执行可见度检测（真实API调用版本）
  */
 const startDetection = async () => {
+  // 检查是否选择了关键词
+  if (selectedKeywords.value.length === 0) {
+    ElMessage.warning('请先选择至少一个命中关键词')
+    return
+  }
+  
   totalCount.value = selectedQuestions.value.length * selectedPlatforms.value.length
   completedCount.value = 0
   loadingVisible.value = true
@@ -1277,17 +1384,17 @@ const startDetection = async () => {
       
       try {
         // 调用 DeepSeek API 进行真实检测
-        const keyword = q.sourceKeyword || selectedKeywords.value[0] || ''
-        const detection = await detectWithDeepSeek(q.text, keyword, p.id)
+        const keywords = selectedKeywords.value
+        const detection = await detectWithDeepSeek(q.text, keywords, p.id)
         
         allDetectionResults.push({
           questionId: qIdx + 1,
           question: q.text,
           category: q.category,
-          sourceKeyword: keyword,
+          sourceKeyword: keywords.join(', '),
           platform: p,
           detection: detection,
-          score: calculateScore(detection, q.category, keyword)
+          score: calculateScore(detection, q.category, keywords[0] || '')
         })
       } catch (error) {
         console.error(`检测失败: ${q.text} @ ${p.name}`, error)
