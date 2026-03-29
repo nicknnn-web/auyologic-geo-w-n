@@ -581,7 +581,7 @@ const setCachedResult = (question, keyword, platformId, result) => {
  * @param {string} keyword - 品牌关键词
  * @returns {Promise<object>} 检测结果
  */
-const detectDeepseekReal = async (question, keyword) => {
+const detectDeepseekReal = async (question, keywords) => {
   try {
     // 直接将用户问题发给 DeepSeek，不做任何分析指令
     const response = await fetch(DEEPSEEK_ENDPOINT + '/chat/completions', {
@@ -613,31 +613,29 @@ const detectDeepseekReal = async (question, keyword) => {
 
     console.log(`[GEO真实检测] DeepSeek 回答: ${answerText.slice(0, 80)}...`)
 
-    // ===== 纯前端文本分析 =====
+    // ===== 纯前端文本分析（支持多关键词：任一命中即算可见） =====
     const text = answerText
     const lowerText = text.toLowerCase()
-    const lowerKeyword = keyword.toLowerCase()
 
-    // 1. mentioned - 是否提及
-    const mentioned = lowerText.includes(lowerKeyword)
+    // 任一关键词提及就算 mentioned（最简单的多关键词逻辑）
+    const mentioned = keywords.some(kw => lowerText.includes(kw.toLowerCase()))
 
-    // 2. mentionType - 提及类型
+    // 2. mentionType - 简化：使用第一个命中的关键词判断
     let mentionType = 'none'
     if (mentioned) {
-      // 检查是完整词匹配还是部分词匹配（手动转义特殊字符）
-      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const exactPattern = new RegExp(`\\b${escaped}\\b`, 'i')
-      if (exactPattern.test(text)) {
-        mentionType = 'explicit'
-      } else {
-        mentionType = 'implicit'
+      const firstKw = keywords.find(kw => lowerText.includes(kw.toLowerCase())) || ''
+      if (firstKw) {
+        const escaped = firstKw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const exactPattern = new RegExp(`\\b${escaped}\\b`, 'i')
+        mentionType = exactPattern.test(text) ? 'explicit' : 'implicit'
       }
     }
 
-    // 3. firstMentionPosition - 首次提及位置（0=开头，1=结尾）
+    // 3. firstMentionPosition - 使用第一个关键词
     let firstMentionPosition = 1.0
     if (mentioned) {
-      const idx = lowerText.indexOf(lowerKeyword)
+      const firstKw = keywords.find(kw => lowerText.includes(kw.toLowerCase())) || ''
+      const idx = lowerText.indexOf(firstKw.toLowerCase())
       firstMentionPosition = idx / text.length
     }
 
@@ -649,13 +647,13 @@ const detectDeepseekReal = async (question, keyword) => {
       else positionRank = 'below_fold'
     }
 
-    // 5. sentiment - 情感分析（基于关键词周围的上下文）
+    // 5. sentiment - 情感分析（基于第一个命中的关键词）
     let sentiment = 'neutral'
     if (mentioned) {
-      const idx = lowerText.indexOf(lowerKeyword)
-      // 取关键词前后50个字符作为上下文
+      const firstKw = keywords.find(kw => lowerText.includes(kw.toLowerCase())) || ''
+      const idx = lowerText.indexOf(firstKw.toLowerCase())
       const contextStart = Math.max(0, idx - 50)
-      const contextEnd = Math.min(text.length, idx + keyword.length + 50)
+      const contextEnd = Math.min(text.length, idx + firstKw.length + 50)
       const context = text.slice(contextStart, contextEnd)
 
       const positiveWords = ['推荐', '优秀', '最好', '领先', '强大', '创新', '值得', '赞', '好', '棒', '不错', '出色', '优质', '信赖', '喜欢', '支持', '首选', '推荐', '最佳', '第一']
@@ -669,14 +667,15 @@ const detectDeepseekReal = async (question, keyword) => {
       else sentiment = 'neutral'
     }
 
-    // 6. semanticRelevance - 语义相关性（基于关键词在文本中的分布密度）
+    // 6. semanticRelevance - 简化为所有关键词总数
     let semanticRelevance = 0
     if (mentioned) {
-      // 计算关键词出现次数占总字数的比例
-      const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      const count = (lowerText.match(new RegExp(escaped, 'g')) || []).length
-      // 归一化：出现1次/100字 = 0.5, 出现1次/50字 = 0.7, 出现1次/20字 = 0.9
-      const density = count / (text.length / 100)
+      let totalCount = 0
+      keywords.forEach(kw => {
+        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        totalCount += (lowerText.match(new RegExp(escaped, 'gi')) || []).length
+      })
+      const density = totalCount / (text.length / 100)
       semanticRelevance = Math.min(1.0, density * 0.8)
     }
 
@@ -728,12 +727,13 @@ const detectDeepseekReal = async (question, keyword) => {
 /**
  * 调用 DeepSeek API 进行可见度检测
  * @param {string} question - 用户问题
- * @param {string} keyword - 品牌关键词
+ * @param {string[]} keywords - 关键词数组
  * @param {string} platformId - 平台ID
  * @returns {Promise<object>} 检测结果
  */
-const detectWithDeepSeek = async (question, keyword, platformId) => {
-  // 检查缓存
+const detectWithDeepSeek = async (question, keywords, platformId) => {
+  // 检查缓存 - 用第一个关键词作为缓存键
+  const keyword = keywords[0] || ''
   const cached = getCachedResult(question, keyword, platformId)
   if (cached) {
     console.log(`[GEO检测] 缓存命中: ${question.slice(0, 20)}... @ ${platformId}`)
@@ -742,7 +742,7 @@ const detectWithDeepSeek = async (question, keyword, platformId) => {
 
   // ===== 真实检测：DeepSeek 平台直接发问题并分析回答 =====
   if (platformId === 'deepseek') {
-    const result = await detectDeepseekReal(question, keyword)
+    const result = await detectDeepseekReal(question, keywords)
     setCachedResult(question, keyword, platformId, result)
     console.log(`[GEO检测] DeepSeek 真实检测完成: ${question.slice(0, 20)}...`)
     return result
@@ -1257,6 +1257,12 @@ const progressPercent = computed(() => {
  * 开始执行可见度检测（真实API调用版本）
  */
 const startDetection = async () => {
+  // 检查是否选择了关键词
+  if (selectedKeywords.value.length === 0) {
+    ElMessage.warning('请先选择至少一个命中关键词')
+    return
+  }
+  
   totalCount.value = selectedQuestions.value.length * selectedPlatforms.value.length
   completedCount.value = 0
   loadingVisible.value = true
@@ -1277,17 +1283,17 @@ const startDetection = async () => {
       
       try {
         // 调用 DeepSeek API 进行真实检测
-        const keyword = q.sourceKeyword || selectedKeywords.value[0] || ''
-        const detection = await detectWithDeepSeek(q.text, keyword, p.id)
+        const keywords = selectedKeywords.value
+        const detection = await detectWithDeepSeek(q.text, keywords, p.id)
         
         allDetectionResults.push({
           questionId: qIdx + 1,
           question: q.text,
           category: q.category,
-          sourceKeyword: keyword,
+          sourceKeyword: keywords.join(', '),
           platform: p,
           detection: detection,
-          score: calculateScore(detection, q.category, keyword)
+          score: calculateScore(detection, q.category, keywords[0] || '')
         })
       } catch (error) {
         console.error(`检测失败: ${q.text} @ ${p.name}`, error)
