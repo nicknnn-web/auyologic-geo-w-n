@@ -136,30 +136,86 @@ export async function initDB() {
       CREATE TABLE IF NOT EXISTS media_accounts (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
-        platform VARCHAR(50),
+        platform VARCHAR(50) NOT NULL,
         account_name VARCHAR(200),
-        account_id VARCHAR(200),
-        cookies TEXT,
+        phone_number VARCHAR(20),
+        session_state JSONB,
+        auth_status VARCHAR(20) DEFAULT 'pending',
+        auth_time TIMESTAMP,
+        last_verified_at TIMESTAMP,
+        user_agent TEXT,
         status VARCHAR(20) DEFAULT 'active',
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    // 迁移：为旧表补充新字段
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20)`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS session_state JSONB`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS auth_status VARCHAR(20) DEFAULT 'pending'`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS auth_time TIMESTAMP`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS last_verified_at TIMESTAMP`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS user_agent TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ALTER COLUMN user_id TYPE VARCHAR(255) USING user_id::TEXT`).catch(() => {});
 
     // 投放任务
     await client.query(`
       CREATE TABLE IF NOT EXISTS publish_tasks (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
+        task_name VARCHAR(200),
         draft_id INTEGER,
+        draft_title VARCHAR(500),
         platform VARCHAR(50),
         account_id INTEGER,
         content TEXT,
+        title VARCHAR(500),
+        tags TEXT,
         status VARCHAR(20) DEFAULT 'pending',
-        result TEXT,
+        published_url TEXT,
+        error_message TEXT,
+        task_log TEXT,
         created_at TIMESTAMP DEFAULT NOW(),
-        published_at TIMESTAMP
+        updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    // 迁移：为旧 publish_tasks 补充新字段
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS task_name VARCHAR(200)`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS draft_title VARCHAR(500)`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS title VARCHAR(500)`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS tags TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS published_url TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS task_log TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ALTER COLUMN user_id TYPE VARCHAR(255) USING user_id::TEXT`).catch(() => {});
+
+    // 发布记录
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS publish_records (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255),
+        task_id INTEGER,
+        draft_title VARCHAR(500),
+        platform VARCHAR(50),
+        account_id INTEGER,
+        account_name VARCHAR(200),
+        published_url TEXT,
+        status VARCHAR(20) DEFAULT '已发布',
+        error_message TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    // 迁移：为旧 publish_records 补充新字段
+    await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS draft_title VARCHAR(500)`).catch(() => {});
+    await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS account_id INTEGER`).catch(() => {});
+    await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS account_name VARCHAR(200)`).catch(() => {});
+    await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS published_url TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
+    await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
+    await client.query(`ALTER TABLE publish_records ALTER COLUMN user_id TYPE VARCHAR(255) USING user_id::TEXT`).catch(() => {});
 
     // GEO可见度检测记录
     await client.query(`

@@ -3,6 +3,19 @@ import cors from 'cors';
 import pg from 'pg';
 import 'dotenv/config';
 import { initDB } from './db.js';
+import {
+  startAuth,
+  submitSmsCode,
+  captureSession,
+  verifySession,
+  closeSession,
+  getSessionStatus,
+} from './services/playwrightAuth.js';
+import {
+  executePublishTask,
+  getTaskStatus,
+  cleanupTask,
+} from './services/playwrightPublisher.js';
 
 const { Pool } = pg;
 const app = express();
@@ -341,6 +354,315 @@ app.put('/api/settings', async (req, res) => {
   }
 });
 
+// ========== 平台账号管理 ==========
+
+app.get('/api/platform-accounts', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const result = await pool.query(
+      `SELECT id, platform, account_name, phone_number,
+              auth_status, auth_time, last_verified_at, status, created_at, updated_at
+       FROM media_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/platform-accounts', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { platform, account_name, phone_number } = req.body;
+    if (!platform) return res.status(400).json({ error: '平台不能为空' });
+    const result = await pool.query(
+      `INSERT INTO media_accounts (user_id, platform, account_name, phone_number, auth_status, status)
+       VALUES ($1, $2, $3, $4, 'pending', 'active') RETURNING
+       id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status, created_at`,
+      [userId, platform, account_name || '', phone_number || null]
+    );
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/platform-accounts/:id', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { account_name, phone_number, status } = req.body;
+    const result = await pool.query(
+      `UPDATE media_accounts SET
+         account_name = COALESCE($1, account_name),
+         phone_number = COALESCE($2, phone_number),
+         status       = COALESCE($3, status),
+         updated_at   = NOW()
+       WHERE id = $4 AND user_id = $5
+       RETURNING id, platform, account_name, phone_number, auth_status, auth_time, status`,
+      [account_name || null, phone_number || null, status || null, req.params.id, userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/platform-accounts/:id', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    await closeSession(req.params.id);
+    await pool.query(
+      'DELETE FROM media_accounts WHERE id = $1 AND user_id = $2',
+      [req.params.id, userId]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/platform-accounts/:id/auth-start', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const accountId = req.params.id;
+    const row = await pool.query(
+      'SELECT * FROM media_accounts WHERE id = $1 AND user_id = $2',
+      [accountId, userId]
+    );
+    if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    const { platform, phone_number } = row.rows[0];
+    const phoneNumber = req.body.phone_number || phone_number;
+    const result = await startAuth(accountId, platform, phoneNumber);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/platform-accounts/:id/auth-submit-code', async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code) return res.status(400).json({ error: '验证码不能为空' });
+    const result = await submitSmsCode(req.params.id, code);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/platform-accounts/:id/auth-complete', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const accountId = req.params.id;
+    const { storageState, userAgent } = await captureSession(accountId);
+    await pool.query(
+      `UPDATE media_accounts SET
+         session_state    = $1,
+         user_agent       = $2,
+         auth_status      = 'authorized',
+         auth_time        = NOW(),
+         last_verified_at = NOW(),
+         updated_at       = NOW()
+       WHERE id = $3 AND user_id = $4`,
+      [JSON.stringify(storageState), userAgent, accountId, userId]
+    );
+    const updated = await pool.query(
+      `SELECT id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status
+       FROM media_accounts WHERE id = $1`,
+      [accountId]
+    );
+    res.json({ success: true, account: updated.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/platform-accounts/:id/auth-status', (req, res) => {
+  const status = getSessionStatus(req.params.id);
+  res.json({ sessionStatus: status });
+});
+
+app.post('/api/platform-accounts/:id/auth-cancel', async (req, res) => {
+  try {
+    await closeSession(req.params.id);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/platform-accounts/:id/auth-verify', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const accountId = req.params.id;
+    const row = await pool.query(
+      'SELECT platform, session_state FROM media_accounts WHERE id = $1 AND user_id = $2',
+      [accountId, userId]
+    );
+    if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    const { platform, session_state } = row.rows[0];
+    const valid = await verifySession(platform, session_state);
+    const newStatus = valid ? 'authorized' : 'expired';
+    await pool.query(
+      `UPDATE media_accounts SET auth_status = $1, last_verified_at = NOW(), updated_at = NOW()
+       WHERE id = $2`,
+      [newStatus, accountId]
+    );
+    res.json({ valid, auth_status: newStatus });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== 发布任务管理 ==========
+
+app.get('/api/publish-tasks', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const result = await pool.query(
+      `SELECT pt.*, ma.account_name
+       FROM publish_tasks pt
+       LEFT JOIN media_accounts ma ON pt.account_id = ma.id
+       WHERE pt.user_id = $1
+       ORDER BY pt.created_at DESC`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/publish-tasks', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { task_name, draft_id, draft_title, platform, account_id, content, title, tags } = req.body;
+    if (!platform || !account_id) return res.status(400).json({ error: '平台和账号不能为空' });
+    const result = await pool.query(
+      `INSERT INTO publish_tasks
+         (user_id, task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+       RETURNING *`,
+      [userId, task_name || '', draft_id || null, draft_title || '', platform, account_id, content || '', title || '', tags || '']
+    );
+    res.json(result.rows[0]);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/publish-tasks/:id', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    await pool.query(
+      'DELETE FROM publish_tasks WHERE id = $1 AND user_id = $2',
+      [req.params.id, userId]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/publish-tasks/:id/execute', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const taskId = req.params.id;
+    const taskRow = await pool.query(
+      'SELECT * FROM publish_tasks WHERE id = $1 AND user_id = $2',
+      [taskId, userId]
+    );
+    if (taskRow.rows.length === 0) return res.status(404).json({ error: '任务不存在' });
+    const task = taskRow.rows[0];
+
+    const accRow = await pool.query(
+      'SELECT * FROM media_accounts WHERE id = $1 AND user_id = $2',
+      [task.account_id, userId]
+    );
+    if (accRow.rows.length === 0) return res.status(404).json({ error: '关联账号不存在' });
+    const account = accRow.rows[0];
+
+    if (account.auth_status !== 'authorized' || !account.session_state) {
+      return res.status(400).json({
+        error: '账号授权已失效，请前往账号管理页重新授权',
+        auth_status: account.auth_status,
+      });
+    }
+
+    await pool.query(
+      `UPDATE publish_tasks SET status = 'running', updated_at = NOW() WHERE id = $1`,
+      [taskId]
+    );
+
+    executePublishTask(
+      {
+        taskId,
+        platform: task.platform,
+        sessionState: account.session_state,
+        content: task.content || '',
+        title: task.title || '',
+        tags: task.tags || '',
+      },
+      async (err, publishedUrl) => {
+        try {
+          const log = getTaskStatus(taskId)?.log || '';
+          if (err) {
+            await pool.query(
+              `UPDATE publish_tasks SET status = 'failed', error_message = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
+              [err.message, log, taskId]
+            );
+          } else {
+            await pool.query(
+              `UPDATE publish_tasks SET status = 'done', published_url = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
+              [publishedUrl || '', log, taskId]
+            );
+            await pool.query(
+              `INSERT INTO publish_records
+                 (user_id, task_id, draft_title, platform, account_id, account_name, published_url, status)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,'已发布')`,
+              [userId, taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
+            );
+          }
+          cleanupTask(taskId);
+        } catch (dbErr) {
+          console.error('[发布回调] DB 写入失败：', dbErr.message);
+        }
+      }
+    );
+
+    res.json({ success: true, message: '发布任务已启动，正在后台执行' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/publish-tasks/:id/status', async (req, res) => {
+  try {
+    const taskId = req.params.id;
+    const memStatus = getTaskStatus(taskId);
+    if (memStatus) return res.json(memStatus);
+    const result = await pool.query(
+      'SELECT status, task_log, published_url, error_message FROM publish_tasks WHERE id = $1',
+      [taskId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '任务不存在' });
+    const row = result.rows[0];
+    res.json({
+      status: row.status,
+      log: row.task_log || '',
+      publishedUrl: row.published_url || '',
+      errorMessage: row.error_message || '',
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== 发布记录 ==========
+
+app.get('/api/publish-records', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const result = await pool.query(
+      `SELECT id, draft_title, platform, account_name, published_url, status, error_message, created_at
+       FROM publish_records
+       WHERE user_id = $1
+       ORDER BY created_at DESC`,
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== 后端启动时清理残留 pending 授权状态 ==========
+async function cleanupStalePendingAuth() {
+  try {
+    const result = await pool.query(
+      `UPDATE media_accounts SET auth_status = 'pending', updated_at = NOW()
+       WHERE auth_status NOT IN ('authorized', 'expired', 'invalid', 'pending')`
+    );
+    if (result.rowCount > 0) {
+      console.log(`[启动清理] 重置了 ${result.rowCount} 条残留的中间授权状态`);
+    }
+  } catch (err) {
+    console.warn('[启动清理] 清理残留状态失败：', err.message);
+  }
+}
+
 // 导入路由
 import contentGeneratorRouter from './routes/contentGenerator.js';
 import geoDetectionRouter from './routes/geoDetection.js';
@@ -354,4 +676,7 @@ app.use('/api/ai', aiProxyRouter);
 
 // 启动
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}, version ${BUILD_VERSION}`));
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}, version ${BUILD_VERSION}`);
+  await cleanupStalePendingAuth();
+});

@@ -45,8 +45,9 @@ export const imagesAPI = createAPI('images')
 export const commandsAPI = createAPI('instruction-templates')
 export const draftsAPI = createAPI('drafts')
 export const historyAPI = createAPI('history')
-export const mediaAccountsAPI = createAPI('media_accounts')
-export const publishTasksAPI = createAPI('publish_tasks')
+export const mediaAccountsAPI = createAPI('platform-accounts')
+export const publishTasksAPI = createAPI('publish-tasks')
+export const publishRecordsAPI = createAPI('publish-records')
 
 // ========== 特殊 API ==========
 
