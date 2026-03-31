@@ -256,10 +256,12 @@ const verifyingId = ref(null)
 
 const loadAccounts = async () => {
   try {
-    const { data } = await axios.get(API)
-    accounts.value = data
+    const res = await axios.get(API)
+    const data = res.data
+    accounts.value = Array.isArray(data) ? data : []
   } catch (err) {
     ElMessage.error('加载账号列表失败：' + (err.response?.data?.error || err.message))
+    accounts.value = []
   }
 }
 
