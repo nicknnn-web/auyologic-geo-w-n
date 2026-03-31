@@ -246,7 +246,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Key, Phone, Loading, CircleCheck } from '@element-plus/icons-vue'
-import axios from 'axios'
+import api from '../utils/api'
 
 const API = '/api/platform-accounts'
 
@@ -256,11 +256,10 @@ const verifyingId = ref(null)
 
 const loadAccounts = async () => {
   try {
-    const res = await axios.get(API)
-    const data = res.data
+    const data = await api.get(API)
     accounts.value = Array.isArray(data) ? data : []
   } catch (err) {
-    ElMessage.error('加载账号列表失败：' + (err.response?.data?.error || err.message))
+    ElMessage.error('加载账号列表失败：' + err.message)
     accounts.value = []
   }
 }
@@ -306,16 +305,16 @@ const handleAccountSubmit = async () => {
     submitting.value = true
     try {
       if (isEdit.value) {
-        await axios.put(`${API}/${editingId}`, accountForm.value)
+        await api.put(`${API}/${editingId}`, accountForm.value)
         ElMessage.success('账号信息已更新')
       } else {
-        await axios.post(API, accountForm.value)
+        await api.post(API, accountForm.value)
         ElMessage.success('账号添加成功')
       }
       accountDialogVisible.value = false
       await loadAccounts()
     } catch (err) {
-      ElMessage.error(err.response?.data?.error || '操作失败')
+      ElMessage.error(err.message || '操作失败')
     } finally {
       submitting.value = false
     }
@@ -324,11 +323,11 @@ const handleAccountSubmit = async () => {
 
 const handleDelete = async (id) => {
   try {
-    await axios.delete(`${API}/${id}`)
+    await api.delete(`${API}/${id}`)
     ElMessage.success('删除成功')
     await loadAccounts()
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '删除失败')
+    ElMessage.error(err.message || '删除失败')
   }
 }
 
@@ -358,14 +357,14 @@ const openAuthDialog = (account) => {
 const handleAuthStart = async () => {
   authStarting.value = true
   try {
-    await axios.post(`${API}/${authAccount.value.id}/auth-start`, {
+    await api.post(`${API}/${authAccount.value.id}/auth-start`, {
       phone_number: authPhoneNumber.value || undefined,
     })
     authStep.value = 1
     startPolling()
     ElMessage.success('浏览器已打开，请完成登录')
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '启动授权失败')
+    ElMessage.error(err.message || '启动授权失败')
   } finally {
     authStarting.value = false
   }
@@ -375,10 +374,10 @@ const handleSubmitCode = async () => {
   if (!smsCode.value.trim()) { ElMessage.warning('请输入验证码'); return }
   submittingCode.value = true
   try {
-    await axios.post(`${API}/${authAccount.value.id}/auth-submit-code`, { code: smsCode.value.trim() })
+    await api.post(`${API}/${authAccount.value.id}/auth-submit-code`, { code: smsCode.value.trim() })
     ElMessage.success('验证码已提交，请等待跳转完成后点击「我已完成登录」')
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '提交失败')
+    ElMessage.error(err.message || '提交失败')
   } finally {
     submittingCode.value = false
   }
@@ -387,16 +386,13 @@ const handleSubmitCode = async () => {
 const handleAuthComplete = async () => {
   authCompleting.value = true
   try {
-    await axios.post(`${API}/${authAccount.value.id}/auth-complete`)
+    await api.post(`${API}/${authAccount.value.id}/auth-complete`)
     stopPolling()
     authStep.value = 2
     await loadAccounts()
     ElMessage.success('授权成功！登录状态已保存')
   } catch (err) {
-    // Bug5修复：失败时也停止轮询，因为后端 captureSession 失败不会关浏览器
-    // 用户可以继续在浏览器操作后再次点击「我已完成登录」
-    // 轮询可继续（浏览器还开着），所以这里不 stopPolling，只提示错误
-    ElMessage.error(err.response?.data?.error || '捕获登录态失败，请确认浏览器中已完成登录后再试')
+    ElMessage.error(err.message || '捕获登录态失败，请确认浏览器中已完成登录后再试')
   } finally {
     authCompleting.value = false
   }
@@ -405,7 +401,7 @@ const handleAuthComplete = async () => {
 const handleAuthCancel = async () => {
   stopPolling()
   try {
-    await axios.post(`${API}/${authAccount.value.id}/auth-cancel`)
+    await api.post(`${API}/${authAccount.value.id}/auth-cancel`)
   } catch {}
   authDialogVisible.value = false
 }
@@ -413,7 +409,7 @@ const handleAuthCancel = async () => {
 const handleAuthDialogClose = () => {
   stopPolling()
   if (authStep.value === 1) {
-    axios.post(`${API}/${authAccount.value.id}/auth-cancel`).catch(() => {})
+    api.post(`${API}/${authAccount.value.id}/auth-cancel`).catch(() => {})
   }
 }
 
@@ -432,7 +428,7 @@ const startPolling = () => {
       return
     }
     try {
-      const { data } = await axios.get(`${API}/${authAccount.value.id}/auth-status`)
+      const data = await api.get(`${API}/${authAccount.value.id}/auth-status`)
       authSessionStatus.value = data.sessionStatus
       // 后端 session 不存在（null）且浏览器应已打开时：可能是后端重启，提示重新授权
       if (data.sessionStatus === null && authStep.value === 1) {
@@ -458,7 +454,7 @@ onUnmounted(() => stopPolling())
 const handleVerify = async (account) => {
   verifyingId.value = account.id
   try {
-    const { data } = await axios.post(`${API}/${account.id}/auth-verify`)
+    const data = await api.post(`${API}/${account.id}/auth-verify`)
     if (data.valid) {
       ElMessage.success('Session 有效，可正常发帖')
     } else {
@@ -466,7 +462,7 @@ const handleVerify = async (account) => {
     }
     await loadAccounts()
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '验证失败')
+    ElMessage.error(err.message || '验证失败')
   } finally {
     verifyingId.value = null
   }

@@ -204,8 +204,7 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Plus, CircleCheck } from '@element-plus/icons-vue'
-import axios from 'axios'
-import { getList } from '../utils/storage'
+import api from '../utils/api'
 
 const router = useRouter()
 const route = useRoute()
@@ -225,18 +224,18 @@ let pollTimer = null
 // ---- 加载数据 ----
 const loadTasks = async () => {
   try {
-    const res = await axios.get(TASKS_API)
-    tasks.value = Array.isArray(res.data) ? res.data : []
+    const data = await api.get(TASKS_API)
+    tasks.value = Array.isArray(data) ? data : []
   } catch (err) {
-    ElMessage.error('加载任务列表失败：' + (err.response?.data?.error || err.message))
+    ElMessage.error('加载任务列表失败：' + err.message)
     tasks.value = []
   }
 }
 
 const loadAccounts = async () => {
   try {
-    const res = await axios.get(ACCOUNTS_API)
-    authorizedAccounts.value = Array.isArray(res.data) ? res.data.filter(a => a.auth_status === 'authorized') : []
+    const data = await api.get(ACCOUNTS_API)
+    authorizedAccounts.value = Array.isArray(data) ? data.filter(a => a.auth_status === 'authorized') : []
   } catch {
     authorizedAccounts.value = []
   }
@@ -244,14 +243,11 @@ const loadAccounts = async () => {
 
 const loadDrafts = async () => {
   try {
-    const { data } = await axios.get('/api/drafts')
-    if (Array.isArray(data) && data.length > 0) {
-      drafts.value = data
-      return
-    }
-  } catch {}
-  // API 为空或失败时，读 localStorage 备份
-  drafts.value = getList('drafts')
+    const data = await api.get('/api/drafts')
+    drafts.value = Array.isArray(data) ? data : []
+  } catch {
+    drafts.value = []
+  }
 }
 
 onMounted(async () => {
@@ -331,7 +327,7 @@ const handleCreate = async () => {
     creating.value = true
     try {
       const draft = drafts.value.find(d => d.id === form.value.draft_id)
-      await axios.post(TASKS_API, {
+      await api.post(TASKS_API, {
         task_name: form.value.task_name,
         draft_id: form.value.draft_id,
         draft_title: draft?.title || '',
@@ -345,7 +341,7 @@ const handleCreate = async () => {
       createDialogVisible.value = false
       await loadTasks()
     } catch (err) {
-      ElMessage.error(err.response?.data?.error || '创建失败')
+      ElMessage.error(err.message || '创建失败')
     } finally {
       creating.value = false
     }
@@ -357,19 +353,14 @@ const handleExecute = async (row) => {
   executingId.value = row.id
 
   try {
-    await axios.post(`${TASKS_API}/${row.id}/execute`)
+    await api.post(`${TASKS_API}/${row.id}/execute`)
     ElMessage.success('发布任务已启动，正在执行…')
     await loadTasks()
     // 打开进度弹窗并开始轮询
     openLogDialog(row)
     startStatusPoll(row.id)
   } catch (err) {
-    const errMsg = err.response?.data?.error || '启动失败'
-    ElMessage.error(errMsg)
-    // 如果是 session 过期，提示跳转授权
-    if (err.response?.data?.auth_status === 'expired') {
-      ElMessage.warning('账号授权已失效，请前往账号管理页重新授权', { duration: 5000 })
-    }
+    ElMessage.error(err.message || '启动失败')
     await loadTasks()
   } finally {
     executingId.value = null
@@ -378,11 +369,11 @@ const handleExecute = async (row) => {
 
 const handleDelete = async (id) => {
   try {
-    await axios.delete(`${TASKS_API}/${id}`)
+    await api.delete(`${TASKS_API}/${id}`)
     ElMessage.success('删除成功')
     await loadTasks()
   } catch (err) {
-    ElMessage.error(err.response?.data?.error || '删除失败')
+    ElMessage.error(err.message || '删除失败')
   }
 }
 
@@ -413,7 +404,7 @@ const startStatusPoll = (taskId) => {
   pollingTaskId = taskId
   pollTimer = setInterval(async () => {
     try {
-      const { data } = await axios.get(`${TASKS_API}/${taskId}/status`)
+      const data = await api.get(`${TASKS_API}/${taskId}/status`)
       currentLog.value = data.log || ''
       currentStatus.value = data.status
       currentPublishedUrl.value = data.publishedUrl || ''
