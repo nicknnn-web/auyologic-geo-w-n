@@ -44,7 +44,7 @@
           :disabled="isLoading"
         >
           <el-icon class="mr-1" v-if="!isLoading"><MagicStick /></el-icon>
-          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : 'AI拓展问题') }}
+          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : (selectedRows.length === 1 ? 'AI改写问题' : 'AI拓展问题')) }}
         </el-button>
         <el-button type="primary" class="ml-0" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>
@@ -457,11 +457,100 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   return questions
 }
 
+// 根据原问题生成1-5个替代表述（不硬凑，质量优先）
+const generateParaphrasesFromAI = async (originalQuestion) => {
+  const prompt = `请为以下问题生成1到5个不同的表达方式，保持原意但不重复原话。
+
+原问题：${originalQuestion}
+
+要求：
+- 生成1到5个替代表述（不硬凑，没有合适的就不生成）
+- 每种表达方式要有明显不同的问法
+- 保持问题的核心意思不变
+- 口语化、简短（不超过25字）
+
+直接输出替代表述，每行一个，不要编号，不要解释。`
+
+  const response = await fetch(AI_PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      prompt,
+      temperature: 0.7,
+      max_tokens: 400
+    })
+  })
+
+  if (!response.ok) return []
+
+  const data = await response.json()
+  const content = data.content || ''
+
+  const paraphrases = content
+    .split('\n')
+    .map(q => q.trim())
+    .filter(q => q.length > 0 && q.length <= 25 && q !== originalQuestion)
+    // 不设固定上限，让AI决定生成多少（质量优先）
+
+  return paraphrases
+}
+
 const isLoading = ref(false)
 const isSearching = ref(false)
 const searchStatusText = ref('')
 
 const handleAIExpand = async () => {
+  // ===== 改写模式：恰好选中1个问题 =====
+  if (selectedRows.value.length === 1) {
+    const original = selectedRows.value[0]
+    isLoading.value = true
+    searchStatusText.value = '🤔 正在改写问题...'
+    try {
+      const paraphrases = await generateParaphrasesFromAI(original.question)
+      if (paraphrases.length === 0) {
+        ElMessage.warning('未能为该问题生成有效的替代表述')
+        return
+      }
+      let successCount = 0
+      for (const pq of paraphrases) {
+        const newItem = {
+          question: pq,
+          keywordType: original.keywordType || '品牌',
+          sourceKeyword: original.sourceKeyword || original.question,
+          status: '待审核'
+        }
+        // 写后端
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/questions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
+            body: JSON.stringify(newItem)
+          })
+          if (res.ok) {
+            const saved = await res.json()
+            tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
+            successCount++
+          }
+        } catch (e) {
+          console.warn('同步到后端失败:', e)
+        }
+      }
+      ElMessage.success(`生成 ${successCount} 个替代表述，已添加`)
+      selectedRows.value = []
+    } finally {
+      isLoading.value = false
+      searchStatusText.value = ''
+    }
+    return
+  }
+
+  if (selectedRows.value.length > 1) {
+    ElMessage.warning('请只选择一个问题进行改写')
+    return
+  }
+
+  // ===== 扩展模式：基于关键词生成新问题 =====
   // 获取选中的关键词ID
   let keywords
   if (route.query.keywordIds) {
