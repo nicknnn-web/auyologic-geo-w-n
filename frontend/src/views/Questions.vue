@@ -3,7 +3,7 @@
     <div class="flex items-center mb-4">
       <div>
         <div class="text-lg font-bold">拓展问题</div>
-        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ tableData.length }} 条）</div>
+        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ tableData.length }} 条，已审核 {{ approvedCount }} 条）</div>
       </div>
       <div class="flex items-center filter-actions gap-4 ml-auto">
         <el-select v-model="filterKeywordType" placeholder="全部类型" class="w-28" clearable>
@@ -159,6 +159,8 @@ const normalize = (s) => {
   if (!s) return ''
   return s.replace(/[^\w\u4e00-\u9fa5]/g, '').toLowerCase().trim()
 }
+
+const approvedCount = computed(() => tableData.value.filter(q => q.status === '已审核').length)
 
 const sortedData = computed(() => {
   let data = [...tableData.value]
