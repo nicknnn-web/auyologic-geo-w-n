@@ -156,13 +156,14 @@ const cycleType = async (row) => {
   const typeOrder = ['品牌', '产品', '场景', '企业']
   const currentIndex = typeOrder.indexOf(row.type)
   const nextIndex = (currentIndex + 1) % typeOrder.length
-  row.type = typeOrder[nextIndex]
+  const newType = typeOrder[nextIndex]
   try {
     await fetch(`${API_BASE_URL}/api/keywords/${row.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: row.type })
+      body: JSON.stringify({ type: newType })
     })
+    await loadData()
   } catch { /* silent */ }
   ElMessage.success('类型已更新')
 }
@@ -201,7 +202,7 @@ const handleDelete = async (id) => {
   try {
     await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
   } catch { /* silent */ }
-  tableData.value = tableData.value.filter(r => r.id !== id)
+  await loadData()
   ElMessage.success('删除成功')
 }
 
@@ -213,7 +214,7 @@ const handleBatchDelete = async () => {
       await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
     } catch { /* silent */ }
   }
-  tableData.value = tableData.value.filter(r => !ids.includes(r.id))
+  await loadData()
   ElMessage.success(`已删除 ${selectedKeywords.value.length} 条记录`)
   selectedKeywords.value = []
 }
@@ -230,29 +231,23 @@ const handleSubmit = async () => {
   }
   if (isEdit.value) {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/keywords/${form.value.id}`, {
+      await fetch(`${API_BASE_URL}/api/keywords/${form.value.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
       })
-      if (res.ok) {
-        const updated = await res.json()
-        const idx = tableData.value.findIndex(r => r.id === updated.id)
-        if (idx > -1) tableData.value[idx] = updated
-      }
     } catch { /* silent */ }
+    await loadData()
     ElMessage.success('编辑成功')
   } else {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+      await fetch(`${API_BASE_URL}/api/keywords`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
       })
-      if (res.ok) {
-        tableData.value.unshift(await res.json())
-      }
     } catch { /* silent */ }
+    await loadData()
     ElMessage.success('添加成功')
   }
   dialogVisible.value = false

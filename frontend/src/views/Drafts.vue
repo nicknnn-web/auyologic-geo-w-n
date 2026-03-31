@@ -119,7 +119,7 @@ const handleBatchDelete = async () => {
   }
   
   // 同时从本地列表移除
-  tableData.value = tableData.value.filter(item => !ids.includes(item.id))
+  await loadData()
   selectedRows.value = []
   ElMessage.success(`已删除 ${ids.length} 条草稿`)
 }
@@ -187,7 +187,7 @@ const handleDelete = async (id) => {
     console.warn(`删除草稿 ${id} 失败:`, e)
   }
   // 从本地列表移除
-  tableData.value = tableData.value.filter(item => item.id !== id)
+  await loadData()
   ElMessage.success('删除成功')
 }
 

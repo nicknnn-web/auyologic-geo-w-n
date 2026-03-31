@@ -371,19 +371,15 @@ const handleSubmit = async () => {
     const userId = 'default_user'
     if (isEdit.value) {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
+        await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
           method: 'PUT',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             'x-user-id': userId
           },
           body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })
-        if (res.ok) {
-          const updated = await res.json()
-          const idx = tableData.value.findIndex(r => r.id === updated.id)
-          if (idx > -1) tableData.value[idx] = updated
-        }
+        await loadData()
       } catch { /* silent */ }
       ElMessage.success('编辑成功')
     } else {

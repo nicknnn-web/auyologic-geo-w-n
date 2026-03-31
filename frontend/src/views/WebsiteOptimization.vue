@@ -524,6 +524,7 @@ const autoSaveReport = async () => {
     
     if (res.ok) {
       console.log('✅ 报告已保存到后端')
+      await loadHistory()
     }
   } catch (e) {
     console.warn('自动保存失败:', e)
