@@ -674,6 +674,18 @@ app.use('/api', geoDetectionRouter);
 app.use('/api', websiteAnalyzerRouter);
 app.use('/api/ai', aiProxyRouter);
 
+// ========== Stub 接口（功能完善后替换为真实实现）==========
+
+// GEO 检测历史（目前暂无持久化，先返回空数组）
+app.get('/api/geo-detection-history', async (req, res) => {
+  res.json([]);
+});
+
+// 网站检测报告（目前暂无持久化，先返回空数组）
+app.get('/api/website-reports', async (req, res) => {
+  res.json([]);
+});
+
 // 启动
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, async () => {
