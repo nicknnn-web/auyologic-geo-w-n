@@ -627,7 +627,7 @@ app.post('/api/agent/fail-auth', async (req, res) => {
 
 // 下载本地代理程序（local-agent 文件夹打包为 zip）
 app.get('/api/agent/download', (req, res) => {
-  const agentDir = join(__dirname, '../../local-agent');
+  const agentDir = join(__dirname, '../local-agent');
   if (!fs.existsSync(agentDir)) {
     return res.status(404).json({ error: '本地代理目录不存在' });
   }
