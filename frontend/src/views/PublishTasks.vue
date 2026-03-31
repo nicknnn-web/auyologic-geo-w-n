@@ -225,18 +225,21 @@ let pollTimer = null
 // ---- 加载数据 ----
 const loadTasks = async () => {
   try {
-    const { data } = await axios.get(TASKS_API)
-    tasks.value = data
+    const res = await axios.get(TASKS_API)
+    tasks.value = Array.isArray(res.data) ? res.data : []
   } catch (err) {
     ElMessage.error('加载任务列表失败：' + (err.response?.data?.error || err.message))
+    tasks.value = []
   }
 }
 
 const loadAccounts = async () => {
   try {
-    const { data } = await axios.get(ACCOUNTS_API)
-    authorizedAccounts.value = data.filter(a => a.auth_status === 'authorized')
-  } catch {}
+    const res = await axios.get(ACCOUNTS_API)
+    authorizedAccounts.value = Array.isArray(res.data) ? res.data.filter(a => a.auth_status === 'authorized') : []
+  } catch {
+    authorizedAccounts.value = []
+  }
 }
 
 const loadDrafts = async () => {
