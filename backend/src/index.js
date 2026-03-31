@@ -625,7 +625,7 @@ app.post('/api/agent/fail-auth', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 下载本地代理程序（local-agent 文件夹打包为 zip）
+// 下载本地代理程序（local-agent 文件夹打包为 zip，.bat 文件强制 CRLF）
 app.get('/api/agent/download', (req, res) => {
   const agentDir = join(__dirname, '../local-agent');
   if (!fs.existsSync(agentDir)) {
@@ -640,11 +640,23 @@ app.get('/api/agent/download', (req, res) => {
     if (!res.headersSent) res.status(500).end();
   });
   archive.pipe(res);
-  // 排除 node_modules、node.exe、dist 等无关目录
+
+  const IGNORE = ['node_modules/**', 'dist/**', 'node.exe', '*.zip', '.auyologic-agent.json'];
+
+  // .bat 文件：读取内容，转换为 CRLF 后作为 buffer 写入（Windows CMD 需要 CRLF）
+  const batFiles = fs.readdirSync(agentDir).filter(f => f.endsWith('.bat'));
+  for (const bat of batFiles) {
+    const content = fs.readFileSync(join(agentDir, bat), 'utf8');
+    const crlf = content.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+    archive.append(Buffer.from(crlf, 'utf8'), { name: bat });
+  }
+
+  // 其余文件正常打包（排除 .bat 和忽略列表）
   archive.glob('**/*', {
     cwd: agentDir,
-    ignore: ['node_modules/**', 'dist/**', 'node.exe', '*.zip', '.auyologic-agent.json'],
+    ignore: [...IGNORE, '*.bat'],
   });
+
   archive.finalize();
 });
 
