@@ -145,16 +145,14 @@ tables.forEach(table => {
     app.get(hyphenPath, async (req, res) => {
       try {
         await ensureTable(table);
-        const userId = getUserId(req);
-        const result = await pool.query(`SELECT * FROM ${table} WHERE user_id = $1 ORDER BY id DESC`, [userId]);
+        const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`);
         res.json(toCamelCase(result.rows));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.post(hyphenPath, async (req, res) => {
       try {
         await ensureTable(table);
-        const userId = getUserId(req);
-        const data = { ...req.body, user_id: userId };
+        const data = { ...req.body };
         for (const [key, value] of Object.entries(data)) {
           const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
@@ -168,14 +166,13 @@ tables.forEach(table => {
     app.put(`${hyphenPath}/:id`, async (req, res) => {
       try {
         await ensureTable(table);
-        const userId = getUserId(req);
         const data = { ...req.body };
         for (const [key, value] of Object.entries(data)) {
           const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
         const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
-        const result = await pool.query(`UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} AND user_id = $${Object.keys(data).length + 2} RETURNING *`, [...Object.values(data), req.params.id, userId]);
+        const result = await pool.query(`UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} RETURNING *`, [...Object.values(data), req.params.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
         res.json(result.rows[0]);
       } catch (err) { res.status(500).json({ error: err.message }); }
@@ -183,8 +180,7 @@ tables.forEach(table => {
     app.delete(`${hyphenPath}/:id`, async (req, res) => {
       try {
         await ensureTable(table);
-        const userId = getUserId(req);
-        const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 AND user_id = $2 RETURNING *`, [req.params.id, userId]);
+        const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 RETURNING *`, [req.params.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
         res.json(result.rows[0]);
       } catch (err) { res.status(500).json({ error: err.message }); }
@@ -194,8 +190,7 @@ tables.forEach(table => {
   app.get(routePath, async (req, res) => {
     try {
       await ensureTable(table);
-      const userId = getUserId(req);
-      const result = await pool.query(`SELECT * FROM ${table} WHERE user_id = $1 ORDER BY id DESC`, [userId]);
+      const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`);
       res.json(toCamelCase(result.rows));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -203,9 +198,7 @@ tables.forEach(table => {
   app.post(routePath, async (req, res) => {
     try {
       await ensureTable(table);
-      const userId = getUserId(req);
-      // camelCase 转 snake_case
-      const data = { ...req.body, user_id: userId };
+      const data = { ...req.body };
       for (const [key, value] of Object.entries(data)) {
         const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
         if (snakeKey !== key) {
@@ -223,7 +216,6 @@ tables.forEach(table => {
   app.put(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
-      const userId = getUserId(req);
       const data = { ...req.body };
       for (const [key, value] of Object.entries(data)) {
         const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
@@ -234,8 +226,8 @@ tables.forEach(table => {
       }
       const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
       const result = await pool.query(
-        `UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} AND user_id = $${Object.keys(data).length + 2} RETURNING *`,
-        [...Object.values(data), req.params.id, userId]
+        `UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} RETURNING *`,
+        [...Object.values(data), req.params.id]
       );
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
       res.json(result.rows[0]);
@@ -245,19 +237,16 @@ tables.forEach(table => {
   app.delete(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
-      const userId = getUserId(req);
-      const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 AND user_id = $2 RETURNING *`, [req.params.id, userId]);
+      const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 RETURNING *`, [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
       res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // 新增：GET 单条记录
   app.get(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
-      const userId = getUserId(req);
-      const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1 AND user_id = $2`, [req.params.id, userId]);
+      const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
       res.json(toCamelCase(result.rows[0]));
     } catch (err) { res.status(500).json({ error: err.message }); }
@@ -295,11 +284,10 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// 企业设置 API
+// 企业设置 API（全局共享，不区分用户）
 app.get('/api/settings', async (req, res) => {
   try {
-    const userId = getUserId(req);
-    const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
+    const result = await pool.query(`SELECT * FROM users WHERE user_id = 'default_user'`);
     if (result.rows.length > 0) {
       const user = result.rows[0];
       // 返回与前端一致的字段名，Date 对象转 ISO 字符串
@@ -327,12 +315,11 @@ app.get('/api/settings', async (req, res) => {
 
 app.put('/api/settings', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const { company_name, website, industry, description, target_audience, deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model } = req.body;
 
     const result = await pool.query(`
       INSERT INTO users (user_id, company_name, website, industry, description, target_audience, deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+      VALUES ('default_user', $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
       ON CONFLICT (user_id) DO UPDATE SET
         company_name = EXCLUDED.company_name,
         website = EXCLUDED.website,
@@ -345,7 +332,7 @@ app.put('/api/settings', async (req, res) => {
         default_ai_model = EXCLUDED.default_ai_model,
         updated_at = NOW()
       RETURNING *
-    `, [userId, company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-chat']);
+    `, [company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-chat']);
 
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -358,12 +345,10 @@ app.put('/api/settings', async (req, res) => {
 
 app.get('/api/platform-accounts', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const result = await pool.query(
       `SELECT id, platform, account_name, phone_number,
               auth_status, auth_time, last_verified_at, status, created_at, updated_at
-       FROM media_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
-      [userId]
+       FROM media_accounts ORDER BY created_at DESC`
     );
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -371,14 +356,13 @@ app.get('/api/platform-accounts', async (req, res) => {
 
 app.post('/api/platform-accounts', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const { platform, account_name, phone_number } = req.body;
     if (!platform) return res.status(400).json({ error: '平台不能为空' });
     const result = await pool.query(
-      `INSERT INTO media_accounts (user_id, platform, account_name, phone_number, auth_status, status)
-       VALUES ($1, $2, $3, $4, 'pending', 'active') RETURNING
+      `INSERT INTO media_accounts (platform, account_name, phone_number, auth_status, status)
+       VALUES ($1, $2, $3, 'pending', 'active') RETURNING
        id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status, created_at`,
-      [userId, platform, account_name || '', phone_number || null]
+      [platform, account_name || '', phone_number || null]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -386,7 +370,6 @@ app.post('/api/platform-accounts', async (req, res) => {
 
 app.put('/api/platform-accounts/:id', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const { account_name, phone_number, status } = req.body;
     const result = await pool.query(
       `UPDATE media_accounts SET
@@ -394,9 +377,9 @@ app.put('/api/platform-accounts/:id', async (req, res) => {
          phone_number = COALESCE($2, phone_number),
          status       = COALESCE($3, status),
          updated_at   = NOW()
-       WHERE id = $4 AND user_id = $5
+       WHERE id = $4
        RETURNING id, platform, account_name, phone_number, auth_status, auth_time, status`,
-      [account_name || null, phone_number || null, status || null, req.params.id, userId]
+      [account_name || null, phone_number || null, status || null, req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
     res.json(result.rows[0]);
@@ -405,23 +388,18 @@ app.put('/api/platform-accounts/:id', async (req, res) => {
 
 app.delete('/api/platform-accounts/:id', async (req, res) => {
   try {
-    const userId = getUserId(req);
     await closeSession(req.params.id);
-    await pool.query(
-      'DELETE FROM media_accounts WHERE id = $1 AND user_id = $2',
-      [req.params.id, userId]
-    );
+    await pool.query('DELETE FROM media_accounts WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/platform-accounts/:id/auth-start', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const accountId = req.params.id;
     const row = await pool.query(
-      'SELECT * FROM media_accounts WHERE id = $1 AND user_id = $2',
-      [accountId, userId]
+      'SELECT * FROM media_accounts WHERE id = $1',
+      [accountId]
     );
     if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
     const { platform, phone_number } = row.rows[0];
@@ -442,7 +420,6 @@ app.post('/api/platform-accounts/:id/auth-submit-code', async (req, res) => {
 
 app.post('/api/platform-accounts/:id/auth-complete', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const accountId = req.params.id;
     const { storageState, userAgent } = await captureSession(accountId);
     await pool.query(
@@ -453,8 +430,8 @@ app.post('/api/platform-accounts/:id/auth-complete', async (req, res) => {
          auth_time        = NOW(),
          last_verified_at = NOW(),
          updated_at       = NOW()
-       WHERE id = $3 AND user_id = $4`,
-      [JSON.stringify(storageState), userAgent, accountId, userId]
+       WHERE id = $3`,
+      [JSON.stringify(storageState), userAgent, accountId]
     );
     const updated = await pool.query(
       `SELECT id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status
@@ -479,11 +456,10 @@ app.post('/api/platform-accounts/:id/auth-cancel', async (req, res) => {
 
 app.post('/api/platform-accounts/:id/auth-verify', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const accountId = req.params.id;
     const row = await pool.query(
-      'SELECT platform, session_state FROM media_accounts WHERE id = $1 AND user_id = $2',
-      [accountId, userId]
+      'SELECT platform, session_state FROM media_accounts WHERE id = $1',
+      [accountId]
     );
     if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
     const { platform, session_state } = row.rows[0];
@@ -502,14 +478,11 @@ app.post('/api/platform-accounts/:id/auth-verify', async (req, res) => {
 
 app.get('/api/publish-tasks', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const result = await pool.query(
       `SELECT pt.*, ma.account_name
        FROM publish_tasks pt
        LEFT JOIN media_accounts ma ON pt.account_id = ma.id
-       WHERE pt.user_id = $1
-       ORDER BY pt.created_at DESC`,
-      [userId]
+       ORDER BY pt.created_at DESC`
     );
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -517,15 +490,14 @@ app.get('/api/publish-tasks', async (req, res) => {
 
 app.post('/api/publish-tasks', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const { task_name, draft_id, draft_title, platform, account_id, content, title, tags } = req.body;
     if (!platform || !account_id) return res.status(400).json({ error: '平台和账号不能为空' });
     const result = await pool.query(
       `INSERT INTO publish_tasks
-         (user_id, task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+         (task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')
        RETURNING *`,
-      [userId, task_name || '', draft_id || null, draft_title || '', platform, account_id, content || '', title || '', tags || '']
+      [task_name || '', draft_id || null, draft_title || '', platform, account_id, content || '', title || '', tags || '']
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -533,30 +505,19 @@ app.post('/api/publish-tasks', async (req, res) => {
 
 app.delete('/api/publish-tasks/:id', async (req, res) => {
   try {
-    const userId = getUserId(req);
-    await pool.query(
-      'DELETE FROM publish_tasks WHERE id = $1 AND user_id = $2',
-      [req.params.id, userId]
-    );
+    await pool.query('DELETE FROM publish_tasks WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/publish-tasks/:id/execute', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const taskId = req.params.id;
-    const taskRow = await pool.query(
-      'SELECT * FROM publish_tasks WHERE id = $1 AND user_id = $2',
-      [taskId, userId]
-    );
+    const taskRow = await pool.query('SELECT * FROM publish_tasks WHERE id = $1', [taskId]);
     if (taskRow.rows.length === 0) return res.status(404).json({ error: '任务不存在' });
     const task = taskRow.rows[0];
 
-    const accRow = await pool.query(
-      'SELECT * FROM media_accounts WHERE id = $1 AND user_id = $2',
-      [task.account_id, userId]
-    );
+    const accRow = await pool.query('SELECT * FROM media_accounts WHERE id = $1', [task.account_id]);
     if (accRow.rows.length === 0) return res.status(404).json({ error: '关联账号不存在' });
     const account = accRow.rows[0];
 
@@ -596,9 +557,9 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
             );
             await pool.query(
               `INSERT INTO publish_records
-                 (user_id, task_id, draft_title, platform, account_id, account_name, published_url, status)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,'已发布')`,
-              [userId, taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
+                 (task_id, draft_title, platform, account_id, account_name, published_url, status)
+               VALUES ($1,$2,$3,$4,$5,$6,'已发布')`,
+              [taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
             );
           }
           cleanupTask(taskId);
@@ -636,13 +597,10 @@ app.get('/api/publish-tasks/:id/status', async (req, res) => {
 
 app.get('/api/publish-records', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const result = await pool.query(
       `SELECT id, draft_title, platform, account_name, published_url, status, error_message, created_at
        FROM publish_records
-       WHERE user_id = $1
-       ORDER BY created_at DESC`,
-      [userId]
+       ORDER BY created_at DESC`
     );
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }

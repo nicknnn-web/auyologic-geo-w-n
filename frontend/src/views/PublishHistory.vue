@@ -13,8 +13,8 @@
           {{ $index + 1 }}
         </template>
       </el-table-column>
-      <el-table-column prop="draft_title" label="文章标题" />
-      <el-table-column prop="account_name" label="发布账号" width="140" />
+      <el-table-column prop="draftTitle" label="文章标题" />
+      <el-table-column prop="accountName" label="发布账号" width="140" />
       <el-table-column prop="platform" label="发布平台" width="120">
         <template #default="{ row }">
           <el-tag v-if="row.platform" :type="getPlatformColor(row.platform)">{{ row.platform }}</el-tag>
@@ -23,7 +23,7 @@
       </el-table-column>
       <el-table-column label="发布链接" min-width="200">
         <template #default="{ row }">
-          <a v-if="row.published_url" :href="row.published_url" target="_blank" class="text-blue-500 hover:underline">查看帖子</a>
+          <a v-if="row.publishedUrl" :href="row.publishedUrl" target="_blank" class="text-blue-500 hover:underline">查看帖子</a>
           <span v-else class="text-gray-400">-</span>
         </template>
       </el-table-column>
@@ -34,7 +34,7 @@
       </el-table-column>
       <el-table-column label="发布时间" width="180">
         <template #default="{ row }">
-          {{ formatTime(row.created_at) }}
+          {{ formatTime(row.createdAt) }}
         </template>
       </el-table-column>
     </el-table>
