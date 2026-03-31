@@ -540,6 +540,7 @@ const handleAIExpand = async () => {
       }
       ElMessage.success(`生成 ${successCount} 个替代表述，已添加`)
       selectedRows.value = []
+      await loadData()
     } finally {
       isLoading.value = false
       searchStatusText.value = ''
@@ -676,6 +677,8 @@ const handleAIExpand = async () => {
 
     if (successCount > 0) {
       ElMessage.success(`成功生成 ${successCount} 个问题${failCount > 0 ? `，${failCount} 个失败` : ''}`)
+      // 刷新列表，确保显示所有问题（包括之前生成的）
+      await loadData()
     } else {
       ElMessage.error('生成问题失败，请检查网络或API配置')
     }
