@@ -158,6 +158,12 @@ export async function initDB() {
     await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS user_agent TEXT`).catch(() => {});
     await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
     await client.query(`ALTER TABLE media_accounts ALTER COLUMN user_id TYPE VARCHAR(255) USING user_id::TEXT`).catch(() => {});
+    // 本地代理授权任务协调字段
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS auth_task_status VARCHAR(30) DEFAULT 'idle'`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS auth_task_phone VARCHAR(20)`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS pending_sms_code VARCHAR(10)`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS user_confirm_complete BOOLEAN DEFAULT FALSE`).catch(() => {});
+    await client.query(`ALTER TABLE media_accounts ADD COLUMN IF NOT EXISTS auth_task_started_at TIMESTAMP`).catch(() => {});
 
     // 投放任务
     await client.query(`

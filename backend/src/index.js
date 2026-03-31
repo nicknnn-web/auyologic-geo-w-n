@@ -2,14 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
 import 'dotenv/config';
+import archiver from 'archiver';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import fs from 'fs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { initDB } from './db.js';
 import {
-  startAuth,
-  submitSmsCode,
-  captureSession,
   verifySession,
   closeSession,
-  getSessionStatus,
 } from './services/playwrightAuth.js';
 import {
   executePublishTask,
@@ -394,84 +397,255 @@ app.delete('/api/platform-accounts/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 任务状态映射 → 前端 sessionStatus
+const AUTH_TASK_STATUS_MAP = {
+  idle: null,
+  waiting_agent: 'waiting_agent',
+  agent_running: 'opening',
+  browser_opened: 'browser_opened',
+  waiting_sms_code: 'waiting_sms_code',
+  submitting: 'submitting',
+  login_detected: 'authorized',
+  done: 'authorized',
+  failed: null,
+  cancelled: null,
+};
+
+// 创建授权任务（写 DB，不启动 Playwright）
 app.post('/api/platform-accounts/:id/auth-start', async (req, res) => {
   try {
     const accountId = req.params.id;
-    const row = await pool.query(
-      'SELECT * FROM media_accounts WHERE id = $1',
-      [accountId]
-    );
+    const row = await pool.query('SELECT * FROM media_accounts WHERE id = $1', [accountId]);
     if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
-    const { platform, phone_number } = row.rows[0];
+    const { phone_number } = row.rows[0];
     const phoneNumber = req.body.phone_number || phone_number;
-    const result = await startAuth(accountId, platform, phoneNumber);
-    res.json(result);
+    await pool.query(
+      `UPDATE media_accounts SET
+         auth_task_status       = 'waiting_agent',
+         auth_task_phone        = $1,
+         pending_sms_code       = NULL,
+         user_confirm_complete  = FALSE,
+         auth_task_started_at   = NOW(),
+         updated_at             = NOW()
+       WHERE id = $2`,
+      [phoneNumber || null, accountId]
+    );
+    res.json({ success: true, message: '授权任务已创建，等待本地代理接收...' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 存储验证码供代理取走
 app.post('/api/platform-accounts/:id/auth-submit-code', async (req, res) => {
   try {
     const { code } = req.body;
     if (!code) return res.status(400).json({ error: '验证码不能为空' });
-    const result = await submitSmsCode(req.params.id, code);
-    res.json(result);
+    await pool.query(
+      `UPDATE media_accounts SET pending_sms_code = $1, updated_at = NOW() WHERE id = $2`,
+      [code.trim(), req.params.id]
+    );
+    res.json({ success: true, message: '验证码已提交，代理将自动填入' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 用户点击「我已完成登录」→ 通知代理捕获 session
 app.post('/api/platform-accounts/:id/auth-complete', async (req, res) => {
   try {
     const accountId = req.params.id;
-    const { storageState, userAgent } = await captureSession(accountId);
+    const row = await pool.query('SELECT auth_task_status FROM media_accounts WHERE id = $1', [accountId]);
+    if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    if (row.rows[0].auth_task_status === 'done') {
+      return res.json({ success: true, message: '授权已完成' });
+    }
     await pool.query(
-      `UPDATE media_accounts SET
-         session_state    = $1,
-         user_agent       = $2,
-         auth_status      = 'authorized',
-         auth_time        = NOW(),
-         last_verified_at = NOW(),
-         updated_at       = NOW()
-       WHERE id = $3`,
-      [JSON.stringify(storageState), userAgent, accountId]
-    );
-    const updated = await pool.query(
-      `SELECT id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status
-       FROM media_accounts WHERE id = $1`,
+      `UPDATE media_accounts SET user_confirm_complete = TRUE, updated_at = NOW() WHERE id = $1`,
       [accountId]
     );
-    res.json({ success: true, account: updated.rows[0] });
+    res.json({ success: true, message: '已通知代理捕获登录状态，请稍候...' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/platform-accounts/:id/auth-status', (req, res) => {
-  const status = getSessionStatus(req.params.id);
-  res.json({ sessionStatus: status });
+// 查询授权状态（从 DB 读）
+app.get('/api/platform-accounts/:id/auth-status', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT auth_task_status FROM media_accounts WHERE id = $1', [req.params.id]
+    );
+    if (result.rows.length === 0) return res.json({ sessionStatus: null });
+    const raw = result.rows[0].auth_task_status || 'idle';
+    res.json({ sessionStatus: AUTH_TASK_STATUS_MAP[raw] ?? raw });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 取消授权任务
 app.post('/api/platform-accounts/:id/auth-cancel', async (req, res) => {
   try {
-    await closeSession(req.params.id);
+    await pool.query(
+      `UPDATE media_accounts SET
+         auth_task_status = 'cancelled',
+         user_confirm_complete = FALSE,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [req.params.id]
+    );
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// 验证 session 有效性（仍用纯函数，不需要浏览器）
 app.post('/api/platform-accounts/:id/auth-verify', async (req, res) => {
   try {
     const accountId = req.params.id;
     const row = await pool.query(
-      'SELECT platform, session_state FROM media_accounts WHERE id = $1',
-      [accountId]
+      'SELECT platform, session_state FROM media_accounts WHERE id = $1', [accountId]
     );
     if (row.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
     const { platform, session_state } = row.rows[0];
     const valid = await verifySession(platform, session_state);
     const newStatus = valid ? 'authorized' : 'expired';
     await pool.query(
-      `UPDATE media_accounts SET auth_status = $1, last_verified_at = NOW(), updated_at = NOW()
-       WHERE id = $2`,
+      `UPDATE media_accounts SET auth_status = $1, last_verified_at = NOW(), updated_at = NOW() WHERE id = $2`,
       [newStatus, accountId]
     );
     res.json({ valid, auth_status: newStatus });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== 本地代理专用接口 ==========
+
+// 代理心跳（用于前端检测代理是否在线）
+let agentLastSeen = null;
+
+app.post('/api/agent/heartbeat', (req, res) => {
+  agentLastSeen = Date.now();
+  res.json({ ok: true });
+});
+
+app.get('/api/agent/status', (req, res) => {
+  const online = agentLastSeen !== null && (Date.now() - agentLastSeen < 30000);
+  res.json({ online, lastSeen: agentLastSeen });
+});
+
+// 代理轮询：取一条待处理任务（原子操作）
+app.get('/api/agent/pending-task', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE media_accounts
+         SET auth_task_status = 'agent_running', updated_at = NOW()
+       WHERE id = (
+         SELECT id FROM media_accounts
+         WHERE auth_task_status = 'waiting_agent'
+         ORDER BY auth_task_started_at ASC
+         LIMIT 1
+       )
+       RETURNING id, platform, auth_task_phone`
+    );
+    if (result.rows.length === 0) return res.json({ task: null });
+    const row = result.rows[0];
+    res.json({ task: { accountId: row.id, platform: row.platform, phoneNumber: row.auth_task_phone } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理上报进度
+app.post('/api/agent/update-status', async (req, res) => {
+  try {
+    const { accountId, status } = req.body;
+    await pool.query(
+      `UPDATE media_accounts SET auth_task_status = $1, updated_at = NOW() WHERE id = $2`,
+      [status, accountId]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理取验证码（取走后清除）
+app.get('/api/agent/sms-code/:accountId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT pending_sms_code FROM media_accounts WHERE id = $1', [req.params.accountId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    const code = result.rows[0].pending_sms_code;
+    if (code) {
+      await pool.query(
+        `UPDATE media_accounts SET pending_sms_code = NULL, updated_at = NOW() WHERE id = $1`,
+        [req.params.accountId]
+      );
+      return res.json({ code });
+    }
+    res.json({ code: null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理查询用户是否点击了「我已完成登录」或取消
+app.get('/api/agent/confirm-check/:accountId', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT user_confirm_complete, auth_task_status FROM media_accounts WHERE id = $1',
+      [req.params.accountId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    const row = result.rows[0];
+    res.json({
+      confirmed: row.user_confirm_complete === true,
+      cancelled: row.auth_task_status === 'cancelled',
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理完成授权，上传 storageState
+app.post('/api/agent/complete-auth', async (req, res) => {
+  try {
+    const { accountId, storageState, userAgent } = req.body;
+    await pool.query(
+      `UPDATE media_accounts SET
+         session_state         = $1,
+         user_agent            = $2,
+         auth_status           = 'authorized',
+         auth_time             = NOW(),
+         last_verified_at      = NOW(),
+         auth_task_status      = 'done',
+         user_confirm_complete = FALSE,
+         updated_at            = NOW()
+       WHERE id = $3`,
+      [JSON.stringify(storageState), userAgent, accountId]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理报告失败
+app.post('/api/agent/fail-auth', async (req, res) => {
+  try {
+    const { accountId } = req.body;
+    await pool.query(
+      `UPDATE media_accounts SET auth_task_status = 'failed', updated_at = NOW() WHERE id = $1`,
+      [accountId]
+    );
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 下载本地代理程序（local-agent 文件夹打包为 zip）
+app.get('/api/agent/download', (req, res) => {
+  const agentDir = join(__dirname, '../../local-agent');
+  if (!fs.existsSync(agentDir)) {
+    return res.status(404).json({ error: '本地代理目录不存在' });
+  }
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="auyologic-local-agent.zip"');
+
+  const archive = archiver('zip', { zlib: { level: 6 } });
+  archive.on('error', (err) => {
+    console.error('[下载代理] 打包出错:', err.message);
+    if (!res.headersSent) res.status(500).end();
+  });
+  archive.pipe(res);
+  // 排除 node_modules、node.exe、dist 等无关目录
+  archive.glob('**/*', {
+    cwd: agentDir,
+    ignore: ['node_modules/**', 'dist/**', 'node.exe', '*.zip', '.auyologic-agent.json'],
+  });
+  archive.finalize();
 });
 
 // ========== 发布任务管理 ==========

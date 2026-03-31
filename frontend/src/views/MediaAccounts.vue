@@ -6,12 +6,37 @@
         <div class="text-lg font-bold">自媒体账号管理</div>
         <div class="text-sm text-gray-500">管理各平台账号授权，授权后可一键发帖</div>
       </div>
-      <div class="ml-auto">
+      <div class="ml-auto flex items-center gap-3">
+        <!-- 代理在线状态指示 -->
+        <div class="flex items-center gap-1.5 text-sm">
+          <span
+            class="inline-block w-2 h-2 rounded-full"
+            :class="agentOnline ? 'bg-green-500' : 'bg-gray-300'"
+          />
+          <span :class="agentOnline ? 'text-green-600' : 'text-gray-400'">
+            {{ agentOnline ? '本地代理在线' : '本地代理离线' }}
+          </span>
+        </div>
         <el-button type="primary" @click="openAddDialog">
           <el-icon class="mr-1"><Plus /></el-icon>
           添加账号
         </el-button>
       </div>
+    </div>
+
+    <!-- 代理离线提示横幅 -->
+    <div v-if="!agentOnline" class="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+      <el-icon class="text-amber-500 flex-shrink-0" size="18"><Warning /></el-icon>
+      <div class="flex-1 text-sm text-amber-700">
+        <span class="font-medium">本地代理未运行</span>
+        — 账号授权需要在您的电脑上运行本地代理程序。下载后解压，双击
+        <code class="bg-amber-100 px-1 rounded text-xs">启动代理.bat</code>
+        即可启动。
+      </div>
+      <el-button size="small" type="warning" plain @click="handleDownloadAgent">
+        <el-icon class="mr-1"><Download /></el-icon>
+        下载本地代理
+      </el-button>
     </div>
 
     <!-- 账号卡片列表 -->
@@ -139,12 +164,22 @@
     >
       <!-- Step 0：填写手机号 + 启动 -->
       <div v-if="authStep === 0">
+        <!-- 代理离线警告 -->
         <el-alert
+          v-if="!agentOnline"
+          type="error"
+          :closable="false"
+          class="mb-3"
+          title="本地代理未运行，无法授权"
+          description="请先启动本地代理程序（local-agent/），代理在线后再点击「打开授权浏览器」。"
+        />
+        <el-alert
+          v-else
           type="info"
           :closable="false"
           class="mb-4"
           title="授权说明"
-          description="点击「打开授权浏览器」后，系统将在本机弹出一个浏览器窗口，并自动跳转到登录页。若提供了手机号，将自动填入并发送验证码；否则请在弹出的浏览器中手动完成登录。"
+          description="点击「打开授权浏览器」后，本地代理将在您的电脑上弹出一个浏览器窗口并跳转到登录页。若提供了手机号，将自动填入并发送验证码；否则请在弹出的浏览器中手动完成登录。"
         />
         <el-form label-width="90px">
           <el-form-item label="平台">
@@ -220,7 +255,7 @@
         <!-- Step 0 -->
         <template v-if="authStep === 0">
           <el-button @click="authDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="authStarting" @click="handleAuthStart">
+          <el-button type="primary" :loading="authStarting" :disabled="!agentOnline" @click="handleAuthStart">
             打开授权浏览器
           </el-button>
         </template>
@@ -245,10 +280,28 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Key, Phone, Loading, CircleCheck } from '@element-plus/icons-vue'
+import { Plus, Key, Phone, Loading, CircleCheck, Warning, Download } from '@element-plus/icons-vue'
 import api from '../utils/api'
 
 const API = '/api/platform-accounts'
+
+// ---- 代理在线状态 + 下载 ----
+const agentOnline = ref(false)
+let agentCheckTimer = null
+
+const handleDownloadAgent = () => {
+  const base = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
+  window.open(`${base}/api/agent/download`, '_blank')
+}
+
+const checkAgentStatus = async () => {
+  try {
+    const data = await api.get('/api/agent/status')
+    agentOnline.value = data.online === true
+  } catch {
+    agentOnline.value = false
+  }
+}
 
 // ---- 账号列表 ----
 const accounts = ref([])
@@ -264,7 +317,11 @@ const loadAccounts = async () => {
   }
 }
 
-onMounted(() => loadAccounts())
+onMounted(() => {
+  loadAccounts()
+  checkAgentStatus()
+  agentCheckTimer = setInterval(checkAgentStatus, 15000)
+})
 
 // ---- 添加 / 编辑账号 ----
 const accountDialogVisible = ref(false)
@@ -387,12 +444,10 @@ const handleAuthComplete = async () => {
   authCompleting.value = true
   try {
     await api.post(`${API}/${authAccount.value.id}/auth-complete`)
-    stopPolling()
-    authStep.value = 2
-    await loadAccounts()
-    ElMessage.success('授权成功！登录状态已保存')
+    ElMessage.info('已通知代理捕获登录状态，请稍候...')
+    // 代理捕获完成后轮询会自动检测到 authorized 并推进到 Step 2
   } catch (err) {
-    ElMessage.error(err.message || '捕获登录态失败，请确认浏览器中已完成登录后再试')
+    ElMessage.error(err.message || '操作失败')
   } finally {
     authCompleting.value = false
   }
@@ -430,14 +485,12 @@ const startPolling = () => {
     try {
       const data = await api.get(`${API}/${authAccount.value.id}/auth-status`)
       authSessionStatus.value = data.sessionStatus
-      // 后端 session 不存在（null）且浏览器应已打开时：可能是后端重启，提示重新授权
-      if (data.sessionStatus === null && authStep.value === 1) {
-        const elapsed = Date.now() - pollStartTime
-        if (elapsed > 10000) { // 启动 10 秒后仍为 null 才判断为异常
-          stopPolling()
-          ElMessage.warning('授权会话已中断（可能后端已重启），请重新点击「打开授权浏览器」')
-          authStep.value = 0
-        }
+      // 代理完成授权后自动推进到 Step 2
+      if (data.sessionStatus === 'authorized' && authStep.value === 1) {
+        stopPolling()
+        authStep.value = 2
+        await loadAccounts()
+        ElMessage.success('授权成功！登录状态已保存')
       }
     } catch {}
   }, 2000)
@@ -448,7 +501,10 @@ const stopPolling = () => {
   pollStartTime = null
 }
 
-onUnmounted(() => stopPolling())
+onUnmounted(() => {
+  stopPolling()
+  if (agentCheckTimer) clearInterval(agentCheckTimer)
+})
 
 // ---- 校验 session 有效性 ----
 const handleVerify = async (account) => {
@@ -499,12 +555,13 @@ const getAuthLabel = (status) => {
 
 const getAuthProgressText = (status) => {
   const map = {
-    opening: '正在启动浏览器…',
+    waiting_agent: '等待本地代理接收任务…',
+    opening: '代理正在启动浏览器…',
     browser_opened: '浏览器已打开，请在弹出窗口中完成登录',
     waiting_sms_code: '等待验证码提交…',
     submitting: '正在提交，等待跳转…',
-    authorized: '登录成功，请点击「我已完成登录」',
-    null: '浏览器已打开',
+    authorized: '正在捕获登录状态…',
+    null: '等待中…',
   }
   return map[status] || '请在弹出的浏览器中完成登录'
 }
