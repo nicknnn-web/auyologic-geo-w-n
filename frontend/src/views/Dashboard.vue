@@ -328,13 +328,15 @@ const formatHistoryDate = (dateStr) => {
 onMounted(async () => {
   const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
 
-  // 网站健康度 - 从后端 API 获取
+  // 网站健康度 - 从后端 API 获取（防御性：API 未实现时静默跳过）
   try {
     const res = await fetch(`${API_BASE_URL}/api/website-reports`, {
       headers: { 'x-user-id': userId }
     })
-    if (res.ok) {
-      const reports = await res.json()
+    if (res.ok && res.status !== 404) {
+      const text = await res.text()
+      if (!text || text.trim() === '') return
+      const reports = JSON.parse(text)
       if (reports && reports.length > 0) {
         const latestReport = reports[0]
         siteScore.value = latestReport.score
@@ -395,13 +397,15 @@ onMounted(async () => {
     console.warn('获取草稿失败:', e)
   }
 
-  // 发布历史 - 从后端 API
+  // 发布历史 - 从后端 API（防御性：API 未实现时静默跳过）
   try {
     const res = await fetch(`${API_BASE_URL}/api/publish-history`, {
       headers: { 'x-user-id': userId }
     })
-    if (res.ok) {
-      const data = await res.json()
+    if (res.ok && res.status !== 404) {
+      const text = await res.text()
+      if (!text || text.trim() === '') return
+      const data = JSON.parse(text)
       if (data && data.length > 0) {
         contentStats.value.published = data.length
       }
@@ -410,13 +414,15 @@ onMounted(async () => {
     console.warn('获取发布历史失败:', e)
   }
 
-  // GEO检测历史 - 从后端 API
+  // GEO检测历史 - 从后端 API（防御性：API 未实现时静默跳过）
   try {
     const res = await fetch(`${API_BASE_URL}/api/geo-detection-history`, {
       headers: { 'x-user-id': userId }
     })
-    if (res.ok) {
-      const data = await res.json()
+    if (res.ok && res.status !== 404) {
+      const text = await res.text()
+      if (!text || text.trim() === '') return
+      const data = JSON.parse(text)
       if (data && data.length > 0) {
         geoHistory.value = data.slice(-10).reverse()
       }
