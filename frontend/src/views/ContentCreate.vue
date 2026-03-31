@@ -581,7 +581,7 @@ const selectedCommand = computed(() => {
 })
 
 onMounted(async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   
   // 从后端 API 加载关键词
   try {
@@ -1354,7 +1354,7 @@ const handleSaveDraft = async () => {
     const index = drafts.findIndex(d => Number(d.id) === editId)
     
     // 尝试同步到后端
-    const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+    const userId = 'default_user'
     try {
       await fetch(`${API_BASE_URL}/api/drafts/${editId}`, {
         method: 'PUT',
@@ -1379,7 +1379,7 @@ const handleSaveDraft = async () => {
     }
   } else {
     // 创建新草稿
-    const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+    const userId = 'default_user'
     try {
       const res = await fetch(`${API_BASE_URL}/api/drafts`, {
         method: 'POST',
@@ -1422,7 +1422,7 @@ const handleSaveAsNew = async () => {
     status: '草稿'
   }
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${API_BASE_URL}/api/drafts`, {
       method: 'POST',

@@ -303,7 +303,7 @@ const kwSearchingText = ref('')
 const kwDialogVisible = ref(false)
 const kwGroups = ref([])
 
-const getUserId = () => localStorage.getItem('auyologic_user_id') || 'default_user'
+const getUserId = () => 'default_user'
 
 const loadData = async () => {
   try {
@@ -915,7 +915,7 @@ const confirmKeywords = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/keywords`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user' },
+        headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
         body: JSON.stringify({ keyword: kw.text, type: keywordType })
       })
       if (res.ok) {

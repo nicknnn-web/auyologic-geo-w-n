@@ -191,7 +191,7 @@ const questionSortOrder = ref('') // '' | 'asc' | 'desc'
 
 // 加载数据
 const loadData = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions`, {
       headers: { 'x-user-id': userId }
@@ -470,7 +470,7 @@ const handleAIExpand = async () => {
     // 优先从 API 获取关键词
     try {
       const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-        headers: { 'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user' }
+        headers: { 'x-user-id': 'default_user' }
       })
       if (res.ok) {
         const allKeywords = await res.json()
@@ -558,7 +558,7 @@ const handleAIExpand = async () => {
           successCount++
           
           // 同时同步到后端 API
-          const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+          const userId = 'default_user'
           try {
             await fetch(`${API_BASE_URL}/api/questions`, {
               method: 'POST',
@@ -599,7 +599,7 @@ const cycleStatus = async (row) => {
   const nextIndex = (currentIndex + 1) % statusOrder.length
   const newStatus = statusOrder[nextIndex]
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
@@ -625,7 +625,7 @@ const cycleKeywordType = async (row) => {
   const nextIndex = (currentIndex + 1) % typeOrder.length
   const newType = typeOrder[nextIndex]
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
@@ -651,7 +651,7 @@ const handleSelectionChange = (selection) => {
 
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   
   // 同步删除后端
   const idsToDelete = selectedRows.value.map(r => r.id)
@@ -690,7 +690,7 @@ const handleClearAll = async () => {
     return // 用户取消
   }
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const count = tableData.value.length
   
   // 逐个从后端删除
@@ -728,7 +728,7 @@ const handleSubmit = async () => {
     return
   }
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const newItem = {
     question: form.value.question,
     keywordType: form.value.keywordType,
@@ -761,7 +761,7 @@ const handleSubmit = async () => {
 }
 
 const handleDelete = async (id) => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步删除后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${id}`, {

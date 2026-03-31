@@ -477,7 +477,7 @@ const handleStartCheck = async (force = false) => {
 const autoSaveReport = async () => {
   if (!report.value) return
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const reportData = {
     url: report.value.url,
     score: report.value.score,
@@ -608,7 +608,7 @@ const handleRecheck = async (url) => {
 }
 
 const handleClearHistory = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步删除后端全部记录
   try {
     await fetch(WEBSITE_REPORTS_API, {
@@ -628,7 +628,7 @@ const handleClearHistory = async () => {
 }
 
 const loadHistory = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(WEBSITE_REPORTS_API, {
       headers: { 'x-user-id': userId }
@@ -665,7 +665,7 @@ const toggleSelect = (idx) => {
 }
 
 const handleBatchDelete = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   
   // 从后端删除选中的记录
   const idsToDelete = selectedHistory.value.map(i => reportHistory.value[i].id).filter(Boolean)
