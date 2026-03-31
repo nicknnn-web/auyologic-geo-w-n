@@ -395,7 +395,7 @@ onMounted(async () => {
     console.warn('获取草稿失败:', e)
   }
 
-  // 发布历史 - 从后端 API
+  // 发布记录 - 从后端 API
   try {
     const res = await fetch(`${API_BASE_URL}/api/publish-records`, {
       headers: { 'x-user-id': userId }
@@ -407,12 +407,12 @@ onMounted(async () => {
       }
     }
   } catch (e) {
-    console.warn('获取发布历史失败:', e)
+    console.warn('获取发布记录失败:', e)
   }
 
   // GEO检测历史 - 从后端 API
   try {
-    const res = await fetch(`${API_BASE_URL}/api/geo-detection-history`, {
+    const res = await fetch(`${API_BASE_URL}/api/geo-tasks`, {
       headers: { 'x-user-id': userId }
     })
     if (res.ok) {

@@ -13,16 +13,17 @@
           {{ $index + 1 }}
         </template>
       </el-table-column>
-      <el-table-column prop="title" label="文章标题" />
-      <el-table-column prop="brand" label="品牌" width="120" />
+      <el-table-column prop="draft_title" label="文章标题" />
+      <el-table-column prop="account_name" label="发布账号" width="140" />
       <el-table-column prop="platform" label="发布平台" width="120">
         <template #default="{ row }">
-          <el-tag :type="getPlatformColor(row.platform)">{{ row.platform }}</el-tag>
+          <el-tag v-if="row.platform" :type="getPlatformColor(row.platform)">{{ row.platform }}</el-tag>
+          <span v-else class="text-gray-400">-</span>
         </template>
       </el-table-column>
-      <el-table-column prop="url" label="发布链接" min-width="200">
+      <el-table-column label="发布链接" min-width="200">
         <template #default="{ row }">
-          <a v-if="row.url" :href="row.url" target="_blank" class="text-blue-500 hover:underline">查看</a>
+          <a v-if="row.published_url" :href="row.published_url" target="_blank" class="text-blue-500 hover:underline">查看帖子</a>
           <span v-else class="text-gray-400">-</span>
         </template>
       </el-table-column>
@@ -31,7 +32,11 @@
           <el-tag :type="row.status === '已发布' ? 'success' : 'warning'">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="publishedAt" label="发布时间" width="180" />
+      <el-table-column label="发布时间" width="180">
+        <template #default="{ row }">
+          {{ formatTime(row.created_at) }}
+        </template>
+      </el-table-column>
     </el-table>
 
     <el-empty v-if="sortedData.length === 0" description="暂无发布记录" />
@@ -40,7 +45,8 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getList } from '../utils/storage'
+import { ElMessage } from 'element-plus'
+import { publishRecordsAPI } from '../utils/api'
 
 const tableData = ref([])
 
@@ -49,12 +55,23 @@ const sortedData = computed(() => {
 })
 
 const getPlatformColor = (platform) => {
-  const map = { '微信公众号': 'green', '小红书': 'red', '抖音': 'dark', '微博': 'orange', '知乎': 'blue', 'B站': 'blue' }
+  const map = { '微信公众号': 'success', '小红书': 'danger', '抖音': 'info', '微博': 'warning', '知乎': 'primary', 'B站': 'primary' }
   return map[platform] || 'info'
 }
 
-const loadData = () => {
-  tableData.value = getList('publishHistory')
+const formatTime = (ts) => {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`
+}
+
+const loadData = async () => {
+  try {
+    const data = await publishRecordsAPI.list()
+    tableData.value = Array.isArray(data) ? data : []
+  } catch (e) {
+    ElMessage.error('加载发布记录失败：' + e.message)
+  }
 }
 
 onMounted(() => { loadData() })
