@@ -40,7 +40,7 @@ const getUserId = (req) => {
   return 'default_user';
 };
 
-// 数据库表结构
+// 数据库表结构test
 const tableSchemas = {
   users: `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, user_id VARCHAR(255) UNIQUE, username VARCHAR(200), email VARCHAR(200), password_hash VARCHAR(255), deepseek_api_key TEXT, doubao_api_key TEXT, kimi_api_key TEXT, company_name VARCHAR(500), website VARCHAR(500), industry VARCHAR(200), description TEXT, target_audience TEXT, default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`,
   keywords: `CREATE TABLE IF NOT EXISTS keywords (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword VARCHAR(500), type VARCHAR(50), source VARCHAR(100), status VARCHAR(20) DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW())`,
@@ -139,7 +139,7 @@ const toCamelCase = (obj) => {
 tables.forEach(table => {
   const routePath = `/api/${table}`;
   const hyphenPath = `/api/${table.replace(/_/g, '-')}`;
-  
+
   // 如果有下划线，添加 hyphenated 别名路由
   if (table.includes('_')) {
     app.get(hyphenPath, async (req, res) => {
@@ -190,7 +190,7 @@ tables.forEach(table => {
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
   }
-  
+
   app.get(routePath, async (req, res) => {
     try {
       await ensureTable(table);
@@ -199,7 +199,7 @@ tables.forEach(table => {
       res.json(toCamelCase(result.rows));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
-  
+
   app.post(routePath, async (req, res) => {
     try {
       await ensureTable(table);
@@ -219,7 +219,7 @@ tables.forEach(table => {
       res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
-  
+
   app.put(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
@@ -241,7 +241,7 @@ tables.forEach(table => {
       res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
-  
+
   app.delete(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
@@ -251,7 +251,7 @@ tables.forEach(table => {
       res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
-  
+
   // 新增：GET 单条记录
   app.get(`${routePath}/:id`, async (req, res) => {
     try {
@@ -329,7 +329,7 @@ app.put('/api/settings', async (req, res) => {
   try {
     const userId = getUserId(req);
     const { company_name, website, industry, description, target_audience, deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model } = req.body;
-    
+
     const result = await pool.query(`
       INSERT INTO users (user_id, company_name, website, industry, description, target_audience, deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
@@ -346,7 +346,7 @@ app.put('/api/settings', async (req, res) => {
         updated_at = NOW()
       RETURNING *
     `, [userId, company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-chat']);
-    
+
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
     console.error('保存设置失败:', err.message);

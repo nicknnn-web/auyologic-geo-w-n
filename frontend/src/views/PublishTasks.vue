@@ -216,7 +216,7 @@ const ACCOUNTS_API = '/api/platform-accounts'
 // ---- 数据 ----
 const tasks = ref([])
 const drafts = ref([])
-const authorizedAccounts = ref([])   // 只存已授权账号
+const authorizedAccounts = ref([])   // 只存已授权账号test
 
 // 当前正在执行轮询的任务ID
 const executingId = ref(null)

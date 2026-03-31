@@ -9,7 +9,7 @@ pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
 });
 
-// 初始化数据库表
+// 初始化数据库表test
 export async function initDB() {
   const client = await pool.connect();
   try {
