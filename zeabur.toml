@@ -5,12 +5,15 @@ name = "auyologic-geo"
 name = "auyologic-backend"
 path = "backend"
 runtime = "node"
-buildCommand = "npm install && npx playwright install chromium --with-deps"
+# PLAYWRIGHT_BROWSERS_PATH=0：浏览器装进 node_modules，随镜像/发布包带走（避免仅用 ~/.cache 构建完丢失）
+# playwright install：含 chromium + headless shell（1.56+ 无头默认用 headless shell）
+buildCommand = "PLAYWRIGHT_BROWSERS_PATH=0 npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps"
 startCommand = "npm start"
 
 [service.backend.env]
 PORT = { default = "3001" }
 NODE_ENV = { default = "production" }
+PLAYWRIGHT_BROWSERS_PATH = { default = "0" }
 DATABASE_URL = { fromDatabase = "postgres", attr = "DATABASE_URL" }
 
 [service.postgres]
