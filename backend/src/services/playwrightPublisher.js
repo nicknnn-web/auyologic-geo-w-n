@@ -39,8 +39,13 @@ function findSystemChrome() {
 
 function buildLaunchOptions() {
   const executablePath = findSystemChrome();
+  // 生产环境（Zeabur 等）无显示器，必须无头；本地可设 PLAYWRIGHT_HEADED=true 强制有头调试
+  const headless =
+    process.env.PLAYWRIGHT_HEADED === 'true'
+      ? false
+      : process.env.NODE_ENV === 'production' || !executablePath;
   const opts = {
-    headless: false, // 发帖时显示浏览器，方便排查问题
+    headless,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--disable-infobars',

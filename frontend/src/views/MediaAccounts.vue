@@ -30,7 +30,7 @@
       <div class="flex-1 text-sm text-amber-700">
         <span class="font-medium">本地代理未运行</span>
         — 账号授权需要在您的电脑上运行本地代理程序。下载后解压，双击
-        <code class="bg-amber-100 px-1 rounded text-xs">启动代理.bat</code>
+        <code class="bg-amber-100 px-1 rounded text-xs">start-agent.bat</code>
         即可启动。
       </div>
       <el-button size="small" type="warning" plain @click="handleDownloadAgent">

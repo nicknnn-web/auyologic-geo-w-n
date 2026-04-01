@@ -5,7 +5,7 @@ name = "auyologic-geo"
 name = "auyologic-backend"
 path = "backend"
 runtime = "node"
-buildCommand = "npm install"
+buildCommand = "npm install && npx playwright install chromium --with-deps"
 startCommand = "npm start"
 
 [service.backend.env]

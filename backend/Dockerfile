@@ -1,18 +1,15 @@
-FROM node:20-alpine
+# Debian 系镜像：Playwright Chromium 需 glibc + apt 安装系统依赖（Alpine 不适用）
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# 复制 package.json 先安装依赖（利用缓存）
 COPY package*.json ./
-RUN npm install --production
+RUN npm install --production \
+  && npx playwright install chromium --with-deps
 
-# 复制源代码（排除 .env 文件）
 COPY . .
-# 确保容器内不存在 .env 文件，使用环境变量
 RUN rm -f .env || true
 
-# 暴露端口
 EXPOSE 3001
 
-# 启动命令
 CMD ["node", "src/index.js"]
