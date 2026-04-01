@@ -29,7 +29,7 @@
       <el-icon class="text-amber-500 flex-shrink-0" size="18"><Warning /></el-icon>
       <div class="flex-1 text-sm text-amber-700">
         <span class="font-medium">本地代理未运行</span>
-        — 账号授权需要在您的电脑上运行本地代理程序。下载后解压，双击
+        — 账号授权与投放发布均需在您的电脑上运行本地代理。下载后解压，双击
         <code class="bg-amber-100 px-1 rounded text-xs">start-agent.bat</code>
         即可启动。
       </div>
@@ -282,25 +282,17 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Key, Phone, Loading, CircleCheck, Warning, Download } from '@element-plus/icons-vue'
 import api from '../utils/api'
+import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 
 const API = '/api/platform-accounts'
 
 // ---- 代理在线状态 + 下载 ----
 const agentOnline = ref(false)
-let agentCheckTimer = null
+useAgentHeartbeat(agentOnline)
 
 const handleDownloadAgent = () => {
   const base = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
   window.open(`${base}/api/agent/download`, '_blank')
-}
-
-const checkAgentStatus = async () => {
-  try {
-    const data = await api.get('/api/agent/status')
-    agentOnline.value = data.online === true
-  } catch {
-    agentOnline.value = false
-  }
 }
 
 // ---- 账号列表 ----
@@ -319,8 +311,6 @@ const loadAccounts = async () => {
 
 onMounted(() => {
   loadAccounts()
-  checkAgentStatus()
-  agentCheckTimer = setInterval(checkAgentStatus, 15000)
 })
 
 // ---- 添加 / 编辑账号 ----
@@ -503,7 +493,6 @@ const stopPolling = () => {
 
 onUnmounted(() => {
   stopPolling()
-  if (agentCheckTimer) clearInterval(agentCheckTimer)
 })
 
 // ---- 校验 session 有效性 ----

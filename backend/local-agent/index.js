@@ -13,6 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { spawn } = require('child_process');
 const { startAuth, submitSmsCode, captureSession, isLoggedIn, closeSession } = require('./auth');
 
 const CONFIG_PATH = path.join(
@@ -168,11 +169,104 @@ async function handleAuthTask(BASE_URL, task) {
   console.log(`  任务结束，继续等待新任务...\n`);
 }
 
+// ---- 投放发布（子进程跑 ESM + 服务端 playwrightPublisher） ----
+
+function runPublishSubprocess(task) {
+  return new Promise((resolve) => {
+    const scriptPath = path.join(__dirname, 'run-publish.mjs');
+    const payload = JSON.stringify({
+      taskId: task.taskId,
+      platform: task.platform,
+      sessionState: task.sessionState,
+      content: task.content,
+      title: task.title,
+      tags: task.tags,
+    });
+    const child = spawn(process.execPath, [scriptPath], {
+      cwd: __dirname,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_ENV: process.env.NODE_ENV || 'development' },
+    });
+    child.stdin.write(payload);
+    child.stdin.end();
+    let out = '';
+    let errOut = '';
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.stderr.on('data', (d) => { errOut += d.toString(); });
+    child.on('close', () => {
+      const trimmed = (out || '').trim();
+      let parsed;
+      try {
+        parsed = JSON.parse(trimmed || '{}');
+      } catch {
+        // stdout 若曾被污染，尝试取最后一行 JSON
+        const lines = trimmed.split(/\r?\n/).filter(Boolean);
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            parsed = JSON.parse(lines[i]);
+            break;
+          } catch { /* continue */ }
+        }
+      }
+      if (parsed && typeof parsed === 'object' && 'success' in parsed) {
+        resolve(parsed);
+      } else {
+        resolve({
+          success: false,
+          error: errOut.trim() || trimmed.slice(0, 200) || '子进程输出无法解析',
+          log: '',
+        });
+      }
+    });
+  });
+}
+
+async function handlePublishTask(BASE_URL, task) {
+  const id = task.taskId;
+  console.log(`\n📤 [投放任务] #${id} 平台: ${task.platform}`);
+
+  try {
+    const result = await runPublishSubprocess(task);
+    const success = result.success === true;
+    await apiFetch(BASE_URL, '/api/agent/complete-publish', {
+      method: 'POST',
+      body: JSON.stringify({
+        taskId: id,
+        success,
+        publishedUrl: result.publishedUrl || '',
+        errorMessage: result.error || '',
+        taskLog: result.log || '',
+      }),
+    });
+    if (success) {
+      console.log(`  ✅ 投放完成: ${result.publishedUrl || '(无链接)'}`);
+    } else {
+      console.log(`  ❌ 投放失败: ${result.error || '未知错误'}`);
+    }
+  } catch (err) {
+    console.error('  ❌ 投放异常:', err.message);
+    try {
+      await apiFetch(BASE_URL, '/api/agent/complete-publish', {
+        method: 'POST',
+        body: JSON.stringify({
+          taskId: id,
+          success: false,
+          publishedUrl: '',
+          errorMessage: err.message,
+          taskLog: '',
+        }),
+      });
+    } catch {}
+  }
+
+  console.log(`  继续等待新任务...\n`);
+}
+
 // ---- 主入口 ----
 
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   Auyologic 本地授权代理  v1.0.0     ║');
+  console.log('║   Auyologic 本地代理  v1.1.0         ║');
   console.log('╚══════════════════════════════════════╝\n');
 
   // 服务器地址：优先命令行参数 → 配置文件 → 交互输入
@@ -212,13 +306,13 @@ async function main() {
   await heartbeat();
   const heartbeatTimer = setInterval(heartbeat, 10000);
 
-  console.log('\n🚀 代理已启动，正在等待授权任务...');
+  console.log('\n🚀 代理已启动（授权 + 本地投放）');
   console.log('（按 Ctrl+C 退出）\n');
 
   // 是否正在处理任务（防止并发）
   let busy = false;
 
-  // 轮询任务（每 3 秒一次）
+  // 轮询：优先授权任务，其次投放队列（每 3 秒）
   const pollTimer = setInterval(async () => {
     if (busy) return;
     try {
@@ -226,6 +320,13 @@ async function main() {
       if (data.task) {
         busy = true;
         await handleAuthTask(BASE_URL, data.task);
+        busy = false;
+        return;
+      }
+      const pub = await apiFetch(BASE_URL, '/api/agent/pending-publish');
+      if (pub.task) {
+        busy = true;
+        await handlePublishTask(BASE_URL, pub.task);
         busy = false;
       }
     } catch (e) {

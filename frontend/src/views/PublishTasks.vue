@@ -3,15 +3,30 @@
     <div class="flex items-center mb-5">
       <div>
         <div class="text-lg font-bold">投放任务</div>
-        <div class="text-sm text-gray-500">创建并执行内容投放任务，发布前将自动验证账号授权状态</div>
+        <div class="text-sm text-gray-500">执行发布由本机代理完成，请保持与账号授权相同的本地代理运行</div>
       </div>
-      <div class="ml-auto">
+      <div class="ml-auto flex items-center gap-3">
+        <div class="flex items-center gap-1.5 text-sm">
+          <span class="inline-block w-2 h-2 rounded-full" :class="agentOnline ? 'bg-green-500' : 'bg-gray-300'" />
+          <span :class="agentOnline ? 'text-green-600' : 'text-gray-400'">
+            {{ agentOnline ? '本地代理在线' : '本地代理离线' }}
+          </span>
+        </div>
         <el-button type="primary" @click="openCreateDialog">
           <el-icon class="mr-1"><Plus /></el-icon>
           新建任务
         </el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="!agentOnline"
+      type="warning"
+      :closable="false"
+      class="mb-4"
+      title="本地代理未运行"
+      description="执行发布需要本机代理从队列取任务并在本地浏览器发帖。请启动 local-agent（或下载的代理包）后再点「执行」。"
+    />
 
     <el-table :data="tasks" style="width: 100%">
       <el-table-column label="序号" width="60" align="center">
@@ -56,9 +71,17 @@
             v-if="row.status === 'pending' || row.status === 'failed'"
             link type="primary" size="small"
             :loading="executingId === row.id"
+            :disabled="!agentOnline"
             @click="handleExecute(row)"
           >
             {{ row.status === 'failed' ? '重试' : '执行' }}
+          </el-button>
+          <el-button
+            v-if="row.status === 'queued_local'"
+            link type="warning" size="small"
+            @click="openLogAndPoll(row)"
+          >
+            查看队列
           </el-button>
           <el-button
             v-if="row.status === 'running'"
@@ -165,12 +188,18 @@
                @close="stopStatusPoll">
       <div class="bg-gray-900 rounded-lg p-4 font-mono text-sm text-green-400"
            style="min-height: 220px; max-height: 380px; overflow-y: auto;" ref="logBoxRef">
-        <div v-if="currentLog">
+        <!-- 本地代理队列 / 执行中：不展示逐行日志，仅提示 -->
+        <div v-if="currentStatus === 'queued_local' || currentStatus === 'running'"
+             class="text-amber-300 flex items-center gap-2 text-sm">
+          <el-icon class="is-loading"><Loading /></el-icon>
+          <span>正在发布中，请稍候…</span>
+        </div>
+        <template v-else-if="currentLog">
           <div v-for="(line, i) in currentLog.split('\n').filter(Boolean)" :key="i" class="mb-1">
             {{ line }}
           </div>
-        </div>
-        <div v-else class="text-gray-500">等待日志输出…</div>
+        </template>
+        <div v-else class="text-gray-500">暂无详细日志</div>
       </div>
 
       <div v-if="currentStatus === 'done'" class="mt-3 p-3 bg-green-50 rounded-lg flex items-center gap-2">
@@ -190,7 +219,7 @@
       </div>
 
       <template #footer>
-        <el-button v-if="currentStatus === 'running'" type="warning" plain @click="logDialogVisible = false">
+        <el-button v-if="currentStatus === 'running' || currentStatus === 'queued_local'" type="warning" plain @click="logDialogVisible = false">
           后台运行（不中断）
         </el-button>
         <el-button v-else @click="logDialogVisible = false">关闭</el-button>
@@ -203,14 +232,18 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, CircleCheck } from '@element-plus/icons-vue'
+import { Plus, CircleCheck, Loading } from '@element-plus/icons-vue'
 import api from '../utils/api'
+import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 
 const router = useRouter()
 const route = useRoute()
 
 const TASKS_API = '/api/publish-tasks'
 const ACCOUNTS_API = '/api/platform-accounts'
+
+const agentOnline = ref(false)
+useAgentHeartbeat(agentOnline)
 
 // ---- 数据 ----
 const tasks = ref([])
@@ -265,7 +298,9 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(() => stopStatusPoll())
+onUnmounted(() => {
+  stopStatusPoll()
+})
 
 // ---- 创建任务 ----
 const createDialogVisible = ref(false)
@@ -350,14 +385,18 @@ const handleCreate = async () => {
 
 // ---- 执行任务 ----
 const handleExecute = async (row) => {
+  if (!agentOnline.value) {
+    ElMessage.warning('请先启动本地代理后再执行发布')
+    return
+  }
   executingId.value = row.id
 
   try {
     await api.post(`${TASKS_API}/${row.id}/execute`)
-    ElMessage.success('发布任务已启动，正在执行…')
+    ElMessage.success('已加入本地发布队列，请保持代理运行')
     await loadTasks()
-    // 打开进度弹窗并开始轮询
-    openLogDialog(row)
+    const updated = tasks.value.find(t => t.id === row.id) || row
+    openLogDialog(updated)
     startStatusPoll(row.id)
   } catch (err) {
     ElMessage.error(err.message || '启动失败')
@@ -365,6 +404,11 @@ const handleExecute = async (row) => {
   } finally {
     executingId.value = null
   }
+}
+
+const openLogAndPoll = (row) => {
+  openLogDialog(row)
+  startStatusPoll(row.id)
 }
 
 const handleDelete = async (id) => {
@@ -394,7 +438,7 @@ const openLogDialog = (row) => {
   currentPublishedUrl.value = row.published_url || ''
   currentErrorMessage.value = row.error_message || ''
   logDialogVisible.value = true
-  if (row.status === 'running') {
+  if (row.status === 'running' || row.status === 'queued_local') {
     startStatusPoll(row.id)
   }
 }
@@ -442,12 +486,24 @@ const getPlatformColor = (platform) => {
 }
 
 const getStatusType = (status) => {
-  const map = { pending: 'warning', running: 'primary', done: 'success', failed: 'danger' }
+  const map = {
+    pending: 'warning',
+    queued_local: 'warning',
+    running: 'primary',
+    done: 'success',
+    failed: 'danger',
+  }
   return map[status] || 'info'
 }
 
 const getStatusLabel = (status) => {
-  const map = { pending: '待执行', running: '执行中', done: '已完成', failed: '失败' }
+  const map = {
+    pending: '待执行',
+    queued_local: '排队中',
+    running: '执行中',
+    done: '已完成',
+    failed: '失败',
+  }
   return map[status] || status
 }
 

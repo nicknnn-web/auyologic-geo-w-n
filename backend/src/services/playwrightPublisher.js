@@ -132,6 +132,30 @@ export function executePublishTask(taskInfo, onDone) {
       onDone(err, null);
     });
 }
+
+/**
+ * 本地代理子进程调用：执行发布并返回日志（Promise）
+ * @returns {Promise<{ success: boolean, publishedUrl?: string, error?: string, log: string }>}
+ */
+export async function runPublishAndCollectLog(taskInfo) {
+  const { taskId } = taskInfo;
+  runningTasks.set(String(taskId), {
+    status: 'running',
+    log: '',
+    publishedUrl: null,
+    errorMessage: null,
+  });
+  try {
+    const { publishedUrl } = await _runPublish(taskInfo);
+    const log = runningTasks.get(String(taskId))?.log || '';
+    cleanupTask(taskId);
+    return { success: true, publishedUrl: publishedUrl || '', log };
+  } catch (err) {
+    const log = runningTasks.get(String(taskId))?.log || '';
+    cleanupTask(taskId);
+    return { success: false, error: err.message, log };
+  }
+}
 async function runPublishXHS(taskInfo) {
   const { taskId, sessionState, content, title, tags, imagePaths } = taskInfo;
   appendLog(taskId, '正在启动浏览器…');

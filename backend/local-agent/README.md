@@ -1,3 +1,11 @@
+# Auyologic 本地代理
+
+同一进程完成：**账号授权**（浏览器登录）与 **投放发布**（从队列取任务，本机 Playwright 发帖）。
+
+从网页「下载本地代理」的 zip 已包含 `run-publish.mjs` 与 `src/services/playwrightPublisher.js`；仓库内开发时 `run-publish` 会自动使用上一级 `backend/src/services/playwrightPublisher.js`。
+
+---
+
 # 如何制作免安装版（给用户直接用）
 
 ## 方案 A：在线版（推荐，最小体积 ~1MB）

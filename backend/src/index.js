@@ -525,6 +525,96 @@ app.get('/api/agent/status', (req, res) => {
   res.json({ online, lastSeen: agentLastSeen });
 });
 
+/** 投放走本地代理时：须有心跳。ALLOW_PUBLISH_WITHOUT_AGENT=true 时跳过（服务器内 Playwright） */
+function isLocalAgentOnline() {
+  if (process.env.ALLOW_PUBLISH_WITHOUT_AGENT === 'true') return true;
+  return agentLastSeen !== null && (Date.now() - agentLastSeen < 30000);
+}
+
+// 代理轮询：领取一条待发布的投放任务（原子更新为 running）
+app.get('/api/agent/pending-publish', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `UPDATE publish_tasks AS pt
+         SET status = 'running', updated_at = NOW()
+       FROM (
+         SELECT id FROM publish_tasks
+         WHERE status = 'queued_local'
+         ORDER BY id ASC
+         LIMIT 1
+       ) AS sub
+       WHERE pt.id = sub.id
+       RETURNING pt.*`
+    );
+    if (result.rows.length === 0) return res.json({ task: null });
+
+    const task = result.rows[0];
+    const acc = await pool.query(
+      'SELECT session_state, account_name FROM media_accounts WHERE id = $1',
+      [task.account_id]
+    );
+    if (acc.rows.length === 0 || !acc.rows[0].session_state) {
+      await pool.query(
+        `UPDATE publish_tasks SET status = 'failed', error_message = $1, updated_at = NOW() WHERE id = $2`,
+        [acc.rows.length === 0 ? '关联账号不存在' : '账号未授权或 session 为空', task.id]
+      );
+      return res.json({ task: null });
+    }
+
+    const { session_state, account_name } = acc.rows[0];
+    res.json({
+      task: {
+        taskId: task.id,
+        platform: task.platform,
+        accountId: task.account_id,
+        accountName: account_name,
+        content: task.content,
+        title: task.title,
+        tags: task.tags,
+        draftTitle: task.draft_title,
+        sessionState: session_state,
+      },
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理上报投放结果
+app.post('/api/agent/complete-publish', async (req, res) => {
+  try {
+    const { taskId, success, publishedUrl, errorMessage, taskLog } = req.body;
+    const tid = Number(taskId);
+    if (!tid) return res.status(400).json({ error: 'taskId 无效' });
+
+    const taskRow = await pool.query('SELECT * FROM publish_tasks WHERE id = $1', [tid]);
+    if (taskRow.rows.length === 0) return res.status(404).json({ error: '任务不存在' });
+    const task = taskRow.rows[0];
+
+    const accRow = await pool.query('SELECT account_name FROM media_accounts WHERE id = $1', [task.account_id]);
+    const accountName = accRow.rows[0]?.account_name || '';
+
+    cleanupTask(tid);
+
+    if (success) {
+      await pool.query(
+        `UPDATE publish_tasks SET status = 'done', published_url = $1, task_log = $2, error_message = NULL, updated_at = NOW() WHERE id = $3`,
+        [publishedUrl || '', taskLog || '', tid]
+      );
+      await pool.query(
+        `INSERT INTO publish_records
+           (task_id, draft_title, platform, account_id, account_name, published_url, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'已发布')`,
+        [tid, task.draft_title || '', task.platform, task.account_id, accountName, publishedUrl || '']
+      );
+    } else {
+      await pool.query(
+        `UPDATE publish_tasks SET status = 'failed', error_message = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
+        [errorMessage || '发布失败', taskLog || '', tid]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // 代理轮询：取一条待处理任务（原子操作）
 app.get('/api/agent/pending-task', async (req, res) => {
   try {
@@ -657,6 +747,12 @@ app.get('/api/agent/download', (req, res) => {
     ignore: [...IGNORE, '*.bat'],
   });
 
+  // 本地投放依赖的发布逻辑（与仓库 backend/src 同步）
+  const publisherPath = join(__dirname, '../src/services/playwrightPublisher.js');
+  if (fs.existsSync(publisherPath)) {
+    archive.file(publisherPath, { name: 'src/services/playwrightPublisher.js' });
+  }
+
   archive.finalize();
 });
 
@@ -714,48 +810,62 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
       });
     }
 
+    // 服务器内 Playwright（仅 ALLOW_PUBLISH_WITHOUT_AGENT=true）
+    if (process.env.ALLOW_PUBLISH_WITHOUT_AGENT === 'true') {
+      await pool.query(
+        `UPDATE publish_tasks SET status = 'running', updated_at = NOW() WHERE id = $1`,
+        [taskId]
+      );
+      executePublishTask(
+        {
+          taskId,
+          platform: task.platform,
+          sessionState: account.session_state,
+          content: task.content || '',
+          title: task.title || '',
+          tags: task.tags || '',
+        },
+        async (err, publishedUrl) => {
+          try {
+            const log = getTaskStatus(taskId)?.log || '';
+            if (err) {
+              await pool.query(
+                `UPDATE publish_tasks SET status = 'failed', error_message = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
+                [err.message, log, taskId]
+              );
+            } else {
+              await pool.query(
+                `UPDATE publish_tasks SET status = 'done', published_url = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
+                [publishedUrl || '', log, taskId]
+              );
+              await pool.query(
+                `INSERT INTO publish_records
+                   (task_id, draft_title, platform, account_id, account_name, published_url, status)
+                 VALUES ($1,$2,$3,$4,$5,$6,'已发布')`,
+                [taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
+              );
+            }
+            cleanupTask(taskId);
+          } catch (dbErr) {
+            console.error('[发布回调] DB 写入失败：', dbErr.message);
+          }
+        }
+      );
+      return res.json({ success: true, message: '发布任务已启动，正在后台执行' });
+    }
+
+    if (!isLocalAgentOnline()) {
+      return res.status(503).json({
+        error: '本地代理未在线，请先启动本地代理后再执行发布',
+        agentOffline: true,
+      });
+    }
+
     await pool.query(
-      `UPDATE publish_tasks SET status = 'running', updated_at = NOW() WHERE id = $1`,
+      `UPDATE publish_tasks SET status = 'queued_local', task_log = '', error_message = NULL, updated_at = NOW() WHERE id = $1`,
       [taskId]
     );
-
-    executePublishTask(
-      {
-        taskId,
-        platform: task.platform,
-        sessionState: account.session_state,
-        content: task.content || '',
-        title: task.title || '',
-        tags: task.tags || '',
-      },
-      async (err, publishedUrl) => {
-        try {
-          const log = getTaskStatus(taskId)?.log || '';
-          if (err) {
-            await pool.query(
-              `UPDATE publish_tasks SET status = 'failed', error_message = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
-              [err.message, log, taskId]
-            );
-          } else {
-            await pool.query(
-              `UPDATE publish_tasks SET status = 'done', published_url = $1, task_log = $2, updated_at = NOW() WHERE id = $3`,
-              [publishedUrl || '', log, taskId]
-            );
-            await pool.query(
-              `INSERT INTO publish_records
-                 (task_id, draft_title, platform, account_id, account_name, published_url, status)
-               VALUES ($1,$2,$3,$4,$5,$6,'已发布')`,
-              [taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
-            );
-          }
-          cleanupTask(taskId);
-        } catch (dbErr) {
-          console.error('[发布回调] DB 写入失败：', dbErr.message);
-        }
-      }
-    );
-
-    res.json({ success: true, message: '发布任务已启动，正在后台执行' });
+    res.json({ success: true, message: '已加入本地发布队列，请保持代理运行' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
