@@ -26,7 +26,7 @@ const PLATFORM_CONFIG = {
   },
   '微博': {
     baseUrl: 'https://weibo.com',
-    loginUrl: 'https://passport.weibo.com/signin/login',
+    loginUrl: 'https://passport.weibo.com/sso/signin',
     loginSuccessCheck: (url) => url.includes('weibo.com') && !url.includes('passport.weibo'),
     sessionCookieName: 'SUB',
   },
@@ -43,6 +43,7 @@ const PLATFORM_CONFIG = {
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+  //通过修改浏览器的 navigator 对象等方式， 隐藏 Playwright 自动化特征 ，防止网站检测到这是自动化浏览器而拒绝登录。
 const STEALTH_SCRIPT = `
   Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   Object.defineProperty(navigator, 'plugins', {
@@ -144,12 +145,20 @@ async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
     if (platform === '小红书' && phoneNumber) {
       await autoFillXhsPhone(page, phoneNumber, setStatus);
     }
+    if (platform === '微博' && phoneNumber) {
+      await autoFillWeiboPhone(page, phoneNumber, setStatus);
+    }
   } catch (err) {
     await closeSession(accountId);
     throw new Error('打开授权浏览器失败：' + err.message);
   }
 }
-
+/**
+ * 自动填写小红书手机号
+ * @param {Page} page
+ * @param {string} phoneNumber
+ * @param {Function} setStatus
+ */
 async function autoFillXhsPhone(page, phoneNumber, setStatus) {
   try {
     await page.waitForSelector('form, [class*="login"], [class*="sign"]', { timeout: 10000 });
@@ -176,6 +185,90 @@ async function autoFillXhsPhone(page, phoneNumber, setStatus) {
     }
   } catch (err) {
     console.warn('[autoFillXhsPhone] 自动填写失败：', err.message);
+    setStatus('browser_opened');
+  }
+}
+
+/**
+ * 自动填写微博手机号
+ * @param {Page} page
+ * @param {string} phoneNumber
+ * @param {Function} setStatus
+ */
+async function autoFillWeiboPhone(page, phoneNumber, setStatus) {
+  try {
+    await page.waitForSelector('form', { timeout: 10000 });
+
+    await page.waitForLoadState('networkidle');
+    await randomDelay(1500, 2000);
+    
+    const phoneTab = await page.$('a:has-text("验证码登录"), a:has-text("短信验证登录"), li:nth-child(1) > a');
+    if (phoneTab) {
+      await phoneTab.click();
+      await randomDelay(1000, 1500);
+    } else {
+      console.log('[autoFillWeiboPhone] 未找到验证码登录选项');
+    }
+    
+    await page.waitForLoadState('networkidle');
+    await randomDelay(500, 800);
+
+    const phoneInput = await page.$(
+      'input[placeholder*="手机号"], ' +
+      'input[aria-label*="手机号"], ' +
+      'input[type="text"]:near(a:has-text("验证码登录")), ' +
+      'input[type="text"]'
+    );
+    
+    if (!phoneInput) {
+      const inputs = await page.$$('input');
+      console.log('[autoFillWeiboPhone] 页面中共有', inputs.length, '个input元素');
+      for (let i = 0; i < Math.min(inputs.length, 10); i++) {
+        const attrs = await inputs[i].evaluate(el => ({
+          type: el.type,
+          placeholder: el.placeholder,
+          ariaLabel: el.getAttribute('aria-label'),
+          name: el.name
+        }));
+        console.log(`[autoFillWeiboPhone] input[${i}]:`, JSON.stringify(attrs));
+      }
+      setStatus('browser_opened');
+      return;
+    }
+    
+    await phoneInput.click();
+    await randomDelay(300, 500);
+    
+    await phoneInput.fill('');
+    for (const ch of phoneNumber) {
+      await phoneInput.type(ch, { delay: 60 + Math.random() * 80 });
+    }
+    await randomDelay(500, 800);
+    
+    // 验证输入
+    const inputValue = await phoneInput.inputValue();
+    if (inputValue !== phoneNumber) {
+      await phoneInput.fill('');
+      await phoneInput.type(phoneNumber, { delay: 50 });
+    }
+
+    const sendBtn = await page.$('a:has-text("获取验证码"), a:has-text("发送验证码"), [class*="send-code"], [class*="code"]');
+    if (sendBtn) {
+      await sendBtn.click();
+      setStatus('waiting_sms_code');
+    } else {
+      const buttons = await page.$$('a, button');
+      for (let i = 0; i < Math.min(buttons.length, 15); i++) {
+        const text = await buttons[i].evaluate(el => el.textContent.trim());
+        const tag = buttons[i].evaluate(el => el.tagName);
+        if (text) {
+          console.log(`[autoFillWeiboPhone] ${tag}[${i}]: "${text}"`);
+        }
+      }
+      setStatus('browser_opened');
+    }
+  } catch (err) {
+    console.error('[autoFillWeiboPhone] 自动填写失败：', err.message);
     setStatus('browser_opened');
   }
 }

@@ -106,7 +106,7 @@ const handleBatchDelete = async () => {
   const ids = selectedRows.value.map(row => row.id)
   
   // 同步删除后端数据
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   for (const id of ids) {
     try {
       await fetch(`${API_BASE_URL}/api/drafts/${id}`, { 
@@ -119,14 +119,14 @@ const handleBatchDelete = async () => {
   }
   
   // 同时从本地列表移除
-  tableData.value = tableData.value.filter(item => !ids.includes(item.id))
+  await loadData()
   selectedRows.value = []
   ElMessage.success(`已删除 ${ids.length} 条草稿`)
 }
 
 // 加载数据 - 优先从后端 API，失败则 fallback 到 localStorage
 const loadData = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${API_BASE_URL}/api/drafts`, {
       headers: { 'x-user-id': userId }
@@ -177,7 +177,7 @@ const handlePublish = (row) => {
 
 const handleDelete = async (id) => {
   // 同步删除后端数据
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     await fetch(`${API_BASE_URL}/api/drafts/${id}`, { 
       method: 'DELETE',
@@ -187,7 +187,7 @@ const handleDelete = async (id) => {
     console.warn(`删除草稿 ${id} 失败:`, e)
   }
   // 从本地列表移除
-  tableData.value = tableData.value.filter(item => item.id !== id)
+  await loadData()
   ElMessage.success('删除成功')
 }
 

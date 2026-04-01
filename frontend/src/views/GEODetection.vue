@@ -1105,7 +1105,7 @@ const saveCustomKeywords = async () => {
   saveData(allData)
   
   // 同时保存到后端数据库
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     await fetch(`${import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'}/api/keywords`, {
       method: 'POST',
@@ -1526,7 +1526,7 @@ onMounted(async () => {
 
 // 从后端 API 加载关键词
 const loadKeywordsFromAPI = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/keywords`, {
       headers: { 'x-user-id': userId }
@@ -1547,7 +1547,7 @@ const loadKeywordsFromAPI = async () => {
 
 // 从后端 API 加载问题
 const loadQuestionsFromAPI = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/questions`, {
       headers: { 'x-user-id': userId }

@@ -3,7 +3,7 @@
     <div class="flex items-center mb-4">
       <div>
         <div class="text-lg font-bold">拓展问题</div>
-        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ tableData.length }} 条）</div>
+        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ tableData.length }} 条，已审核 {{ approvedCount }} 条）</div>
       </div>
       <div class="flex items-center filter-actions gap-4 ml-auto">
         <el-select v-model="filterKeywordType" placeholder="全部类型" class="w-28" clearable>
@@ -44,7 +44,7 @@
           :disabled="isLoading"
         >
           <el-icon class="mr-1" v-if="!isLoading"><MagicStick /></el-icon>
-          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : 'AI拓展问题') }}
+          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : (selectedRows.length === 1 ? 'AI改写问题' : 'AI拓展问题')) }}
         </el-button>
         <el-button type="primary" class="ml-0" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>
@@ -160,6 +160,8 @@ const normalize = (s) => {
   return s.replace(/[^\w\u4e00-\u9fa5]/g, '').toLowerCase().trim()
 }
 
+const approvedCount = computed(() => tableData.value.filter(q => q.status === '已审核').length)
+
 const sortedData = computed(() => {
   let data = [...tableData.value]
 
@@ -191,7 +193,7 @@ const questionSortOrder = ref('') // '' | 'asc' | 'desc'
 
 // 加载数据
 const loadData = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions`, {
       headers: { 'x-user-id': userId }
@@ -457,11 +459,101 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   return questions
 }
 
+// 根据原问题生成1-5个替代表述（不硬凑，质量优先）
+const generateParaphrasesFromAI = async (originalQuestion) => {
+  const prompt = `请为以下问题生成1到5个不同的表达方式，保持原意但不重复原话。
+
+原问题：${originalQuestion}
+
+要求：
+- 生成1到5个替代表述（不硬凑，没有合适的就不生成）
+- 每种表达方式要有明显不同的问法
+- 保持问题的核心意思不变
+- 口语化、简短（不超过25字）
+
+直接输出替代表述，每行一个，不要编号，不要解释。`
+
+  const response = await fetch(AI_PROXY_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      prompt,
+      temperature: 0.7,
+      max_tokens: 400
+    })
+  })
+
+  if (!response.ok) return []
+
+  const data = await response.json()
+  const content = data.content || ''
+
+  const paraphrases = content
+    .split('\n')
+    .map(q => q.trim())
+    .filter(q => q.length > 0 && q.length <= 25 && q !== originalQuestion)
+    // 不设固定上限，让AI决定生成多少（质量优先）
+
+  return paraphrases
+}
+
 const isLoading = ref(false)
 const isSearching = ref(false)
 const searchStatusText = ref('')
 
 const handleAIExpand = async () => {
+  // ===== 改写模式：恰好选中1个问题 =====
+  if (selectedRows.value.length === 1) {
+    const original = selectedRows.value[0]
+    isLoading.value = true
+    searchStatusText.value = '🤔 正在改写问题...'
+    try {
+      const paraphrases = await generateParaphrasesFromAI(original.question)
+      if (paraphrases.length === 0) {
+        ElMessage.warning('未能为该问题生成有效的替代表述')
+        return
+      }
+      let successCount = 0
+      for (const pq of paraphrases) {
+        const newItem = {
+          question: pq,
+          keywordType: original.keywordType || '品牌',
+          sourceKeyword: original.sourceKeyword || original.question,
+          status: '待审核'
+        }
+        // 写后端
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/questions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
+            body: JSON.stringify(newItem)
+          })
+          if (res.ok) {
+            const saved = await res.json()
+            tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
+            successCount++
+          }
+        } catch (e) {
+          console.warn('同步到后端失败:', e)
+        }
+      }
+      ElMessage.success(`生成 ${successCount} 个替代表述，已添加`)
+      selectedRows.value = []
+      await loadData()
+    } finally {
+      isLoading.value = false
+      searchStatusText.value = ''
+    }
+    return
+  }
+
+  if (selectedRows.value.length > 1) {
+    ElMessage.warning('请只选择一个问题进行改写')
+    return
+  }
+
+  // ===== 扩展模式：基于关键词生成新问题 =====
   // 获取选中的关键词ID
   let keywords
   if (route.query.keywordIds) {
@@ -470,7 +562,7 @@ const handleAIExpand = async () => {
     // 优先从 API 获取关键词
     try {
       const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-        headers: { 'x-user-id': localStorage.getItem('auyologic_user_id') || 'default_user' }
+        headers: { 'x-user-id': 'default_user' }
       })
       if (res.ok) {
         const allKeywords = await res.json()
@@ -558,7 +650,7 @@ const handleAIExpand = async () => {
           successCount++
           
           // 同时同步到后端 API
-          const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+          const userId = 'default_user'
           try {
             await fetch(`${API_BASE_URL}/api/questions`, {
               method: 'POST',
@@ -585,6 +677,8 @@ const handleAIExpand = async () => {
 
     if (successCount > 0) {
       ElMessage.success(`成功生成 ${successCount} 个问题${failCount > 0 ? `，${failCount} 个失败` : ''}`)
+      // 刷新列表，确保显示所有问题（包括之前生成的）
+      await loadData()
     } else {
       ElMessage.error('生成问题失败，请检查网络或API配置')
     }
@@ -599,7 +693,7 @@ const cycleStatus = async (row) => {
   const nextIndex = (currentIndex + 1) % statusOrder.length
   const newStatus = statusOrder[nextIndex]
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
@@ -625,7 +719,7 @@ const cycleKeywordType = async (row) => {
   const nextIndex = (currentIndex + 1) % typeOrder.length
   const newType = typeOrder[nextIndex]
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
@@ -651,7 +745,7 @@ const handleSelectionChange = (selection) => {
 
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   
   // 同步删除后端
   const idsToDelete = selectedRows.value.map(r => r.id)
@@ -690,7 +784,7 @@ const handleClearAll = async () => {
     return // 用户取消
   }
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const count = tableData.value.length
   
   // 逐个从后端删除
@@ -728,7 +822,7 @@ const handleSubmit = async () => {
     return
   }
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const newItem = {
     question: form.value.question,
     keywordType: form.value.keywordType,
@@ -761,7 +855,7 @@ const handleSubmit = async () => {
 }
 
 const handleDelete = async (id) => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   // 同步删除后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${id}`, {

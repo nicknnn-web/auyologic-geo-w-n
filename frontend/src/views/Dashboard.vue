@@ -326,7 +326,7 @@ const formatHistoryDate = (dateStr) => {
 
 // ===== 初始化 =====
 onMounted(async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
 
   // 网站健康度 - 从后端 API 获取
   try {

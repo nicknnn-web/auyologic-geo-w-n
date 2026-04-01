@@ -139,7 +139,7 @@ const getTypeColor = (type) => {
 
 // 加载数据
 const loadData = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
       headers: { 'x-user-id': userId }
@@ -178,7 +178,7 @@ const handleSelectionChange = (selection) => {
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const ids = selectedRows.value.map(row => row.id)
   
   // 逐个删除
@@ -200,7 +200,7 @@ const handleBatchDelete = async () => {
 
 // 初始化默认指令（返回 Promise，确保全部创建完成）
 const initDefaultCommands = async () => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   const defaultCommands = [
     {
       name: '产品软文模板',
@@ -351,7 +351,7 @@ const handleEdit = (row) => {
 }
 
 const handleDelete = async (id) => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+  const userId = 'default_user'
   try {
     await fetch(`${API_BASE_URL}/api/instruction-templates/${id}`, { 
       method: 'DELETE',
@@ -368,22 +368,18 @@ const handleSubmit = async () => {
   try {
     const valid = await formRef.value.validate().catch(() => false)
     if (!valid) return
-    const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
+    const userId = 'default_user'
     if (isEdit.value) {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
+        await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
           method: 'PUT',
-          headers: { 
+          headers: {
             'Content-Type': 'application/json',
             'x-user-id': userId
           },
           body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })
-        if (res.ok) {
-          const updated = await res.json()
-          const idx = tableData.value.findIndex(r => r.id === updated.id)
-          if (idx > -1) tableData.value[idx] = updated
-        }
+        await loadData()
       } catch { /* silent */ }
       ElMessage.success('编辑成功')
     } else {

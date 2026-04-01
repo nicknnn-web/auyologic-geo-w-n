@@ -13,8 +13,8 @@ const api = axios.create({
 
 // 请求拦截：附加用户ID
 api.interceptors.request.use(config => {
-  const userId = localStorage.getItem('auyologic_user_id') || 'default_user'
-  config.headers['x-user-id'] = userId
+  // 单用户模式：固定使用 default_user
+  config.headers['x-user-id'] = 'default_user'
   return config
 })
 
