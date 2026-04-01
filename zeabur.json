@@ -9,7 +9,7 @@
       "plan": "pro",
       "region": "auto",
       "runtime": "node",
-      "buildCommand": "PLAYWRIGHT_BROWSERS_PATH=0 npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps",
+      "buildCommand": "npm install",
       "startCommand": "npm start",
       "env": [
         {

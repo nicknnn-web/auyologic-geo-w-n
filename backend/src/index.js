@@ -1,7 +1,7 @@
+import './playwright-env.js';
 import express from 'express';
 import cors from 'cors';
 import pg from 'pg';
-import 'dotenv/config';
 import archiver from 'archiver';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';

@@ -5,9 +5,8 @@ name = "auyologic-geo"
 name = "auyologic-backend"
 path = "backend"
 runtime = "node"
-# PLAYWRIGHT_BROWSERS_PATH=0：浏览器装进 node_modules，随镜像/发布包带走（避免仅用 ~/.cache 构建完丢失）
-# playwright install：含 chromium + headless shell（1.56+ 无头默认用 headless shell）
-buildCommand = "PLAYWRIGHT_BROWSERS_PATH=0 npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install --with-deps"
+# postinstall 会执行 playwright install（PLAYWRIGHT_BROWSERS_PATH=0，浏览器进 node_modules）
+buildCommand = "npm install"
 startCommand = "npm start"
 
 [service.backend.env]

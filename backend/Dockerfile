@@ -1,4 +1,4 @@
-# Debian 系镜像：Playwright 需 glibc + apt 安装系统依赖（Alpine 不适用）
+# Debian 系镜像：Playwright 需 glibc + apt（postinstall 会 playwright install --with-deps）
 FROM node:20-bookworm-slim
 
 ENV PLAYWRIGHT_BROWSERS_PATH=0
@@ -6,8 +6,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=0
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --production \
-  && npx playwright install --with-deps
+RUN npm install --production
 
 COPY . .
 RUN rm -f .env || true
