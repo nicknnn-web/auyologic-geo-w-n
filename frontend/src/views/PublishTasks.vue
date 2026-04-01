@@ -19,14 +19,20 @@
       </div>
     </div>
 
-    <el-alert
-      v-if="!agentOnline"
-      type="warning"
-      :closable="false"
-      class="mb-4"
-      title="本地代理未运行"
-      description="执行发布需要本机代理从队列取任务并在本地浏览器发帖。请启动 local-agent（或下载的代理包）后再点「执行」。"
-    />
+    <!-- 代理离线提示横幅 -->
+    <div v-if="!agentOnline" class="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+      <el-icon class="text-amber-500 flex-shrink-0" size="18"><Warning /></el-icon>
+      <div class="flex-1 text-sm text-amber-700">
+        <span class="font-medium">本地代理未运行</span>
+        — 账号授权与投放发布均需在您的电脑上运行本地代理。下载后解压，双击
+        <code class="bg-amber-100 px-1 rounded text-xs">start-agent.bat</code>
+        即可启动。
+      </div>
+      <el-button size="small" type="warning" plain @click="handleDownloadAgent">
+        <el-icon class="mr-1"><Download /></el-icon>
+        下载本地代理
+      </el-button>
+    </div>
 
     <el-table :data="tasks" style="width: 100%">
       <el-table-column label="序号" width="60" align="center">
@@ -232,7 +238,7 @@
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Plus, CircleCheck, Loading } from '@element-plus/icons-vue'
+import {Plus, CircleCheck, Loading, Download, Warning} from '@element-plus/icons-vue'
 import api from '../utils/api'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 
@@ -244,7 +250,10 @@ const ACCOUNTS_API = '/api/platform-accounts'
 
 const agentOnline = ref(false)
 useAgentHeartbeat(agentOnline)
-
+const handleDownloadAgent = () => {
+  const base = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
+  window.open(`${base}/api/agent/download`, '_blank')
+}
 // ---- 数据 ----
 const tasks = ref([])
 const drafts = ref([])
