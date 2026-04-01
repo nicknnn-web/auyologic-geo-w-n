@@ -382,6 +382,390 @@ async function _zhihuSubmitPublish(page, taskId) {
   return publishedUrl;
 }
 
+/**
+ * 微博发布
+ * ─────────────────────────────────────────────
+ * 【微博平台发布实现】
+ */
+async function runPublishWeibo(taskInfo) {
+  const { taskId, sessionState, content, title, imagePaths } = taskInfo;
+  appendLog(taskId, '正在启动浏览器…');
+
+  // ✅ 公共：创建带登录态的浏览器（所有平台相同，直接复用）
+  const { browser, page } = await _createBrowserSession(taskId, sessionState);
+
+  try {
+    // 🔧 【改这里①】：目标发布页 URL
+    appendLog(taskId, '正在打开微博发布页…');
+    await page.goto('https://weibo.com/', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await randomDelay(2000, 3000);
+
+    // 🔧 【改这里②】：session 失效的 URL 特征（微博跳转到登录页）
+    const currentUrl = page.url();
+    if (currentUrl.includes('login.php') || currentUrl.includes('passport.weibo')) {
+      throw new Error('SESSION_EXPIRED:微博登录状态已失效，请在账号管理页重新授权');
+    }
+    appendLog(taskId, '已进入微博首页，开始发布微博…');
+
+    // 🔧 【改这里③】：点击发布框激活输入
+    await _weiboClickPublishBox(page, taskId);
+    await randomDelay(1000, 1500);
+
+    // 🔧 【改这里④】：填写正文（微博支持 140 字或 2000 字，根据账号类型）
+    await _weiboFillContent(page, taskId, content || '');
+    await randomDelay(1000, 1500);
+
+    // 🔧 【改这里⑤】：上传图片（如果有）
+    if (imagePaths && imagePaths.length > 0) {
+      await _weiboUploadImages(page, taskId, imagePaths);
+      await randomDelay(2000, 3000);
+    }
+
+    // 🔧 【改这里⑥】：点击发布
+    const publishedUrl = await _weiboSubmitPublish(page, taskId);
+
+    appendLog(taskId, `✅ 微博发布成功！链接：${publishedUrl || '未获取到链接'}`);
+    return { publishedUrl: publishedUrl || '' };
+  } catch (err) {
+    appendLog(taskId, `❌ 微博发布失败：${err.message}`);
+    throw err;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+/** 微博：点击发布框激活输入并填写内容 */
+async function _weiboClickPublishBox(page, taskId) {
+  appendLog(taskId, '正在点击微博发布框…');
+  try {
+    const selectors = [
+      'textarea._input_md7i3_8',
+      'textarea[placeholder*="新鲜事"]',
+      'textarea[placeholder*="分享"]',
+      'textarea[placeholder*="微博"]',
+      // 备用选择器
+      'textarea.W_input',
+      'textarea[class*="_input"]',
+      'textarea[placeholder*="有什么"]',
+      // 更通用的选择器
+      '[class*="publish"] textarea',
+      '[class*="editor"] textarea',
+    ];
+    
+    for (const sel of selectors) {
+      const input = await page.$(sel);
+      if (input) {
+        const isVisible = await input.isVisible();
+        if (isVisible) {
+          appendLog(taskId, `找到发布框: ${sel}`);
+          await input.click();
+          await randomDelay(500, 800);
+          appendLog(taskId, '已激活微博发布框');
+          return;
+        }
+      }
+    }
+    
+    appendLog(taskId, '使用备选方案获取焦点…');
+    await page.evaluate(() => {
+      const selectors = [
+        'textarea._input_md7i3_8',
+        'textarea[placeholder*="新鲜事"]',
+        'textarea[placeholder*="分享"]',
+      ];
+      
+      for (const sel of selectors) {
+        const textarea = document.querySelector(sel);
+        if (textarea) {
+          textarea.click();
+          textarea.focus();
+          return true;
+        }
+      }
+      return false;
+    });
+    await randomDelay(500, 800);
+    appendLog(taskId, '已激活微博发布框');
+    
+  } catch (err) {
+    appendLog(taskId, `⚠️ 点击微博发布框失败：${err.message}`);
+  }
+}
+
+/** 微博：填写正文 */
+async function _weiboFillContent(page, taskId, content) {
+  if (!content) return;
+  appendLog(taskId, '正在填写微博正文…');
+  try {
+    const selectors = [
+      'textarea._input_md7i3_8',
+      'textarea[placeholder*="新鲜事"]',
+      'textarea[placeholder*="分享"]',
+      'textarea[placeholder*="微博"]',
+      // 备用选择器
+      'textarea.W_input',
+      'textarea.W_textarea',
+      'textarea[class*="_input"]',
+      'textarea[placeholder*="有什么"]',
+    ];
+    
+    let editor = null;
+    let foundSelector = null;
+    
+    for (const sel of selectors) {
+      const found = await page.$(sel);
+      if (found) {
+        const isVisible = await found.isVisible();
+        if (isVisible) {
+          editor = found;
+          foundSelector = sel;
+          appendLog(taskId, `找到编辑器: ${sel}`);
+          break;
+        }
+      }
+    }
+    
+    if (!editor) {
+      appendLog(taskId, '使用 JavaScript 查找编辑器…');
+      const editorFound = await page.evaluate(() => {
+        const selectors = [
+          'textarea._input_md7i3_8',
+          'textarea[placeholder*="新鲜事"]',
+          'textarea[placeholder*="分享"]',
+          'textarea[placeholder*="微博"]',
+          'textarea.W_input',
+        ];
+        
+        for (const sel of selectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetParent !== null) { // 检查是否可见
+            return sel;
+          }
+        }
+        return null;
+      });
+      
+      if (editorFound) {
+        editor = await page.$(editorFound);
+        foundSelector = editorFound;
+        appendLog(taskId, `JS 找到编辑器: ${editorFound}`);
+      }
+    }
+    
+    if (!editor) {
+      appendLog(taskId, '⚠️ 未找到微博正文编辑框');
+      return;
+    }
+    
+    await editor.click();
+    await randomDelay(300, 500);
+    await page.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      if (el) el.focus();
+    }, foundSelector);
+    await randomDelay(200, 400);
+    
+    // 清空已有内容
+    await page.keyboard.press('Control+a');
+    await randomDelay(100, 200);
+    await page.keyboard.press('Delete');
+    await randomDelay(100, 200);
+    
+    appendLog(taskId, `开始输入内容（长度：${content.length}）…`);
+    
+    for (let i = 0; i < content.length; i++) {
+      await page.keyboard.type(content[i], { delay: 30 + Math.random() * 20 });
+      if (i > 0 && i % 20 === 0) {
+        appendLog(taskId, `输入进度：${Math.round((i / content.length) * 100)}%`);
+      }
+    }
+    
+    appendLog(taskId, '微博正文填写完成');
+    
+  } catch (err) {
+    appendLog(taskId, `⚠️ 填写微博正文失败：${err.message}`);
+    try {
+      appendLog(taskId, '尝试使用键盘输入作为 fallback…');
+      await page.keyboard.type(content, { delay: 30 });
+      appendLog(taskId, '键盘输入完成');
+    } catch (kbErr) {
+      appendLog(taskId, `⚠️ 键盘输入也失败：${kbErr.message}`);
+    }
+  }
+}
+
+/** 微博：上传图片 */
+async function _weiboUploadImages(page, taskId, imagePaths) {
+  appendLog(taskId, `正在上传 ${imagePaths.length} 张图片到微博…`);
+  try {
+    const uploadSelectors = [
+      'input[type="file"][accept*="image"]',
+      'input[type="file"]',
+      '[class*="upload"] input[type="file"]',
+    ];
+    let fileInput = null;
+    
+    for (const sel of uploadSelectors) {
+      fileInput = await page.$(sel);
+      if (fileInput) break;
+    }
+
+    if (!fileInput) {
+      const triggerSelectors = [
+        '[class*="pic"]',
+        '[class*="image"]',
+        '[class*="upload"]',
+        '[title*="图片"]',
+        'svg[class*="pic"]',
+      ];
+      for (const sel of triggerSelectors) {
+        const trigger = await page.$(sel);
+        if (trigger) {
+          await trigger.click();
+          await randomDelay(800, 1200);
+          break;
+        }
+      }
+      fileInput = await page.$('input[type="file"]');
+    }
+
+    if (!fileInput) {
+      appendLog(taskId, '⚠️ 未找到微博图片上传入口，跳过图片上传');
+      return;
+    }
+
+    const existingPaths = imagePaths.filter(p => fs.existsSync(p));
+    if (existingPaths.length === 0) {
+      appendLog(taskId, '⚠️ 图片文件不存在，跳过图片上传');
+      return;
+    }
+
+    await fileInput.setInputFiles(existingPaths);
+    await randomDelay(3000 + existingPaths.length * 1500, 5000 + existingPaths.length * 2000);
+    appendLog(taskId, `微博图片上传完成（${existingPaths.length} 张）`);
+  } catch (err) {
+    appendLog(taskId, `⚠️ 微博图片上传异常：${err.message}，继续发布…`);
+  }
+}
+
+/** 微博：点击发送按钮并等待结果 */
+async function _weiboSubmitPublish(page, taskId) {
+  appendLog(taskId, '正在点击微博发送按钮…');
+
+  await randomDelay(1000, 1500);
+
+  const publishSelectors = [
+    'button.woo-button-main:has-text("发送")',
+    'button.woo-button-primary:has-text("发送")',
+    'button.woo-button-m:has-text("发送")',
+    'button:has-text("发送")',
+    // 通用按钮选择器
+    'button.W_btn_a:has-text("发送")',
+    'button.W_btn_a:has-text("发布")',
+    'a.W_btn_a:has-text("发送")',
+    'a.W_btn_a:has-text("发布")',
+    // 备用选择器
+    '[class*="woo-button"]',
+    '[class*="btn"]',
+  ];
+
+  let publishBtn = null;
+  let foundSelector = null;
+  
+  for (const sel of publishSelectors) {
+    const found = await page.$(sel);
+    if (found) {
+      const isVisible = await found.isVisible();
+      if (isVisible) {
+        const isDisabled = await found.evaluate(el => {
+          return el.disabled || 
+                 el.getAttribute('disabled') !== null || 
+                 window.getComputedStyle(el).pointerEvents === 'none';
+        });
+        
+        if (!isDisabled) {
+          publishBtn = found;
+          foundSelector = sel;
+          appendLog(taskId, `找到发送按钮: ${sel}`);
+          break;
+        } else {
+          appendLog(taskId, `找到按钮但被禁用: ${sel}`);
+        }
+      }
+    }
+  }
+
+  if (!publishBtn) {
+    appendLog(taskId, '⚠️ 未找到可点击的微博发送按钮，尝试备选方案…');
+    
+    const clicked = await page.evaluate(() => {
+      const selectors = [
+        'button.woo-button-main',
+        'button.woo-button-primary',
+        'button.woo-button-m',
+        'button.woo-button',
+      ];
+      
+      for (const sel of selectors) {
+        const btns = document.querySelectorAll(sel);
+        for (const btn of btns) {
+          if (btn.textContent.includes('发送') && !btn.disabled && btn.offsetParent !== null) {
+            btn.click();
+            return true;
+          }
+        }
+      }
+      
+      const allBtns = document.querySelectorAll('button');
+      for (const btn of allBtns) {
+        if (btn.textContent.includes('发送') || btn.textContent.includes('发布')) {
+          if (!btn.disabled && btn.offsetParent !== null) {
+            btn.click();
+            return true;
+          }
+        }
+      }
+      
+      return false;
+    });
+    
+    if (!clicked) {
+      throw new Error('未找到微博发送按钮，请检查页面是否正确加载');
+    }
+  } else {
+    await publishBtn.click({ force: true });
+  }
+
+  appendLog(taskId, '已点击发送，等待发布结果…');
+
+  let publishedUrl = '';
+  try {
+    // 微博发布成功
+    await page.waitForTimeout(2000);
+    await randomDelay(1000, 1500);
+    
+    // 获取当前 URL 作为发布后的链接
+    publishedUrl = page.url();
+    
+    if (!publishedUrl.includes('/u/') && !publishedUrl.includes('/n/')) {
+      try {
+        const username = await page.$eval('[class*="nick"]', el => el.textContent?.trim());
+        if (username) {
+          publishedUrl = `https://weibo.com/n/${encodeURIComponent(username)}`;
+        }
+      } catch {}
+    }
+  } catch {
+    appendLog(taskId, '⚠️ 等待微博发布结果超时，检查当前 URL…');
+    publishedUrl = page.url();
+  }
+  
+  return publishedUrl;
+}
+
 /** 内部分发逻辑：根据平台路由到对应发布函数 */
 async function _runPublish(taskInfo) {
   const { platform } = taskInfo;
@@ -390,6 +774,8 @@ async function _runPublish(taskInfo) {
     return await runPublishXHS(taskInfo);
   } else if (platform === '知乎') {
     return await runPublishZhihu(taskInfo);
+  } else if (platform === '微博') {
+    return await runPublishWeibo(taskInfo);
   } else {
     throw new Error(`暂不支持 ${platform} 平台的自动发布`);
   }
