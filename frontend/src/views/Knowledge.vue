@@ -206,6 +206,7 @@ import { ElMessage } from 'element-plus'
 import { UploadFilled, Document, InfoFilled } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import { knowledgeAPI } from '../utils/api'
+import { uploadFile, downloadFromMinIO, deleteFromMinIO } from '../services/uploadService'
 
 const fileInput = ref(null)
 const isDragging = ref(false)
@@ -306,11 +307,11 @@ const processFiles = (files) => {
   })
 
   validFiles.forEach(async file => {
-    await uploadFile(file)
+    await uploadFileToMinIO(file)
   })
 }
 
-const uploadFile = (file) => {
+const uploadFileToMinIO = (file) => {
   return new Promise((resolve) => {
     const ext = file.name.split('.').pop().toLowerCase()
     const uploadingFile = {
@@ -322,89 +323,138 @@ const uploadFile = (file) => {
     }
     uploadingFiles.value.push(uploadingFile)
 
-    // 用 FileReader 读取文件内容
-    const reader = new FileReader()
+    // 文本文件类型
+    const textTypes = ['txt', 'md', 'mdx', 'html']
+    const isTextFile = textTypes.includes(ext)
     
-    reader.onload = (e) => {
-      const content = e.target?.result || ''
+    // 用 FileReader 读取文本文件内容用于本地预览
+    if (isTextFile) {
+      const reader = new FileReader()
       
-      // 模拟上传进度
-      let progress = 0
-      const timer = setInterval(() => {
-        progress += Math.random() * 30
-        if (progress >= 100) {
-          progress = 100
-          clearInterval(timer)
+      reader.onload = async (e) => {
+        const content = e.target?.result || ''
+        
+        try {
+          // 上传到 MinIO
+          const uploadResult = await uploadFile(file, (progress) => {
+            uploadingFile.progress = progress
+          })
+          
           uploadingFile.progress = 100
           uploadingFile.status = 'done'
           
-          // 添加到表格，保存真实内容
-          setTimeout(async () => {
-            const fileData = {
-              id: Date.now() + Math.random(),
+          const fileData = {
+            id: Date.now() + Math.random(),
+            name: file.name,
+            type: ext,
+            size: file.size,
+            content: content,
+            url: uploadResult.url,
+            objectName: uploadResult.objectName,
+            words: content.toString().length,
+            status: '已处理',
+            createdAt: new Date().toLocaleString('zh-CN')
+          }
+          tableData.value.unshift(fileData)
+          
+          // 保存到后端 API
+          try {
+            const savedDoc = await knowledgeAPI.create({
               name: file.name,
+              filename: file.name,
               type: ext,
+              fileType: ext,
               size: file.size,
-              content: content, // 保存文件内容
-              words: content.toString().length,
-              status: '已处理',
-              createdAt: new Date().toLocaleString('zh-CN')
-            }
-            tableData.value.unshift(fileData)
-            
-            // 保存到后端 API（后台同步，失败不影响本地）
-            try {
-              console.log('正在上传知识库文档...', file.name)
-              // 发送符合数据库字段名的数据
-              const savedDoc = await knowledgeAPI.create({
-                name: file.name,
-                filename: file.name,
-                type: ext,
-                fileType: ext,
-                size: file.size,
-                content: content
-              })
-              console.log('知识库保存成功:', savedDoc)
-              // 更新本地数据使用后端返回的真实ID
-              fileData.id = savedDoc.id
-              ElMessage.success('文档已保存到服务器')
-            } catch (e) {
-              console.error('保存到后端失败:', e.message || e)
-              ElMessage.warning('保存到服务器失败，仅保留在本地')
-            }
-            
-            // 保存到 localStorage 作为备份
-            try {
-              saveToStorage()
-            } catch (e) {
-              console.warn('localStorage 保存失败:', e)
-              ElMessage.warning('文件内容过大，已上传但无法保存预览')
-            }
-            
-            uploadingFiles.value = uploadingFiles.value.filter(f => f.name !== file.name)
-            ElMessage.success(`${file.name} 上传成功`)
-            resolve()
-          }, 500)
-        } else {
-          uploadingFile.progress = Math.round(progress)
+              content: content,
+              file_path: uploadResult.url
+            })
+            fileData.id = savedDoc.id
+            ElMessage.success('文档已保存到服务器')
+          } catch (e) {
+            console.error('保存到后端失败:', e.message || e)
+            ElMessage.warning('保存到服务器失败，仅保留在本地')
+          }
+          
+          try {
+            saveToStorage()
+          } catch (e) {
+            console.warn('localStorage 保存失败:', e)
+          }
+          
+        } catch (error) {
+          console.error('上传失败:', error)
+          ElMessage.error(`上传失败: ${error.message}`)
+          uploadingFile.status = 'error'
+        } finally {
+          uploadingFiles.value = uploadingFiles.value.filter(f => f.name !== file.name)
+          resolve()
         }
-      }, 200)
-    }
-    
-    reader.onerror = () => {
-      ElMessage.error(`读取 ${file.name} 失败`)
-      uploadingFiles.value = uploadingFiles.value.filter(f => f.name !== file.name)
-      resolve()
-    }
-    
-    // 根据类型读取
-    if (ext === 'txt' || ext === 'md' || ext === 'mdx') {
-      reader.readAsText(file)
-    } else if (ext === 'html') {
+      }
+      
+      reader.onerror = () => {
+        ElMessage.error(`读取 ${file.name} 失败`)
+        uploadingFiles.value = uploadingFiles.value.filter(f => f.name !== file.name)
+        resolve()
+      }
+      
       reader.readAsText(file)
     } else {
-      // PDF/Word 暂时无法前端解析
-      reader.readAsText(file)
+      // PDF/Word 等二进制文件直接上传到 MinIO
+      ;(async () => {
+        try {
+          const uploadResult = await uploadFile(file, (progress) => {
+            uploadingFile.progress = progress
+          })
+          
+          uploadingFile.progress = 100
+          uploadingFile.status = 'done'
+          
+          const fileData = {
+            id: Date.now() + Math.random(),
+            name: file.name,
+            type: ext,
+            size: file.size,
+            url: uploadResult.url,
+            objectName: uploadResult.objectName,
+            words: 0,
+            status: '已上传',
+            createdAt: new Date().toLocaleString('zh-CN')
+          }
+          tableData.value.unshift(fileData)
+          
+          try {
+            console.log('正在保存知识库文档...', file.name)
+            const savedDoc = await knowledgeAPI.create({
+              name: file.name,
+              filename: file.name,
+              type: ext,
+              fileType: ext,
+              size: file.size,
+              file_path: uploadResult.url // MinIO URL
+            })
+            console.log('知识库保存成功:', savedDoc)
+            fileData.id = savedDoc.id
+            ElMessage.success('文档已保存到服务器')
+          } catch (e) {
+            console.error('保存到后端失败:', e.message || e)
+            ElMessage.warning('保存到服务器失败，仅保留在本地')
+          }
+          
+          try {
+            saveToStorage()
+          } catch (e) {
+            console.warn('localStorage 保存失败:', e)
+          }
+          
+        } catch (error) {
+          console.error('上传失败:', error)
+          ElMessage.error(`上传失败: ${error.message}`)
+          uploadingFile.status = 'error'
+        } finally {
+          uploadingFiles.value = uploadingFiles.value.filter(f => f.name !== file.name)
+          resolve()
+        }
+      })()
     }
   })
 }
@@ -735,7 +785,17 @@ const handlePreview = async (row) => {
   previewVisible.value = true
 }
 
-const handleDownload = (row) => {
+const handleDownload = async (row) => {
+  if (row.url) {
+    try {
+      await downloadFromMinIO(row.url, row.name)
+      ElMessage.success('下载成功')
+      return
+    } catch (e) {
+      console.warn('从 MinIO 下载失败，尝试使用本地内容:', e)
+    }
+  }
+  
   const content = row.content || ''
   if (!content) {
     ElMessage.warning('文件内容已丢失，请重新上传')
@@ -754,14 +814,25 @@ const handleDownload = (row) => {
 }
 
 const handleDelete = async (id) => {
-  // 尝试从后端删除
+  const doc = tableData.value.find(item => item.id === id)
+  
+  // 尝试从 MinIO 删除文件
+  if (doc && doc.url) {
+    try {
+      await deleteFromMinIO(doc.url)
+    } catch (e) {
+      console.warn('从 MinIO 删除失败:', e)
+    }
+  }
+  
+  // 尝试从数据库删除
   try {
     await knowledgeAPI.delete(id)
   } catch (e) {
-    console.warn('从后端删除失败，保留在本地:', e)
+    console.warn('从数据库删除失败:', e)
   }
   tableData.value = tableData.value.filter(item => item.id !== id)
-  saveToStorage() // 保存到 localStorage
+  saveToStorage()
   ElMessage.success('删除成功')
 }
 
@@ -774,17 +845,27 @@ const handleBatchDelete = async () => {
     ElMessage.warning('请先选择要删除的文档')
     return
   }
-  const ids = selectedDocs.value.map(d => d.id)
   
-  // 尝试从后端批量删除
-  for (const id of ids) {
+  // 逐个删除，包括 MinIO 文件
+  for (const doc of selectedDocs.value) {
+    // 尝试从 MinIO 删除
+    if (doc.url) {
+      try {
+        await deleteFromMinIO(doc.url)
+      } catch (e) {
+        console.warn(`从 MinIO 删除文档 ${doc.name} 失败:`, e)
+      }
+    }
+    
+    // 尝试从数据库删除
     try {
-      await knowledgeAPI.delete(id)
+      await knowledgeAPI.delete(doc.id)
     } catch (e) {
-      console.warn(`删除文档 ${id} 失败:`, e)
+      console.warn(`从数据库删除文档 ${doc.name} 失败:`, e)
     }
   }
   
+  const ids = selectedDocs.value.map(d => d.id)
   tableData.value = tableData.value.filter(item => !ids.includes(item.id))
   saveToStorage()
   selectedDocs.value = []

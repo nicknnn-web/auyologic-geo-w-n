@@ -234,6 +234,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { PictureFilled, Delete, Grid, List } from '@element-plus/icons-vue'
 import { imagesAPI } from '../utils/api'
+import { uploadFile, deleteFromMinIO, downloadFromMinIO } from '../services/uploadService'
 
 const fileInput = ref(null)
 const isDragging = ref(false)
@@ -323,11 +324,11 @@ const processFiles = (files) => {
   })
 
   validFiles.forEach(file => {
-    uploadFile(file)
+    uploadFileToMinIO(file)
   })
 }
 
-const uploadFile = (file) => {
+const uploadFileToMinIO = (file) => {
   const uploadingFile = {
     name: file.name,
     size: file.size,
@@ -337,63 +338,66 @@ const uploadFile = (file) => {
   }
   uploadingFiles.value.push(uploadingFile)
 
-  // 生成预览图
+  // 生成预览图用于本地显示
   const reader = new FileReader()
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     const preview = e.target?.result || ''
     uploadingFile.preview = preview
     
-    // 模拟上传进度
-    let progress = 0
-    const timer = setInterval(() => {
-      progress += Math.random() * 30
-      if (progress >= 100) {
-        progress = 100
-        clearInterval(timer)
-        uploadingFile.progress = 100
-        uploadingFile.status = 'done'
-        
-        setTimeout(async () => {
-          const imageData = {
-            id: Date.now() + Math.random(),
-            name: file.name,
-            size: file.size,
-            preview: preview,
-            createdAt: new Date().toLocaleString('zh-CN')
-          }
-          tableData.value.unshift(imageData)
-          
-          // 保存到后端 API
-          try {
-            console.log('正在上传图片到后端...', file.name, preview.length)
-            const savedImage = await imagesAPI.create({
-              title: file.name,
-              image_path: preview,
-              size: file.size,
-              tags: '图片'
-            })
-            console.log('图片保存成功:', savedImage)
-            // 更新本地数据使用后端返回的真实ID
-            imageData.id = savedImage.id
-            ElMessage.success('图片已保存到服务器')
-          } catch (e) {
-            console.error('保存到后端失败:', e.message || e)
-            ElMessage.warning('保存到服务器失败，仅保留在本地')
-          }
-          
-          try {
-            saveToStorage()
-          } catch (e) {
-            ElMessage.warning('图片数据过大，已上传但无法保存预览')
-          }
-          
-          uploadingFiles.value = uploadingFiles.value.filter(f => f !== uploadingFile)
-          ElMessage.success(`${file.name} 上传成功`)
-        }, 500)
-      } else {
-        uploadingFile.progress = Math.round(progress)
+    try {
+      // 上传到 MinIO
+      const uploadResult = await uploadFile(file, (progress) => {
+        uploadingFile.progress = progress
+      })
+
+      uploadingFile.progress = 100
+      uploadingFile.status = 'done'
+      
+      const imageData = {
+        id: Date.now() + Math.random(),
+        name: file.name,
+        size: file.size,
+        preview: uploadResult.url,
+        url: uploadResult.url,
+        objectName: uploadResult.objectName,
+        createdAt: new Date().toLocaleString('zh-CN')
       }
-    }, 200)
+      tableData.value.unshift(imageData)
+      
+      // 保存到后端 API
+      try {
+        const savedImage = await imagesAPI.create({
+          title: file.name,
+          image_path: uploadResult.url, // 存储 MinIO 公开 URL
+          size: file.size,
+          tags: '图片'
+        })
+        console.log('图片记录保存成功:', savedImage)
+        // 更新本地数据使用后端返回的真实ID
+        imageData.id = savedImage.id
+        ElMessage.success('图片已保存到服务器')
+      } catch (e) {
+        console.error('保存到后端失败:', e.message || e)
+        ElMessage.warning('保存到服务器失败，仅保留在本地')
+      }
+      try {
+        saveToStorage()
+      } catch (e) {
+        ElMessage.warning('localStorage 保存失败')
+      }
+      
+    } catch (error) {
+      console.error('上传失败:', error)
+      ElMessage.error(`上传失败: ${error.message}`)
+      uploadingFile.status = 'error'
+    } finally {
+      uploadingFiles.value = uploadingFiles.value.filter(f => f !== uploadingFile)
+    }
+  }
+  
+  reader.onerror = () => {
+    ElMessage.error(`读取文件失败`)
+    uploadingFiles.value = uploadingFiles.value.filter(f => f !== uploadingFile)
   }
   
   reader.readAsDataURL(file)
@@ -446,11 +450,22 @@ const handleSingleDownload = (row) => {
 }
 
 const handleDelete = async (id) => {
-  // 同步删除后端
+  const image = tableData.value.find(item => item.id === id)
+  
+  // 尝试从 MinIO 删除文件
+  if (image && image.url) {
+    try {
+      await deleteFromMinIO(image.url)
+    } catch (e) {
+      console.warn('从 MinIO 删除失败:', e)
+    }
+  }
+  
+  // 同步删除数据库记录
   try {
     await imagesAPI.delete(id)
   } catch (e) {
-    console.warn('从后端删除失败:', e)
+    console.warn('从数据库删除失败:', e)
   }
   tableData.value = tableData.value.filter(item => item.id !== id)
   selectedImages.value = selectedImages.value.filter(s => s.id !== id)
@@ -463,12 +478,20 @@ const handleBatchDelete = async () => {
     ElMessage.warning('请先选择要删除的图片')
     return
   }
-  // 同步删除后端
-  for (const id of selectedImages.value) {
+  // 逐个删除，包括 MinIO 文件
+  for (const img of selectedImages.value) {
+    if (img.url) {
+      try {
+        await deleteFromMinIO(img.url)
+      } catch (e) {
+        console.warn(`从 MinIO 删除图片 ${img.name} 失败:`, e)
+      }
+    }
+    
     try {
-      await imagesAPI.delete(id)
+      await imagesAPI.delete(img.id)
     } catch (e) {
-      console.warn('从后端删除失败:', e)
+      console.warn(`从数据库删除图片 ${img.name} 失败:`, e)
     }
   }
   const ids = selectedImages.value.map(d => d.id)
@@ -484,13 +507,23 @@ const handleBatchDownload = () => {
     return
   }
   
-  // 逐个下载
+  // 从 MinIO 下载
   selectedImages.value.forEach((img, idx) => {
-    setTimeout(() => {
-      const a = document.createElement('a')
-      a.href = img.preview
-      a.download = img.name
-      a.click()
+    setTimeout(async () => {
+      try {
+        if (img.url) {
+          // 从 MinIO 下载
+          await downloadFromMinIO(img.url, img.name)
+        } else {
+          const a = document.createElement('a')
+          a.href = img.preview
+          a.download = img.name
+          a.click()
+        }
+      } catch (e) {
+        console.error(`下载图片 ${img.name} 失败:`, e)
+        ElMessage.error(`下载 ${img.name} 失败`)
+      }
     }, idx * 300) // 间隔 300ms 避免浏览器阻止
   })
   

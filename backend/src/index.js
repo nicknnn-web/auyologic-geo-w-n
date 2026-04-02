@@ -922,8 +922,10 @@ import contentGeneratorRouter from './routes/contentGenerator.js';
 import geoDetectionRouter from './routes/geoDetection.js';
 import websiteAnalyzerRouter from './routes/websiteAnalyzer.js';
 import aiProxyRouter from './routes/aiProxy.js';
+import fileUploadRouter from './routes/fileUpload.js';
 
 app.use('/api', contentGeneratorRouter);
+app.use('/api/minio', fileUploadRouter);
 app.use('/api', geoDetectionRouter);
 app.use('/api', websiteAnalyzerRouter);
 app.use('/api/ai', aiProxyRouter);
