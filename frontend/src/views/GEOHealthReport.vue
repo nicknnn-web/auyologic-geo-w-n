@@ -694,7 +694,7 @@ const loadHealthReport = async () => {
     // 填充漏斗
     if (data.funnelStages) funnelStages.value = data.funnelStages
 
-    hasData.value = (data.rawData?.totalChecks || 0) > 0
+    hasData.value = (data.rawData?.totalChecks || 0) > 0 || (data.rawData?.reportsCount || 0) > 0
 
     if (!hasData.value) {
       ElMessage.warning('暂无检测数据，请先进行可见度检测')
