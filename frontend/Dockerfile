@@ -17,7 +17,7 @@ FROM node:22-alpine AS runtime
 WORKDIR /app
 
 # 安装 express（ESM 模式）
-RUN echo '{"type":"module"}' > package.json && npm install express
+RUN echo '{"type":"module"}' > package.json && npm install express@4
 
 # 复制构建产物和服务器
 COPY --from=build /src/dist ./dist

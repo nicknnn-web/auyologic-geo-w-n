@@ -71,7 +71,7 @@ app.use('/api', async (req, res) => {
 app.use(express.static('dist'));
 
 // SPA fallback
-app.get('/*', (req, res) => {
+app.use((req, res) => {
   res.sendFile('index.html', { root: 'dist' });
 });
 
