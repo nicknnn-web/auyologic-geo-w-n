@@ -52,9 +52,9 @@ export async function initDB() {
     // 插入默认用户
     await client.query(`
       INSERT INTO users (user_id, username, deepseek_api_key, default_ai_model)
-      VALUES ('default_user', '管理员', 'sk-c8769ba486ee46d799a37a4b8e747159', 'deepseek-chat')
+      VALUES ('default_user', '管理员', $1, 'deepseek-chat')
       ON CONFLICT (user_id) DO NOTHING
-    `);
+    `, [process.env.DEEPSEEK_API_KEY || '']);
 
     // 关键词表
     await client.query(`

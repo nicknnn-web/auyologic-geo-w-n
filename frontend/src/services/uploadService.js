@@ -4,7 +4,10 @@ import axios from 'axios'
  * 统一文件上传服务
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
+// 优先走前端代理（同源），fallback 直连后端
+const BASE_URL = typeof window !== 'undefined' 
+  ? (window.VITE_API_URL || window.location.origin)
+  : 'https://auyologic.zeabur.app'
 
 const uploadService = axios.create({
   baseURL: BASE_URL,

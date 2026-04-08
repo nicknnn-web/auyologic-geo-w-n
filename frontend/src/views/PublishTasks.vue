@@ -251,7 +251,7 @@ const ACCOUNTS_API = '/api/platform-accounts'
 const agentOnline = ref(false)
 useAgentHeartbeat(agentOnline)
 const handleDownloadAgent = () => {
-  const base = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
+  const base = window.VITE_API_URL || window.location.origin
   window.open(`${base}/api/agent/download`, '_blank')
 }
 // ---- 数据 ----

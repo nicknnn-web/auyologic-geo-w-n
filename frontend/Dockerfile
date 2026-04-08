@@ -11,16 +11,18 @@ COPY . .
 # 构建时不设置任何 API 环境变量
 RUN npm run build
 
-# 生产环境 - Caddy 提供静态文件 + 反向代理
-FROM alpine:latest AS runtime
+# 生产环境 - Node.js 提供静态文件 + API 反向代理
+FROM node:22-alpine AS runtime
 
-RUN apk add --no-cache caddy ca-certificates
+WORKDIR /app
 
-COPY --from=build /src/dist /usr/share/caddy
+# 只安装 express
+RUN npm init -y && npm install express
 
-# Caddy 配置：静态文件服务 + /api/* 反向代理到后端
-COPY Caddyfile /etc/caddy/Caddyfile
+# 复制构建产物和服务器
+COPY --from=build /src/dist ./dist
+COPY server.js .
 
 EXPOSE 8080
 
-CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+CMD ["node", "server.js"]
