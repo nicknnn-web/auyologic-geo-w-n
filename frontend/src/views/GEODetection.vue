@@ -269,7 +269,7 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock, Document, Loading } from '@element-plus/icons-vue'
-import { getList, getData, saveData } from '../utils/storage'
+
 
 /**
  * 雷达图组件 - 用SVG实现
@@ -386,7 +386,7 @@ const RadarChart = {
 }
 
 // ==================== AI 代理配置 ====================
-const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
+const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
 
 // ==================== 权威网站白名单 ====================
 // 这些是行业知名品牌官网，检测时有额外加权
@@ -610,6 +610,8 @@ const detectDeepseekReal = async (question, keywords) => {
     // ===== 纯前端文本分析（支持多关键词：任一命中即算可见） =====
     const text = answerText
     const lowerText = text.toLowerCase()
+    const keyword = keywords[0] || ''
+    const lowerKeyword = keyword.toLowerCase()
 
     // 任一关键词提及就算 mentioned（最简单的多关键词逻辑）
     const mentioned = keywords.some(kw => lowerText.includes(kw.toLowerCase()))
@@ -892,27 +894,71 @@ const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '�
 // ===== 历史检测记录 =====
 const geoDetectionHistory = ref([])
 
-const loadHistory = () => {
-  const allData = getData()
-  geoDetectionHistory.value = allData['geo-detection-history'] || []
+const loadHistory = async () => {
+  try {
+    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/geo-reports`)
+    if (res.ok) {
+      const data = await res.json()
+      geoDetectionHistory.value = data.map(r => ({
+        id: r.id,
+        checkedAt: r.checkedAt,
+        overallScore: r.overallScore,
+        overallGrade: r.overallGrade,
+        visibleCount: r.visibleCount,
+        missingCount: r.missingCount,
+        platformCount: r.platformCount,
+        platformNames: r.platformNames || [],
+        results: r.results || []  // 本地保留 results，前端展示用
+      }))
+    }
+  } catch (e) {
+    console.warn('加载检测历史失败:', e)
+    geoDetectionHistory.value = []
+  }
 }
 
-const saveHistory = (record) => {
-  const allData = getData()
+const saveHistory = async (record) => {
+  // 保存完整结果到 localStorage（供前端详情展示）
+  const allData = {}
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    if (raw) Object.assign(allData, JSON.parse(raw))
+  } catch {}
   const history = allData['geo-detection-history'] || []
-  // 添加到最前面
   history.unshift(record)
-  // 最多保留10条
   if (history.length > 10) history.splice(10)
   allData['geo-detection-history'] = history
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
   geoDetectionHistory.value = history
+
+  // 同步到后端（仅存汇总字段，results 太大存本地）
+  try {
+    await fetch(`${window.VITE_API_URL || window.location.origin}/api/geo-reports`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        keyword: record.platformNames?.join(',') || '',
+        overallScore: record.overallScore,
+        overallGrade: record.overallGrade,
+        visibleCount: record.visibleCount,
+        missingCount: record.missingCount,
+        platformData: { platformCount: record.platformCount, questionCount: record.questionCount }
+      })
+    })
+  } catch (e) {
+    console.warn('同步历史到后端失败:', e)
+  }
 }
 
-const loadHistoryRecord = (id) => {
-  const allData = getData()
+const loadHistoryRecord = async (id) => {
+  // 优先从本地 history 读取（包含完整 results）
+  const allData = {}
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    if (raw) Object.assign(allData, JSON.parse(raw))
+  } catch {}
   const history = allData['geo-detection-history'] || []
-  return history.find(h => h.id === Number(id))
+  return history.find(h => h.id === Number(id)) || null
 }
 
 const getHistoryGradeClass = (grade) => {
@@ -930,10 +976,9 @@ const formatHistoryDate = (isoString) => {
   return `${month}/${day} ${hour}:${minute}`
 }
 
-const handleHistoryCardClick = (id) => {
+const handleHistoryCardClick = async (id) => {
   router.replace({ path: '/geo-detection', query: { historyId: id } })
-  // 加载历史记录
-  const record = loadHistoryRecord(id)
+  const record = await loadHistoryRecord(id)
   if (record) {
     loadedHistoryRecord.value = record
     detectionResults.value = record.results || []
@@ -1100,24 +1145,27 @@ const removeCustomKeyword = (kw) => {
 }
 
 const saveCustomKeywords = async () => {
-  const allData = getData()
-  allData['geo-custom-keywords'] = customKeywords.value
-  saveData(allData)
-  
+  // 保存到本地
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    const allData = raw ? JSON.parse(raw) : {}
+    allData['geo-custom-keywords'] = customKeywords.value
+    localStorage.setItem('auyologic_data', JSON.stringify(allData))
+  } catch {}
+
   // 同时保存到后端数据库
   const userId = 'default_user'
-  try {
-    await fetch(`${import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'}/api/keywords`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-      body: JSON.stringify({
-        keyword: customKeywords.value[customKeywords.value.length - 1] || '',
-        type: '品牌',
-        source: 'geo手动添加'
+  const lastKw = customKeywords.value[customKeywords.value.length - 1]
+  if (lastKw) {
+    try {
+      await fetch(`${window.VITE_API_URL || window.location.origin}/api/keywords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        body: JSON.stringify({ keyword: lastKw, type: '品牌', source: 'geo手动添加' })
       })
-    })
-  } catch (e) {
-    console.warn('保存关键词到后端失败:', e)
+    } catch (e) {
+      console.warn('保存关键词到后端失败:', e)
+    }
   }
 }
 
@@ -1128,8 +1176,7 @@ const filteredQuestions = computed(() => {
 
 // 是否有待审核的问题（用于提醒用户先去 Questions 页面审核）
 const hasPendingQuestions = computed(() => {
-  const allQuestions = getList('questions')
-  return allQuestions.some(q => q.status === '待审核')
+  return questions.value.some(q => q.status === '待审核')
 })
 
 const isQuestionSelected = (id) => {
@@ -1424,8 +1471,12 @@ const buildResultsFromAPI = (apiResults) => {
     results: results
   })
 
-  // 同步到 storage 供 Dashboard 读取
-  const allData = getData()
+  // 同步到 storage 供 Dashboard 读取（本地保留）
+  const allData = {}
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    if (raw) Object.assign(allData, JSON.parse(raw))
+  } catch {}
   allData['geo-detection-result'] = {
     overallScore: overallScore.value,
     overallGrade: overallGrade.value,
@@ -1434,7 +1485,7 @@ const buildResultsFromAPI = (apiResults) => {
     platformCount: selectedPlatforms.value.length,
     checkedAt: new Date().toISOString()
   }
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
 }
 
 
@@ -1453,7 +1504,7 @@ const openRawAnswer = (rawAnswer) => {
  */
 const handleGenerateReport = () => {
   // 保存完整报告数据到storage
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   allData['geo-full-report'] = {
     overallScore: overallScore.value,
     overallGrade: overallGrade.value,
@@ -1465,8 +1516,8 @@ const handleGenerateReport = () => {
     results: detectionResults.value,
     checkedAt: new Date().toISOString()
   }
-  saveData(allData)
-  
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
+
   // 跳转到Dashboard
   router.push('/dashboard')
   ElMessage.success({
@@ -1502,46 +1553,46 @@ const getCategoryColor = (cat) => {
 
 onMounted(async () => {
   // 加载历史记录
-  loadHistory()
+  await loadHistory()
 
   // 检查是否有 historyId 参数
   const historyId = route.query.historyId
   if (historyId) {
-    handleHistoryCardClick(historyId)
+    await handleHistoryCardClick(historyId)
   }
 
   // 从后端 API 加载关键词（优先）
   await loadKeywordsFromAPI()
-  
+
   // 从后端 API 加载已审核的问题
-  loadQuestionsFromAPI()
-  
+  await loadQuestionsFromAPI()
+
   // 补充本地自定义关键词
-  const storedCustomKws = getData()['geo-custom-keywords'] || []
-  const managedKws = keywords.value
-  const validCustomKws = storedCustomKws.filter(kw => !managedKws.includes(kw))
-  customKeywords.value = validCustomKws
-  keywords.value = [...managedKws, ...validCustomKws]
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    const stored = raw ? JSON.parse(raw) : {}
+    const storedCustomKws = stored['geo-custom-keywords'] || []
+    const managedKws = keywords.value
+    const validCustomKws = storedCustomKws.filter(kw => !managedKws.includes(kw))
+    customKeywords.value = validCustomKws
+    keywords.value = [...managedKws, ...validCustomKws]
+  } catch {}
 })
 
 // 从后端 API 加载关键词
 const loadKeywordsFromAPI = async () => {
   const userId = 'default_user'
   try {
-    const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/keywords`, {
+    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/keywords`, {
       headers: { 'x-user-id': userId }
     })
     if (res.ok) {
       const data = await res.json()
-      // 提取关键词
-      keywords.value = data.map(k => k.keyword || k.keyword || '')
-      keywords.value = keywords.value.filter(k => k) // 过滤空值
+      keywords.value = data.map(k => k.keyword || '').filter(k => k)
     }
   } catch (e) {
     console.warn('从后端加载关键词失败:', e)
-    // 回退到本地存储
-    const rawKeywords = getList('keywords')
-    keywords.value = rawKeywords.map(k => k.keyword || k)
+    keywords.value = []
   }
 }
 
@@ -1549,32 +1600,25 @@ const loadKeywordsFromAPI = async () => {
 const loadQuestionsFromAPI = async () => {
   const userId = 'default_user'
   try {
-    const res = await fetch(`${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/questions`, {
+    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/questions`, {
       headers: { 'x-user-id': userId }
     })
     if (res.ok) {
       const data = await res.json()
-      // 只保留已审核的问题
       const approvedQuestions = data.filter(q => q.status === '已审核')
       questions.value = approvedQuestions.map((q, i) => ({
         id: q.id || i + 1,
         text: q.question || q.text || '',
-        category: q.keyword_type || q.keywordType || '场景',
-        sourceKeyword: q.source_keyword || q.sourceKeyword || ''
+        category: q.keywordType || q.keyword_type || '场景',
+        sourceKeyword: q.sourceKeyword || q.source_keyword || ''
       }))
     }
   } catch (e) {
-    console.warn('从后端加载问题失败，回退到 localStorage:', e)
-    // 回退到 localStorage
-    const rawQuestions = getList('questions').filter(q => q.status === '已审核')
-    questions.value = rawQuestions.map((q, i) => ({
-      id: i + 1,
-      text: q.question || q.text || '',
-      category: q.keywordType || '场景',
-      sourceKeyword: q.sourceKeyword || ''
-    }))
+    console.warn('从后端加载问题失败:', e)
+    questions.value = []
   }
 }
+
 </script>
 
 <style scoped>

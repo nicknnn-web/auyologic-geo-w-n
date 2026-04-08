@@ -1,86 +1,96 @@
-// 数据存储工具 - 使用 localStorage
+// 数据存储工具
+// 职责：仅存储 UI 偏好（侧栏状态、分页、筛选条件等）
+// 所有业务数据统一走后端 API，不再使用 localStorage
 
-const STORAGE_KEY = 'auyologic_data'
+const UI_STATE_KEY = 'auyologic_ui_state'
 
-// 初始化数据
-const defaultData = {
-  keywords: [],
-  questions: [],
-  knowledge: [],
-  images: [],
-  commands: [],
-  drafts: [],
-  mediaOfficial: [],
-  mediaSocial: [],
-  publishTasks: [],
-  publishHistory: [],
-  'geo-custom-keywords': []
-}
+// ========== UI 偏好（纯本地，不走 API）==========
 
-// 获取数据
-export const getData = () => {
-  const data = localStorage.getItem(STORAGE_KEY)
-  if (data) {
-    return JSON.parse(data)
+export const getUIState = (key, defaultValue = null) => {
+  try {
+    const data = localStorage.getItem(UI_STATE_KEY)
+    if (!data) return defaultValue
+    const parsed = JSON.parse(data)
+    return parsed[key] !== undefined ? parsed[key] : defaultValue
+  } catch {
+    return defaultValue
   }
-  // 初始化默认数据
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultData))
-  return defaultData
 }
 
-// 保存数据
-export const saveData = (data) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
-}
-
-// 获取某类数据
-export const getList = (type) => {
-  const data = getData()
-  return data[type] || []
-}
-
-// 保存某类数据
-export const saveList = (type, list) => {
-  const data = getData()
-  data[type] = list
-  saveData(data)
-}
-
-// 生成ID
-export const generateId = (type) => {
-  const list = getList(type)
-  if (list.length === 0) return 1
-  return Math.max(...list.map(i => i.id)) + 1
-}
-
-// 添加记录
-export const addItem = (type, item) => {
-  const list = getList(type)
-  list.push({
-    id: generateId(type),
-    ...item,
-    createdAt: new Date().toLocaleString('zh-CN')
-  })
-  saveList(type, list)
-  return list
-}
-
-// 删除记录
-export const deleteItem = (type, id) => {
-  const list = getList(type)
-  const newList = list.filter(i => i.id !== id)
-  // 不重新编号，保持原有 ID
-  saveList(type, newList)
-  return newList
-}
-
-// 更新记录
-export const updateItem = (type, id, updates) => {
-  const list = getList(type)
-  const index = list.findIndex(i => i.id === id)
-  if (index > -1) {
-    list[index] = { ...list[index], ...updates }
-    saveList(type, list)
+export const setUIState = (key, value) => {
+  try {
+    const data = localStorage.getItem(UI_STATE_KEY)
+    const parsed = data ? JSON.parse(data) : {}
+    parsed[key] = value
+    localStorage.setItem(UI_STATE_KEY, JSON.stringify(parsed))
+  } catch {
+    // ignore
   }
-  return list
+}
+
+export const removeUIState = (key) => {
+  try {
+    const data = localStorage.getItem(UI_STATE_KEY)
+    if (!data) return
+    const parsed = JSON.parse(data)
+    delete parsed[key]
+    localStorage.setItem(UI_STATE_KEY, JSON.stringify(parsed))
+  } catch {
+    // ignore
+  }
+}
+
+// ========== API 缓存（可选，用于减少网络请求）==========
+
+const API_CACHE_KEY = 'auyologic_api_cache'
+
+export const getCache = (key, ttl = 5 * 60 * 1000) => {
+  try {
+    const data = localStorage.getItem(API_CACHE_KEY)
+    if (!data) return null
+    const parsed = JSON.parse(data)
+    const cached = parsed[key]
+    if (!cached) return null
+    const age = Date.now() - cached.timestamp
+    if (age > ttl) {
+      // 过期，删除
+      delete parsed[key]
+      localStorage.setItem(API_CACHE_KEY, JSON.stringify(parsed))
+      return null
+    }
+    return cached.data
+  } catch {
+    return null
+  }
+}
+
+export const setCache = (key, data) => {
+  try {
+    const raw = localStorage.getItem(API_CACHE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    parsed[key] = { data, timestamp: Date.now() }
+    localStorage.setItem(API_CACHE_KEY, JSON.stringify(parsed))
+  } catch {
+    // ignore
+  }
+}
+
+export const invalidateCache = (key) => {
+  try {
+    if (!key) {
+      localStorage.removeItem(API_CACHE_KEY)
+      return
+    }
+    const data = localStorage.getItem(API_CACHE_KEY)
+    if (!data) return
+    const parsed = JSON.parse(data)
+    delete parsed[key]
+    localStorage.setItem(API_CACHE_KEY, JSON.stringify(parsed))
+  } catch {
+    // ignore
+  }
+}
+
+export const clearAllUIState = () => {
+  localStorage.removeItem(UI_STATE_KEY)
 }

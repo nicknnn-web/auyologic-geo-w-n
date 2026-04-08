@@ -585,7 +585,7 @@ const checkHttps = (url) => {
 
 // AI 代理配置
 const getAIBaseURL = () => {
-  return (window.VITE_API_URL || window.VITE_API_BASE_URL || 'https://auyologic.zeabur.app') + '/api/ai/generate'
+  return (window.VITE_API_URL || window.location.origin) + '/api/ai/generate'
 }
 
 /**

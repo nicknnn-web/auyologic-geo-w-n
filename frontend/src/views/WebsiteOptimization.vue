@@ -292,13 +292,12 @@ import {
   Monitor, Check, Loading, Link, Clock, RefreshRight, Download,
   WarnTriangleFilled, CircleCheckFilled, Key, CircleCheck, FolderOpened, ArrowLeft, InfoFilled, Document
 } from '@element-plus/icons-vue'
-import { getData, saveData } from '../utils/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const WEBSITE_REPORTS_API = `${API_BASE_URL}/api/website-reports`
 
 const router = useRouter()
-import { analyzeWebsite } from '../utils/websiteAnalyzer'
 
 // ===== 常量 =====
 const dimLabels = {
@@ -425,27 +424,56 @@ const handleStartCheck = async (force = false) => {
   })
 
   try {
-    // 执行真正的网站检测
-    const result = await analyzeWebsite(inputUrl.value, updateProgress, force)
-    
-    // 计算总分 - 技术指标(30%) + AI亲和性(70%)，更符合实际体感
-    const techScore = result.dimensions.tech.score + result.dimensions.structure.score + result.dimensions.schema.score
-    const aiScore = result.dimensions.aiFriendly.score
+    // 确保URL带协议前缀
+    let targetUrl = inputUrl.value.trim()
+    if (!/^https?:\/\//i.test(targetUrl)) targetUrl = 'https://' + targetUrl
+
+    // 通过后端 API 检测（解决浏览器 CORS 问题）
+    const res = await fetch(`${API_BASE_URL}/api/website-analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: targetUrl,
+        apiKey: 'dummy' // 后端服务目前不需要真实 key
+      })
+    })
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: '检测失败' }))
+      throw new Error(err.error || `HTTP ${res.status}`)
+    }
+
+    const result = await res.json()
+    if (!result.success) {
+      throw new Error(result.error || '检测服务异常')
+    }
+
+    // 后端返回 seo/ai/tech/content，映射为前端期望的 tech/structure/schema/aiFriendly
+    const dimMap = {
+      tech: result.tech || { score: 0, checked: 0, total: 0, items: [] },
+      structure: result.seo || { score: 0, checked: 0, total: 0, items: [] },
+      schema: result.content || { score: 0, checked: 0, total: 0, items: [] },
+      aiFriendly: result.ai || { score: 0, checked: 0, total: 0, items: [] }
+    }
+
+    // 计算总分
+    const techScore = (dimMap.tech.score || 0) + (dimMap.structure.score || 0) + (dimMap.schema.score || 0)
+    const aiScore = dimMap.aiFriendly.score || 0
     let totalScore = Math.round(techScore * 0.3 + aiScore * 0.7)
-    
-    // 知名网站加分：直接加上 bonus 和 aiBonus
+
+    // 知名网站加分
     if (result.famousSiteBonus) {
       totalScore = totalScore + result.famousSiteBonus.bonus + (result.famousSiteBonus.aiBonus || 0)
     }
-    
+
     // 转换数据格式以匹配现有UI
     report.value = {
-      url: result.url,
+      url: inputUrl.value,
       score: totalScore,
-      items: result.dimensions,
-      issues: result.issues,
-      checkedAt: result.checkedAt,
-      details: result.details.map(d => ({
+      items: dimMap,
+      issues: result.issues || { warn: [], pass: [] },
+      checkedAt: result.checkedAt || new Date().toISOString(),
+      details: (result.details || []).map(d => ({
         dimension: '',
         item: d.name,
         result: d.result,
@@ -454,13 +482,22 @@ const handleStartCheck = async (force = false) => {
       }))
     }
     // 更新维度标签
-    report.value.details = report.value.details.map(d => {
-      const item = result.dimensions.tech.items.find(i => i.name === d.item)
-        || result.dimensions.structure.items.find(i => i.name === d.item)
-        || result.dimensions.schema.items.find(i => i.name === d.item)
-        || result.dimensions.aiFriendly.items.find(i => i.name === d.item)
-      return { ...d, dimension: item ? getDimByItem(item.name) : '' }
-    })
+    if (report.value.details.length === 0) {
+      report.value.details = [
+        ...(dimMap.tech.items || []).map(i => ({ ...i, dimension: '技术基础' })),
+        ...(dimMap.structure.items || []).map(i => ({ ...i, dimension: '页面结构' })),
+        ...(dimMap.schema.items || []).map(i => ({ ...i, dimension: '结构化数据' })),
+        ...(dimMap.aiFriendly.items || []).map(i => ({ ...i, dimension: 'AI亲和性' }))
+      ]
+    } else {
+      report.value.details = report.value.details.map(d => {
+        const item = (dimMap.tech.items || []).find(i => i.name === d.item)
+          || (dimMap.structure.items || []).find(i => i.name === d.item)
+          || (dimMap.schema.items || []).find(i => i.name === d.item)
+          || (dimMap.aiFriendly.items || []).find(i => i.name === d.item)
+        return { ...d, dimension: item ? getDimByItem(item.name) : '' }
+      })
+    }
   } catch (error) {
     console.error('检测失败:', error)
     ElMessage.error({ message: '检测失败: ' + error.message, offset: 80 })
@@ -538,7 +575,7 @@ const handleNewCheck = () => {
 }
 
 const handleSaveReport = async () => {
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
 
   // 保存到历史记录
   if (!allData['website-reports']) allData['website-reports'] = []
@@ -552,7 +589,7 @@ const handleSaveReport = async () => {
     updatedAt: report.value.checkedAt
   }
 
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
   loadHistory()
   
   // 同时保存到后端
@@ -620,9 +657,9 @@ const handleClearHistory = async () => {
     console.warn('从后端删除失败:', e)
   }
   
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   allData['website-reports'] = []
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
   selectedHistory.value = []
   loadHistory()
   ElMessage.success({ message: '历史已清空', offset: 80 })
@@ -649,11 +686,10 @@ const loadHistory = async () => {
       return
     }
   } catch (e) {
-    console.warn('从后端加载历史失败:', e)
+    console.error('从后端加载历史失败:', e)
+    ElMessage.error({ message: '加载历史记录失败，请刷新重试', offset: 80 })
+    reportHistory.value = []
   }
-  // 回退到 localStorage
-  const allData = getData()
-  reportHistory.value = allData['website-reports'] || []
 }
 
 const toggleSelect = (idx) => {
@@ -672,7 +708,7 @@ const handleBatchDelete = async () => {
   const idsToDelete = selectedHistory.value.map(i => reportHistory.value[i].id).filter(Boolean)
   for (const id of idsToDelete) {
     try {
-      await fetch(`${API_BASE_URL}/api/website_reports/${id}`, {
+      await fetch(`${API_BASE_URL}/api/website-reports/${id}`, {
         method: 'DELETE',
         headers: { 'x-user-id': userId }
       })
@@ -681,10 +717,10 @@ const handleBatchDelete = async () => {
     }
   }
   
-  const allData = getData()
-  const filtered = allData['website-reports'].filter((_, i) => !selectedHistory.value.includes(i))
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
+  const filtered = (allData['website-reports'] || []).filter((_, i) => !selectedHistory.value.includes(i))
   allData['website-reports'] = filtered
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
   selectedHistory.value = []
   loadHistory()
   ElMessage.success({ message: '已删除选中的报告', offset: 80 })
@@ -692,7 +728,7 @@ const handleBatchDelete = async () => {
 
 // 检查指定记录是否有GEO报告
 const hasGeoReport = (record) => {
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   const geoReport = allData['geo-report']
   if (!geoReport || !geoReport.generatedAt) return false
   const geoTime = new Date(geoReport.generatedAt).getTime()
@@ -727,13 +763,13 @@ const getGradeTagType = (score) => {
 }
 
 const syncToDashboard = () => {
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   allData['dashboard-site-score'] = {
     score: report.value.score,
     url: report.value.url,
     updatedAt: report.value.checkedAt
   }
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
 }
 
 const formatTime = (isoString) => {

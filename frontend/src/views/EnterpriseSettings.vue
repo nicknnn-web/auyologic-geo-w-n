@@ -280,9 +280,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
-import { getData, saveData, addItem, getList } from '../utils/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const form = ref({
   name: '',
@@ -321,14 +321,7 @@ const loadData = async () => {
       }
     }
   } catch {
-    // 失败则从 localStorage 读取
-    const allData = getData()
-    if (allData['enterprise-settings']) {
-      form.value = { ...form.value, ...allData['enterprise-settings'] }
-      if (form.value.website && form.value.website.startsWith('https://')) {
-        form.value.website = form.value.website.replace('https://', '')
-      }
-    }
+    console.warn('加载企业设置失败')
   }
 }
 
@@ -708,7 +701,7 @@ const extractCoreBusinessWords = (description) => {
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
 // 用 AI 代理分析企业描述，提取核心业务词
 // 比 Web 搜索更可靠，不受跨域限制
-const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
+const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
 
 const analyzeEnterpriseProfile = async (name, industry, description) => {
   const prompt = `你是一个企业业务关键词分析师。请根据以下企业信息，提取出10-15个核心业务关键词。
@@ -812,11 +805,13 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
 }
 
 const handleGenerateKeywords = async () => {
-  // 【修复】强制同步读取 localStorage，确保获取最新数据
-  // 解决用户点击生成时 form.value 可能是旧数据的问题
-  const allData = getData()
-  const savedData = allData['enterprise-settings'] || {}
-  
+  // 强制读取 localStorage 作为兜底（表单值优先）
+  let savedData = {}
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    if (raw) savedData = (JSON.parse(raw))['enterprise-settings'] || {}
+  } catch {}
+
   // 优先使用表单中的最新值，如果为空则使用 localStorage 中的值
   const name = form.value.name || savedData.name || ''
   const industry = form.value.industry || savedData.industry || ''
@@ -924,13 +919,7 @@ const confirmKeywords = async () => {
         throw new Error('API failed')
       }
     } catch {
-      // 后端失败时 fallback 到 localStorage
-      addItem('keywords', {
-        keyword: kw.text,
-        type: keywordType,
-        createdAt: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
-      })
-      count++
+      // 静默失败，避免中断批量添加流程
     }
   }
   

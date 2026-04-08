@@ -97,9 +97,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 
 // P3: 创作类型常量
@@ -146,21 +146,18 @@ const loadData = async () => {
     })
     if (res.ok) {
       const data = await res.json()
-      // API 返回 { value: [...], Count: N } 格式 或 直接数组
       const list = Array.isArray(data) ? data : (data.value || [])
       tableData.value = list
-      
-      // 只有当 API 返回空数组时才初始化默认模板（且只初始化一次）
       if (list.length === 0) {
         await initDefaultCommands()
       }
     } else {
-      // API 失败时从 localStorage 读取
-      tableData.value = getList('commands')
+      tableData.value = []
+      ElMessage.error('加载指令列表失败')
     }
   } catch {
-    // 网络错误时从 localStorage 读取
-    tableData.value = getList('commands')
+    tableData.value = []
+    ElMessage.error('加载指令列表失败，请检查网络')
   }
 }
 
@@ -189,10 +186,8 @@ const handleBatchDelete = async () => {
         headers: { 'x-user-id': userId }
       })
     } catch { /* silent */ }
-    // 同时从 localStorage 删除
-    deleteItem('commands', id)
   }
-  
+
   tableData.value = tableData.value.filter(r => !ids.includes(r.id))
   selectedRows.value = []
   ElMessage.success(`已删除 ${ids.length} 条指令`)
@@ -358,8 +353,6 @@ const handleDelete = async (id) => {
       headers: { 'x-user-id': userId }
     })
   } catch { /* silent */ }
-  // 同时从 localStorage 删除
-  deleteItem('commands', id)
   tableData.value = tableData.value.filter(r => r.id !== id)
   ElMessage.success('删除成功')
 }

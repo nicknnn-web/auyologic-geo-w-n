@@ -295,12 +295,12 @@
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getList, addItem, saveList } from '../utils/storage'
+
 import { knowledgeAPI, historyAPI } from '../utils/api'
 import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 
 // ========== API 配置 ==========
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
 
 const router = useRouter()
@@ -591,16 +591,13 @@ onMounted(async () => {
     if (res.ok) {
       const data = await res.json()
       keywords.value = data
-      // API 返回空但 localStorage 有数据时，合并
-      if (data.length === 0) {
-        const localKw = getList('keywords')
-        if (localKw.length > 0) keywords.value = localKw
-      }
-      saveList('keywords', keywords.value)
+    } else {
+      keywords.value = []
+      ElMessage.warning('关键词加载失败')
     }
   } catch {
-    // 失败则从 localStorage 读取
-    keywords.value = getList('keywords')
+    keywords.value = []
+    ElMessage.warning('关键词加载失败，请检查网络')
   }
 
   // 从后端 API 加载指令模板
@@ -611,20 +608,13 @@ onMounted(async () => {
     if (res.ok) {
       const data = await res.json()
       commands.value = migrateCommands(data)
-      // API 返回空但 localStorage 有数据时，合并（避免旧数据丢失）
-      if (data.length === 0) {
-        const localCmds = getList('commands')
-        if (localCmds.length > 0) {
-          commands.value = migrateCommands(localCmds)
-          saveList('commands', localCmds)
-        }
-      } else {
-        saveList('commands', data)
-      }
+    } else {
+      commands.value = []
+      ElMessage.warning('指令模板加载失败')
     }
   } catch {
-    // 网络错误则从 localStorage 读取
-    commands.value = migrateCommands(getList('commands'))
+    commands.value = []
+    ElMessage.warning('指令模板加载失败，请检查网络')
   }
   
   // Step 2: 加载知识库文档
@@ -1348,64 +1338,41 @@ const handleSaveDraft = async () => {
   }
   
   if (form.value.editId) {
-    // 更新现有草稿
-    const drafts = getList('drafts')
     const editId = Number(form.value.editId)
-    const index = drafts.findIndex(d => Number(d.id) === editId)
-    
-    // 尝试同步到后端
     const userId = 'default_user'
     try {
       await fetch(`${API_BASE_URL}/api/drafts/${editId}`, {
         method: 'PUT',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'x-user-id': userId
         },
         body: JSON.stringify(draftData)
       })
-    } catch (e) {
-      console.warn('同步草稿到后端失败:', e)
-    }
-    
-    if (index !== -1) {
-      drafts[index] = {
-        ...drafts[index],
-        ...draftData,
-        updatedAt: new Date().toLocaleString('zh-CN')
-      }
-      saveList('drafts', drafts)
       ElMessage.success('草稿已更新')
+    } catch (e) {
+      ElMessage.error('草稿更新失败，请重试')
     }
   } else {
-    // 创建新草稿
     const userId = 'default_user'
     try {
       const res = await fetch(`${API_BASE_URL}/api/drafts`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'x-user-id': userId
         },
         body: JSON.stringify(draftData)
       })
       if (res.ok) {
-        const savedDraft = await res.json()
-        // 同步到本地
-        addItem('drafts', { ...draftData, id: savedDraft.id, createdAt: new Date().toLocaleString('zh-CN') })
         ElMessage.success('已保存到草稿箱')
+      } else {
+        ElMessage.error('保存失败，请重试')
       }
     } catch (e) {
-      console.warn('同步草稿到后端失败，回退到本地存储:', e)
-      // 回退到本地存储
-      addItem('drafts', {
-        ...draftData,
-        createdAt: new Date().toLocaleString('zh-CN')
-      })
-      ElMessage.success('已保存到草稿箱（不跳转，可继续编辑）')
+      ElMessage.error('保存失败，请检查网络')
     }
   }
-  // 不再跳转，原地继续编辑
 }
 
 const handleSaveAsNew = async () => {
@@ -1421,34 +1388,27 @@ const handleSaveAsNew = async () => {
     selectedImages: form.value.selectedImages,
     status: '草稿'
   }
-  
+
   const userId = 'default_user'
   try {
     const res = await fetch(`${API_BASE_URL}/api/drafts`, {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'x-user-id': userId
       },
       body: JSON.stringify(draftData)
     })
     if (res.ok) {
-      const savedDraft = await res.json()
-      // 同步到本地
-      addItem('drafts', { ...draftData, id: savedDraft.id, createdAt: new Date().toLocaleString('zh-CN') })
+      ElMessage.success('已另存为新草稿')
+    } else {
+      ElMessage.error('保存失败，请重试')
     }
   } catch (e) {
-    console.warn('同步草稿到后端失败，回退到本地存储:', e)
-    // 回退到本地存储
-    addItem('drafts', {
-      ...draftData,
-      createdAt: new Date().toLocaleString('zh-CN')
-    })
+    ElMessage.error('保存失败，请检查网络')
   }
-  
-  ElMessage.success('已另存为新草稿（不跳转，可继续编辑）')
+
   form.value.editId = null
-  // 不再跳转，原地继续编辑
 }
 </script>
 

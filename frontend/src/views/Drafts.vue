@@ -72,7 +72,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getList, deleteItem } from '../utils/storage'
+
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 
@@ -82,7 +82,7 @@ marked.setOptions({
   gfm: true
 })
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const router = useRouter()
 const tableData = ref([])

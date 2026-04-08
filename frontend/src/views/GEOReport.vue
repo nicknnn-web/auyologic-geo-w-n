@@ -208,10 +208,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, Histogram, Monitor, RefreshRight, Document, WarningFilled, Flag, TrendCharts, View, Cpu, DataLine, List, DocumentCopy, Download, ArrowLeft } from '@element-plus/icons-vue'
-import { getData, saveData } from '../utils/storage'
+
 
 // API配置
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
 
 const router = useRouter()
@@ -255,7 +255,7 @@ const getSeverityName = (severity) => {
 // 加载检测数据
 // recordId: 可选，逗号分隔的 website-reports 数组索引，支持单条或多条（多条的techScore取加权平均）
 const loadDetectionData = (recordId) => {
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   const geoResult = allData['geo-detection-result'] || null
   if (geoResult) {
     visibilityScore.value = geoResult.overallScore || 0
@@ -305,7 +305,7 @@ const generateReport = async () => {
   generating.value = true
   
   try {
-    const allData = getData()
+    const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
     const geoResult = allData['geo-detection-result'] || {}
     const websiteReports = allData['website-reports'] || []
     const recordId = route.query.recordId
@@ -446,15 +446,15 @@ const getDefaultReport = (detectionData) => {
 
 // 保存报告
 const saveReportToStorage = () => {
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   const recordId = route.query.recordId
   allData['geo-report'] = {
     ...reportData.value,
     generatedAt: new Date().toISOString(),
     scores: { combined: combinedScore.value, visibility: visibilityScore.value, tech: techScore.value },
-    recordId: recordId || null // 记录关联的 website-reports 索引
+    recordId: recordId || null
   }
-  saveData(allData)
+  localStorage.setItem('auyologic_data', JSON.stringify(allData))
 }
 
 // 复制报告
@@ -530,7 +530,7 @@ const goToWebsiteOptimization = () => router.push('/website-optimization')
 onMounted(() => {
   const recordId = route.query.recordId
   loadDetectionData(recordId)
-  const allData = getData()
+  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   const savedReport = allData['geo-report']
   if (savedReport && savedReport.scores) {
     reportData.value = savedReport

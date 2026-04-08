@@ -8,6 +8,9 @@ const ANALYSIS_DIMENSIONS = [
 ];
 
 export async function analyzeWebsite(url, apiKey) {
+  // 确保 URL 带协议前缀
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
   const report = {};
   let overallScore = 0;
 

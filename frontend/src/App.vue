@@ -120,6 +120,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <template #title>改进方案报告</template>
             </el-menu-item>
+            <el-menu-item index="/geo-health">
+              <el-icon><TrendCharts /></el-icon>
+              <template #title>品牌体检报告</template>
+            </el-menu-item>
           </el-menu>
         </el-aside>
 
@@ -215,6 +219,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <template #title>改进方案报告</template>
             </el-menu-item>
+            <el-menu-item index="/geo-health">
+              <el-icon><TrendCharts /></el-icon>
+              <template #title>品牌体检报告</template>
+            </el-menu-item>
           </el-menu>
         </div>
 
@@ -228,8 +236,8 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Menu, Close } from '@element-plus/icons-vue'
+import { ref, computed, onMounted } from 'vue'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Menu, Close, TrendCharts } from '@element-plus/icons-vue'
 
 const isCollapse = ref(false)
 const mobileMenuOpen = ref(false)
@@ -240,6 +248,16 @@ const isMobile = computed(() => {
     return window.innerWidth < 768
   }
   return false
+})
+
+onMounted(async () => {
+  // 迁移旧 localStorage 数据到后端 API（仅执行一次）
+  try {
+    const { default: migrateLocalStorage } = await import('./utils/migrateLocalStorage.js')
+    await migrateLocalStorage()
+  } catch (e) {
+    console.warn('[App] 迁移脚本加载失败:', e)
+  }
 })
 </script>
 

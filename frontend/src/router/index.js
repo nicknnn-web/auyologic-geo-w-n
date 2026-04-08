@@ -15,6 +15,7 @@ import EnterpriseSettings from '../views/EnterpriseSettings.vue'
 import GEODetection from '../views/GEODetection.vue'
 import WebsiteOptimization from '../views/WebsiteOptimization.vue'
 import GEOReport from '../views/GEOReport.vue'
+import GEOHealthReport from '../views/GEOHealthReport.vue'
 
 const routes = [
   { path: '/', name: 'dashboard', component: Dashboard },
@@ -43,6 +44,7 @@ const routes = [
   { path: '/geo-detection', name: 'geo-detection', component: GEODetection },
   { path: '/website-optimization', name: 'website-optimization', component: WebsiteOptimization },
   { path: '/geo-report', name: 'geo-report', component: GEOReport },
+  { path: '/geo-health', name: 'geo-health', component: GEOHealthReport },
 ]
 
 const router = createRouter({

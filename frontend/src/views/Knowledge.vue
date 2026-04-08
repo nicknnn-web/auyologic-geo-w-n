@@ -493,7 +493,7 @@ const formatFileSize = (bytes) => {
 
 // ==================== AI 分析功能 ====================
 // AI 代理端点
-const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
+const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
 
 // AI 分析状态
 const analyzingIds = ref(new Set()) // 正在分析的文档ID集合

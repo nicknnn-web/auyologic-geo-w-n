@@ -1,7 +1,7 @@
 import axios from 'axios'
 
 // API 服务层 - 直接连接后端（Zeabur 环境下）test
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://auyologic.zeabur.app'
+const BASE_URL = window.VITE_API_URL || window.location.origin
 
 const api = axios.create({
   baseURL: BASE_URL,

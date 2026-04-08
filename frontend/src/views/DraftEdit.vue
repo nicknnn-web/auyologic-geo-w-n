@@ -101,7 +101,6 @@ import { ElMessage } from 'element-plus'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { draftsAPI } from '../utils/api'
-import { addItem, getList } from '../utils/storage'
 import { ArrowLeft, Check, Edit, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -129,14 +128,6 @@ const editTitle = ref('')
 const keywords = ref([])
 const saving = ref(false)
 const loading = ref(true)
-
-// 从 localStorage 获取草稿
-const getDraftFromLocal = (id) => {
-  const localDrafts = getList('drafts')
-  // 支持字符串和数字 ID
-  const targetId = typeof id === 'string' ? parseInt(id, 10) : id
-  return localDrafts.find(d => d.id === targetId)
-}
 
 // 编辑器
 const editor = useEditor({
@@ -173,26 +164,6 @@ onMounted(async () => {
       editor.value?.commands.setContent(parseContent(data.content) || '')
     } catch (e) {
       console.error('加载草稿失败:', e)
-      // 先尝试从 localStorage 读取草稿
-      const localDraft = getDraftFromLocal(draftId)
-      if (localDraft) {
-        draft.value = localDraft
-        editTitle.value = localDraft.title || ''
-        loading.value = false
-        if (localDraft.keyword) {
-          keywords.value = localDraft.keyword.split(',').filter(k => k.trim())
-        } else if (localDraft.form?.keywords) {
-          keywords.value = Array.isArray(localDraft.form.keywords) ? localDraft.form.keywords : [localDraft.form.keywords]
-        }
-        // 支持 localStorage 中的 content（旧格式）
-        if (!localDraft.content && localDraft.generatedContent) {
-          localDraft.content = localDraft.generatedContent
-        }
-        editor.value?.commands.setContent(parseContent(localDraft.content) || '')
-        ElMessage.warning('从本地缓存加载草稿（服务器无此记录）')
-        return
-      }
-      
       // 尝试从 sessionStorage 读取
       const stored = sessionStorage.getItem('editDraft')
       if (stored) {
@@ -278,14 +249,7 @@ const handleSave = async () => {
     }
   } catch (e) {
     console.error('保存失败:', e)
-    // 失败时保存到 localStorage
-    addItem('drafts', {
-      title: editTitle.value,
-      content: draft.value?.content || '',
-      status: '草稿',
-      createdAt: new Date().toLocaleString()
-    })
-    ElMessage.warning('服务器保存失败，已保存到本地')
+    ElMessage.error('保存失败，请检查网络')
   } finally {
     saving.value = false
   }

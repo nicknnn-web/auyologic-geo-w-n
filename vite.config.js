@@ -4,9 +4,10 @@ import path from 'path'
 
 export default defineConfig({
   plugins: [vue()],
+  root: 'frontend',
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(__dirname, './frontend/src'),
     },
   },
   server: {
@@ -14,21 +15,19 @@ export default defineConfig({
     proxy: {
       // 开发环境：代理 /api 到后端
       '/api': {
-        target: process.env.VITE_API_TARGET || 'http://localhost:3001',
+        target: process.env.VITE_API_TARGET || 'https://auyologic.zeabur.app',
         changeOrigin: true,
-        // 开发时不验证 SSL
-        secure: false,
+        secure: true,
       },
       // 开发环境：代理 /uploads 静态文件
       '/uploads': {
-        target: process.env.VITE_API_TARGET || 'http://localhost:3001',
+        target: process.env.VITE_API_TARGET || 'https://auyologic.zeabur.app',
         changeOrigin: true,
-        rewrite: (p) => p,
       },
     },
   },
   build: {
-    outDir: 'dist',
+    outDir: '../dist',
     assetsDir: 'assets',
     sourcemap: false,
     rollupOptions: {

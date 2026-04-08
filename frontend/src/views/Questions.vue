@@ -139,9 +139,9 @@ import { Plus, MagicStick, SortUp, SortDown, Rank, Delete } from '@element-plus/
 
 const route = useRoute()
 const router = useRouter()
-import { getData, getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const formatDate = (dateStr) => {
   if (!dateStr || dateStr === '{}') return '-'
@@ -203,9 +203,11 @@ const loadData = async () => {
       tableData.value = data
     } else {
       tableData.value = []
+      ElMessage.error('加载问题列表失败')
     }
   } catch {
     tableData.value = []
+    ElMessage.error('加载问题列表失败，请检查网络')
   }
 }
 
@@ -233,7 +235,7 @@ const getStatusType = (status) => {
 }
 
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
-const AI_PROXY_URL = `${import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'}/api/ai/generate`
+const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
 
 const analyzeEnterpriseProfileForQuestions = async (name, industry, description) => {
   try {
@@ -282,8 +284,13 @@ const analyzeEnterpriseProfileForQuestions = async (name, industry, description)
 
 // 从 storage 读取企业设置
 const getEnterpriseSettings = () => {
-  const allData = getData()
-  return allData['enterprise-settings'] || {}
+  try {
+    const raw = localStorage.getItem('auyologic_data')
+    const allData = raw ? JSON.parse(raw) : {}
+    return allData['enterprise-settings'] || {}
+  } catch {
+    return {}
+  }
 }
 
 // 从企业描述中提取核心业务词（如SEO、GEO、数字化营销等专业术语）
@@ -572,13 +579,29 @@ const handleAIExpand = async () => {
       console.warn('从 API 获取关键词失败，尝试从 localStorage', e)
     }
     
-    // 如果 API 失败或没数据，回退到 localStorage
+    // 如果 API 失败，报错提示
     if (!keywords || keywords.length === 0) {
-      const localKeywords = getList('keywords')
-      keywords = localKeywords.filter(k => ids.includes(k.id))
+      ElMessage.error('无法加载关键词，请检查网络')
+      return
     }
   } else {
-    keywords = getList('keywords')
+    // 无 keywordIds 参数时，尝试加载全部关键词
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+        headers: { 'x-user-id': 'default_user' }
+      })
+      if (res.ok) {
+        keywords = await res.json()
+      } else {
+        keywords = []
+      }
+    } catch {
+      keywords = []
+    }
+    if (keywords.length === 0) {
+      ElMessage.error('无法加载关键词，请检查网络')
+      return
+    }
   }
 
   if (keywords.length === 0) {
@@ -637,7 +660,7 @@ const handleAIExpand = async () => {
           continue
         }
 
-        questions.forEach(async q => {
+        for (const q of questions) {
           const newQuestion = {
             question: q,
             keywordType: kw.type,
@@ -645,25 +668,28 @@ const handleAIExpand = async () => {
             status: '待审核'
           }
           
-          // 先保存到 localStorage
-          tableData.value = addItem('questions', newQuestion)
-          successCount++
-          
-          // 同时同步到后端 API
           const userId = 'default_user'
           try {
-            await fetch(`${API_BASE_URL}/api/questions`, {
+            const res = await fetch(`${API_BASE_URL}/api/questions`, {
               method: 'POST',
-              headers: { 
+              headers: {
                 'Content-Type': 'application/json',
                 'x-user-id': userId
               },
               body: JSON.stringify(newQuestion)
             })
+            if (res.ok) {
+              const saved = await res.json()
+              tableData.value.unshift({ ...newQuestion, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
+              successCount++
+            } else {
+              failCount++
+            }
           } catch (e) {
-            console.warn('同步到后端失败:', e)
+            console.warn('保存问题失败:', e)
+            failCount++
           }
-        })
+        }
       } catch (error) {
         console.error(`生成关键词"${kw.keyword}"的问题失败:`, error)
         failCount++
@@ -834,7 +860,7 @@ const handleSubmit = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions`, {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'x-user-id': userId
       },
@@ -842,15 +868,17 @@ const handleSubmit = async () => {
     })
     if (res.ok) {
       const saved = await res.json()
-      // 直接添加到列表，不重新加载
       tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
+      ElMessage.success('添加成功')
+    } else {
+      ElMessage.error('添加失败，请重试')
+      return
     }
   } catch (e) {
-    console.warn('同步到后端失败:', e)
-    tableData.value.unshift({ ...newItem, id: Date.now(), createdAt: new Date().toLocaleString('zh-CN') })
+    ElMessage.error('添加失败，请检查网络')
+    return
   }
-  
-  ElMessage.success('添加成功')
+
   dialogVisible.value = false
 }
 

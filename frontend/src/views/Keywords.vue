@@ -88,9 +88,8 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getList, addItem, deleteItem, updateItem } from '../utils/storage'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic.zeabur.app'
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const router = useRouter()
 
@@ -119,18 +118,13 @@ const loadData = async () => {
     if (res.ok) {
       const data = await res.json()
       tableData.value = data
-      // API 返回空但 localStorage 有数据时，合并（避免旧数据丢失）
-      if (data.length === 0) {
-        const localData = getList('keywords')
-        if (localData.length > 0) {
-          tableData.value = localData
-        }
-      }
     } else {
-      tableData.value = getList('keywords')
+      tableData.value = []
+      ElMessage.error('加载关键词失败')
     }
   } catch {
-    tableData.value = getList('keywords')
+    tableData.value = []
+    ElMessage.error('加载关键词失败，请检查网络')
   }
 }
 

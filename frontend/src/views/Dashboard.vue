@@ -242,12 +242,12 @@ import {
   Monitor, Search, EditPen, Promotion, ArrowRight,
   ChatDotRound, Document, Histogram, Link
 } from '@element-plus/icons-vue'
-import { getData, saveData } from '../utils/storage'
+
 
 const router = useRouter()
 
 // 后端 API 地址
-const API_BASE_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_API_BASE_URL || 'https://auyologic-geo-w.zeabur.app'
+const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 // ===== 网站健康度 =====
 const siteScore = ref('--')

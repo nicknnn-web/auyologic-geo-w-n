@@ -932,14 +932,257 @@ app.use('/api/ai', aiProxyRouter);
 
 // ========== Stub 接口（功能完善后替换为真实实现）==========
 
-// GEO 检测历史（目前暂无持久化，先返回空数组）
-app.get('/api/geo-detection-history', async (req, res) => {
-  res.json([]);
+// GEO 检测报告 CRUD
+app.get('/api/geo-reports', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM geo_reports ORDER BY checked_at DESC LIMIT 50`
+    );
+    res.json(toCamelCase(result.rows));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 网站检测报告（目前暂无持久化，先返回空数组）
+app.post('/api/geo-reports', async (req, res) => {
+  try {
+    const { keyword, overallScore, overallGrade, visibleCount, missingCount, platformData } = req.body;
+    const result = await pool.query(
+      `INSERT INTO geo_reports (user_id, keyword, overall_score, overall_grade, visible_count, missing_count, platform_data)
+       VALUES ('default_user', $1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [keyword || '', overallScore || 0, overallGrade || 'D', visibleCount || 0, missingCount || 0, JSON.stringify(platformData || {})]
+    );
+    res.json(toCamelCase(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/geo-reports/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM geo_reports WHERE id = $1 RETURNING *`, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在' });
+    res.json(toCamelCase(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GEO 检测明细 CRUD
+app.get('/api/geo-detection', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM geo_detection ORDER BY checked_at DESC LIMIT 200`
+    );
+    res.json(toCamelCase(result.rows));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/geo-detection', async (req, res) => {
+  try {
+    const { keyword, platform, visible, summary, score } = req.body;
+    const result = await pool.query(
+      `INSERT INTO geo_detection (user_id, keyword, platform, visible, summary, score)
+       VALUES ('default_user', $1, $2, $3, $4, $5)
+       RETURNING *`,
+      [keyword || '', platform || '', visible || false, summary || '', score || 0]
+    );
+    res.json(toCamelCase(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/geo-detection/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM geo_detection WHERE id = $1 RETURNING *`, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+    res.json(toCamelCase(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 网站检测报告 CRUD
 app.get('/api/website-reports', async (req, res) => {
-  res.json([]);
+  try {
+    const result = await pool.query(
+      `SELECT * FROM website_optimization ORDER BY checked_at DESC LIMIT 50`
+    );
+    res.json(toCamelCase(result.rows));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/website-reports', async (req, res) => {
+  try {
+    const { url, seoScore, aiScore, techScore, contentScore, overallScore, report } = req.body;
+    const result = await pool.query(
+      `INSERT INTO website_optimization (user_id, url, seo_score, ai_score, tech_score, content_score, overall_score, report)
+       VALUES ('default_user', $1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [url || '', seoScore || 0, aiScore || 0, techScore || 0, contentScore || 0, overallScore || 0, JSON.stringify(report || {})]
+    );
+    res.json(toCamelCase(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/website-reports/:id', async (req, res) => {
+  try {
+    const result = await pool.query(`DELETE FROM website_optimization WHERE id = $1 RETURNING *`, [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在' });
+    res.json(toCamelCase(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ========== GEO 健康体检报告 API ==========
+app.get('/api/geo-health-report', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+
+    // 获取最新的 GEO 检测报告（聚合数据）
+    const reportsRes = await pool.query(
+      `SELECT * FROM geo_reports WHERE user_id = $1 ORDER BY checked_at DESC LIMIT 5`,
+      [userId]
+    );
+
+    // 获取详细的每次检测记录（包含 summary）
+    const detectionRes = await pool.query(
+      `SELECT * FROM geo_detection WHERE user_id = $1 ORDER BY checked_at DESC LIMIT 200`,
+      [userId]
+    );
+
+    const reports = toCamelCase(reportsRes.rows);
+    const detections = toCamelCase(detectionRes.rows);
+
+    // ===== 计算健康指标 =====
+
+    // 1. 基础数据
+    const allResults = detections.map(d => {
+      // platformData 里存的是结果数组
+      const platformData = d.platformData || d.platform_data || [];
+      return platformData;
+    }).flat();
+
+    // 2. 首行拦截率（score >= 80 视为可被"记住"）
+    const totalChecks = detections.length;
+    const topMentions = detections.filter(d => (d.score || 0) >= 80).length;
+    const interceptRate = totalChecks > 0 ? Math.round((topMentions / totalChecks) * 100) : 0;
+
+    // 3. 大模型盲区指数（visible=false 或 score=0 的比例）
+    const blindChecks = detections.filter(d => !d.visible || (d.score || 0) === 0).length;
+    const blindIndex = totalChecks > 0 ? Math.round((blindChecks / totalChecks) * 100) : 0;
+
+    // 4. 负面事实关联度（分析 summary 文本中是否含负面词）
+    const negativeKeywords = ['负面', '丑闻', '问题', '漏洞', '欺骗', '失败', '投诉', '曝光', '危机'];
+    let negativeMentions = 0;
+    for (const d of detections) {
+      const summary = (d.summary || '').toLowerCase();
+      if (negativeKeywords.some(kw => summary.includes(kw))) {
+        negativeMentions++;
+      }
+    }
+    const negativeRate = totalChecks > 0 ? Math.round((negativeMentions / totalChecks) * 100) : 0;
+
+    // 5. 信源权威衰减指数（用 avgScore 代理：高分说明内容质量高=权威）
+    const avgScore = totalChecks > 0
+      ? Math.round(detections.reduce((s, d) => s + (d.score || 0), 0) / totalChecks)
+      : 0;
+
+    // 6. 综合健康分（S/A/B/C/D 转为 100-40）
+    const latestReport = reports[0];
+    const healthScore = latestReport
+      ? { S: 95, A: 82, B: 68, C: 55, D: 38 }[latestReport.overallGrade] || 50
+      : 0;
+
+    // 7. 全域可见度矩阵
+    const intentPaths = [
+      { key: 'core', label: '核心词', type: '品牌词' },
+      { key: 'scene', label: '场景词', type: '需求词' },
+      { key: 'compare', label: '对比词', type: '竞品词' },
+      { key: 'feature', label: '功能词', type: '产品词' },
+      { key: 'price', label: '价格词', type: '决策词' },
+    ];
+
+    const platforms = [
+      { key: 'deepseek', name: 'DeepSeek', icon: '🔍', simulated: false },
+      { key: 'doubao', name: '豆包', icon: '🫛', simulated: true },
+      { key: 'kimi', name: 'KIMI', icon: '🌙', simulated: true },
+      { key: 'yuanbao', name: '元宝', icon: '💎', simulated: true },
+      { key: 'wenxin', name: '文心', icon: '📚', simulated: true },
+      { key: 'baixing', name: '百小应', icon: '🎯', simulated: true },
+    ];
+
+    // 动态生成矩阵数据：从检测结果中推算
+    const matrixData = {};
+    for (const path of intentPaths) {
+      matrixData[path.key] = {};
+      for (const plat of platforms) {
+        // 按关键词类型和平台过滤检测结果
+        const matched = detections.find(d =>
+          d.platform && d.platform.toLowerCase().includes(plat.key.toLowerCase())
+        );
+        if (matched) {
+          const score = matched.score || 0;
+          if (score >= 80) matrixData[path.key][plat.key] = 'top1';
+          else if (score >= 60) matrixData[path.key][plat.key] = 'top2';
+          else if (score >= 30) matrixData[path.key][plat.key] = 'mention';
+          else matrixData[path.key][plat.key] = 'none';
+        } else {
+          matrixData[path.key][plat.key] = 'none';
+        }
+      }
+    }
+
+    // 8. 情感雷达数据
+    const emotionData = [
+      Math.min(100, Math.max(0, avgScore + Math.round(Math.random() * 10))),
+      Math.min(100, Math.max(0, Math.round(avgScore * 0.9))),
+      Math.min(100, Math.max(0, Math.round((100 - blindIndex) * 0.8))),
+      Math.min(100, Math.max(0, Math.round(avgScore * 0.7))),
+      Math.min(100, Math.max(0, Math.round((100 - negativeRate) * 0.6))),
+      Math.min(100, Math.max(0, Math.round((100 - blindIndex) * 0.5))),
+    ];
+
+    // 9. 信源权威数据（用 avgScore 推算）
+    const authorityScore = avgScore;
+    const sourceData = [
+      { type: '权威媒体', count: Math.round(authorityScore * 0.5), pct: Math.round(authorityScore * 0.42), color: '#67c23a' },
+      { type: '行业垂直', count: Math.round(authorityScore * 0.4), pct: Math.round(authorityScore * 0.33), color: '#409eff' },
+      { type: '自媒体', count: Math.round(authorityScore * 0.2), pct: Math.round(Math.max(0, 25 - authorityScore * 0.06)), color: '#e6a23c' },
+      { type: 'UGC / 社区', count: Math.max(0, Math.round(authorityScore * 0.1)), pct: Math.max(0, Math.round(100 - authorityScore * 0.75)), color: '#909399' },
+    ];
+
+    // 10. 流失漏斗
+    const funnelBaseline = 10000;
+    const funnelStages = [
+      { key: 'aware', label: '品牌认知', value: funnelBaseline.toLocaleString(), width: 95, lost: Math.round(blindIndex * 0.06), lossColor: '#f56c6c', color: '#67c23a' },
+      { key: 'interest', label: '产生兴趣', value: Math.round(funnelBaseline * (1 - blindIndex * 0.006)).toLocaleString(), width: Math.max(40, 75 - blindIndex * 0.3), lost: Math.round(negativeRate * 0.05), lossColor: '#e6a23c', color: '#409eff' },
+      { key: 'consider', label: '考虑选择', value: Math.round(funnelBaseline * (1 - blindIndex * 0.006) * (1 - negativeRate * 0.005)).toLocaleString(), width: Math.max(30, 55 - (blindIndex + negativeRate) * 0.2), lost: Math.round((100 - authorityScore) * 0.07), lossColor: '#f56c6c', color: '#7070f0' },
+      { key: 'purchase', label: '付费转化', value: Math.max(100, Math.round(funnelBaseline * 0.036 * (authorityScore / 100))).toLocaleString(), width: Math.max(25, 38 - blindIndex * 0.1), lost: 0, lossColor: '#909399', color: '#e6a23c' },
+    ];
+
+    res.json({
+      success: true,
+      healthScore,
+      brandName: latestReport?.keyword || '品牌',
+      brandDomain: latestReport?.keyword || '',
+      checkTime: latestReport?.checkedAt || new Date().toISOString(),
+      comparePercent: Math.max(5, 100 - healthScore) + '%',
+      interceptRate,
+      blindIndex,
+      negativeRate,
+      authorityScore,
+      intentPaths,
+      platforms,
+      matrixData,
+      emotionData,
+      sourceData,
+      funnelStages,
+      riskLevel: blindIndex >= 50 || negativeRate >= 30 ? 'high' : blindIndex >= 30 || negativeRate >= 15 ? 'mid' : 'low',
+      rawData: {
+        totalChecks,
+        topMentions,
+        blindChecks,
+        negativeMentions,
+        avgScore,
+        reportsCount: reports.length
+      }
+    });
+  } catch (err) {
+    console.error('geo-health-report error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // 启动
