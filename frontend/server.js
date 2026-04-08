@@ -7,7 +7,7 @@ const API_BACKEND = process.env.API_BACKEND || 'https://auyologic.zeabur.app';
 // ============ API 代理 ============
 
 // 不用 express 的 body parser，直接用原始流转发
-app.all('/api/:path(*)', async (req, res) => {
+app.use('/api', async (req, res) => {
   try {
     const targetUrl = `${API_BACKEND}${req.originalUrl}`;
     console.log(`[API Proxy] ${req.method} ${req.originalUrl}`);
