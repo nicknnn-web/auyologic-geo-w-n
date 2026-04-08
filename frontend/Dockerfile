@@ -26,8 +26,8 @@ RUN echo '*:8080 {
     # /api/* 代理到后端（handle 保持原始路径不变）
     handle /api/* {
         reverse_proxy https://auyologic.zeabur.app {
-            header_up Host {host}
-            header_up X-Forwarded-Host {host}
+            header_up Host auyologic.zeabur.app
+            header_up X-Forwarded-Host auyologic.zeabur.app
         }
     }
 
