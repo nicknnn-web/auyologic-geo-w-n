@@ -899,7 +899,7 @@ const loadHistory = async () => {
     const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/geo-reports`)
     if (res.ok) {
       const data = await res.json()
-      geoDetectionHistory.value = data.map(r => ({
+      geoDetectionHistory.value = Array.isArray(data) ? data.map(r => ({
         id: r.id,
         checkedAt: r.checkedAt,
         overallScore: r.overallScore,
@@ -909,7 +909,7 @@ const loadHistory = async () => {
         platformCount: r.platformCount,
         platformNames: r.platformNames || [],
         results: r.results || []  // 本地保留 results，前端展示用
-      }))
+      })) : []
     }
   } catch (e) {
     console.warn('加载检测历史失败:', e)
@@ -1588,7 +1588,7 @@ const loadKeywordsFromAPI = async () => {
     })
     if (res.ok) {
       const data = await res.json()
-      keywords.value = data.map(k => k.keyword || '').filter(k => k)
+      keywords.value = Array.isArray(data) ? data.map(k => k.keyword || '').filter(k => k) : []
     }
   } catch (e) {
     console.warn('从后端加载关键词失败:', e)

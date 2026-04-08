@@ -590,7 +590,7 @@ onMounted(async () => {
     })
     if (res.ok) {
       const data = await res.json()
-      keywords.value = data
+      keywords.value = Array.isArray(data) ? data : []
     } else {
       keywords.value = []
       ElMessage.warning('关键词加载失败')

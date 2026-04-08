@@ -674,7 +674,7 @@ const loadHistory = async () => {
     if (res.ok) {
       const data = await res.json()
       // 转换后端数据格式
-      reportHistory.value = data.map(r => ({
+      reportHistory.value = Array.isArray(data) ? data.map(r => ({
         id: r.id, // 后端返回的记录ID
         url: r.url,
         score: r.score,
@@ -682,7 +682,7 @@ const loadHistory = async () => {
         issues: JSON.parse(r.issues || '{"warn":[],"pass":[]}'),
         details: JSON.parse(r.details || '[]'),
         checkedAt: r.checkedAt
-      }))
+      })) : []
       return
     }
   } catch (e) {

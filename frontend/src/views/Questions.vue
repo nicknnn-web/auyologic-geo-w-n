@@ -200,7 +200,7 @@ const loadData = async () => {
     })
     if (res.ok) {
       const data = await res.json()
-      tableData.value = data
+      tableData.value = Array.isArray(data) ? data : []
     } else {
       tableData.value = []
       ElMessage.error('加载问题列表失败')
