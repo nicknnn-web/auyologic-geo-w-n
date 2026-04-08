@@ -4,22 +4,28 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 const API_BACKEND = process.env.API_BACKEND || 'https://auyologic.zeabur.app';
 
-// API 代理 - 将 /api/* 请求转发到后端
-// 使用 raw body 解析，保持原始请求体不做修改
-app.use('/api', express.raw({ type: () => true, limit: '50mb' }));
+// ============ API 代理 ============
 
+// 不用 express 的 body parser，直接用原始流转发
 app.all('/api/*', async (req, res) => {
   try {
     const targetUrl = `${API_BACKEND}${req.originalUrl}`;
     console.log(`[API Proxy] ${req.method} ${req.originalUrl}`);
 
-    // 复制请求头，过滤掉不应该转发的头
+    // 收集请求体 chunks
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const rawBody = Buffer.concat(chunks);
+
+    // 复制请求头
     const headers = {};
     for (const [key, value] of Object.entries(req.headers)) {
       const lower = key.toLowerCase();
-      // 跳过 hop-by-hop 头和 host
-      if (!['host', 'connection', 'keep-alive', 'transfer-encoding', 
-            'upgrade', 'proxy-connection'].includes(lower)) {
+      // 跳过 hop-by-hop 头
+      if (!['host', 'connection', 'keep-alive', 'transfer-encoding',
+            'upgrade', 'proxy-connection', 'content-length'].includes(lower)) {
         headers[key] = value;
       }
     }
@@ -34,30 +40,34 @@ app.all('/api/*', async (req, res) => {
     };
 
     // GET/HEAD 不带 body
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      fetchOptions.body = req.body;
+    if (req.method !== 'GET' && req.method !== 'HEAD' && rawBody.length > 0) {
+      fetchOptions.body = rawBody;
     }
 
     const backendRes = await fetch(targetUrl, fetchOptions);
 
-    // 透传后端响应头
+    // 透传后端状态码和响应头
     res.status(backendRes.status);
     backendRes.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
-      if (!['transfer-encoding', 'content-encoding', 'connection'].includes(lower)) {
+      if (!['transfer-encoding', 'content-encoding', 'connection', 'content-length'].includes(lower)) {
         res.setHeader(key, value);
       }
     });
 
+    // 流式转发响应体
     const data = await backendRes.arrayBuffer();
-    res.send(Buffer.from(data));
+    res.end(Buffer.from(data));
   } catch (err) {
     console.error(`[API Proxy Error] ${req.method} ${req.originalUrl}:`, err.message);
-    res.status(502).json({ error: 'Backend unreachable', details: err.message });
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'Backend unreachable', details: err.message });
+    }
   }
 });
 
-// 静态文件服务
+// ============ 静态文件 ============
+
 app.use(express.static('dist'));
 
 // SPA fallback
