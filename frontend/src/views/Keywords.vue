@@ -113,11 +113,14 @@ const form = ref({ keyword: '', type: '' })
 
 // 加载数据
 const loadData = async () => {
+  const userId = 'default_user'
   try {
-    const res = await fetch(`${API_BASE_URL}/api/keywords`)
+    const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+      headers: { 'x-user-id': userId }
+    })
     if (res.ok) {
       const data = await res.json()
-      tableData.value = data
+      tableData.value = Array.isArray(data) ? data : []
     } else {
       tableData.value = []
       ElMessage.error('加载关键词失败')
@@ -151,10 +154,11 @@ const cycleType = async (row) => {
   const currentIndex = typeOrder.indexOf(row.type)
   const nextIndex = (currentIndex + 1) % typeOrder.length
   const newType = typeOrder[nextIndex]
+  const userId = 'default_user'
   try {
     await fetch(`${API_BASE_URL}/api/keywords/${row.id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
       body: JSON.stringify({ type: newType })
     })
     await loadData()
@@ -193,8 +197,9 @@ const handleEdit = (row) => {
 }
 
 const handleDelete = async (id) => {
+  const userId = 'default_user'
   try {
-    await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
+    await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } })
   } catch { /* silent */ }
   await loadData()
   ElMessage.success('删除成功')
@@ -202,10 +207,11 @@ const handleDelete = async (id) => {
 
 const handleBatchDelete = async () => {
   if (selectedKeywords.value.length === 0) return
+  const userId = 'default_user'
   const ids = selectedKeywords.value.map(r => r.id)
   for (const id of ids) {
     try {
-      await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE' })
+      await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } })
     } catch { /* silent */ }
   }
   await loadData()
@@ -223,11 +229,12 @@ const handleSubmit = async () => {
     ElMessage.warning('该关键词已存在')
     return
   }
+  const userId = 'default_user'
   if (isEdit.value) {
     try {
       await fetch(`${API_BASE_URL}/api/keywords/${form.value.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
         body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
       })
     } catch { /* silent */ }
@@ -237,7 +244,7 @@ const handleSubmit = async () => {
     try {
       await fetch(`${API_BASE_URL}/api/keywords`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
         body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
       })
     } catch { /* silent */ }
