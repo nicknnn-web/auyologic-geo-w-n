@@ -14,28 +14,12 @@ RUN npm run build
 # 生产环境 - Caddy 提供静态文件 + 反向代理
 FROM alpine:latest AS runtime
 
-RUN apk add --no-cache caddy
+RUN apk add --no-cache caddy ca-certificates
 
 COPY --from=build /src/dist /usr/share/caddy
 
 # Caddy 配置：静态文件服务 + /api/* 反向代理到后端
-RUN echo '*:8080 {
-    root * /usr/share/caddy
-    encode gzip
-
-    # /api/* 代理到后端（handle 保持原始路径不变）
-    handle /api/* {
-        reverse_proxy https://auyologic.zeabur.app {
-            header_up Host auyologic.zeabur.app
-            header_up X-Forwarded-Host auyologic.zeabur.app
-        }
-    }
-
-    # 其他路径：SPA fallback
-    handle {
-        try_files {path} /index.html
-    }
-}' > /etc/caddy/Caddyfile
+COPY Caddyfile /etc/caddy/Caddyfile
 
 EXPOSE 8080
 

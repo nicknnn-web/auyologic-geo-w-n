@@ -1,0 +1,17 @@
+:8080 {
+    root * /usr/share/caddy
+    encode gzip
+
+    # /api/* 代理到后端
+    handle /api/* {
+        reverse_proxy https://auyologic.zeabur.app {
+            header_up Host auyologic.zeabur.app
+            header_up X-Forwarded-Host auyologic.zeabur.app
+        }
+    }
+
+    # 其他路径：SPA fallback
+    handle {
+        try_files {path} /index.html
+    }
+}
