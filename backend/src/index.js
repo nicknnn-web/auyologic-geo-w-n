@@ -1095,12 +1095,14 @@ app.get('/api/geo-health-report', async (req, res) => {
     ];
 
     const platforms = [
-      { key: 'deepseek', name: 'DeepSeek', icon: '🔍', simulated: false },
-      { key: 'doubao', name: '豆包', icon: '🫛', simulated: true },
-      { key: 'kimi', name: 'KIMI', icon: '🌙', simulated: true },
-      { key: 'yuanbao', name: '元宝', icon: '💎', simulated: true },
-      { key: 'wenxin', name: '文心', icon: '📚', simulated: true },
-      { key: 'baixing', name: '百小应', icon: '🎯', simulated: true },
+      { key: 'kimi',     name: 'Kimi',      icon: 'K',  color: '#06B6D4', simulated: true },
+      { key: 'doubao',   name: '豆包',      icon: '豆', color: '#EA580C', simulated: true },
+      { key: 'yuanbao',  name: '腾讯元宝',   icon: '元', color: '#0EA5E9', simulated: true },
+      { key: 'tongyi',   name: '通义千问',   icon: '通', color: '#8B5CF6', simulated: true },
+      { key: 'yiyan',    name: '文心一言',   icon: '文', color: '#EF4444', simulated: true },
+      { key: 'deepseek', name: 'DeepSeek',  icon: 'D',  color: '#4F46E5', simulated: false },
+      { key: 'zhipu',    name: '智谱清言',   icon: '智', color: '#10B981', simulated: true },
+      { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
     ];
 
     // 动态生成矩阵数据：从检测结果中推算
