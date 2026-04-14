@@ -6,6 +6,7 @@ import * as Minio from 'minio';
  */
 
 // 初始化 MinIO 客户端
+console.log('MINIO_ENDPOINT =', process.env.MINIO_ENDPOINT)
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT,
   port: parseInt(process.env.MINIO_PORT),
@@ -24,14 +25,14 @@ const PUBLIC_URL_PREFIX = process.env.MINIO_PUBLIC_URL;
 async function initializeBucket() {
   try {
     const exists = await minioClient.bucketExists(BUCKET_NAME);
-    
+
     if (!exists) {
       await minioClient.makeBucket(BUCKET_NAME);
       console.log(`✅ MinIO Bucket "${BUCKET_NAME}" 创建成功`);
     } else {
       console.log(`✅ MinIO Bucket "${BUCKET_NAME}" 已存在`);
     }
-    
+
     const policy = {
       Version: '2012-10-17',
       Statement: [
@@ -44,10 +45,10 @@ async function initializeBucket() {
         }
       ]
     };
-    
+
     await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
     console.log(`✅ Bucket "${BUCKET_NAME}" 公开访问策略已设置`);
-    
+
   } catch (error) {
     console.error('❌ MinIO Bucket 初始化失败:', error);
     throw error;
@@ -64,11 +65,11 @@ async function initializeBucket() {
 async function uploadFile(fileBuffer, objectName, contentType = 'application/octet-stream') {
   try {
     await minioClient.putObject(BUCKET_NAME, objectName, fileBuffer, null, contentType);
-    
+
     const publicUrl = `${PUBLIC_URL_PREFIX}/${BUCKET_NAME}/${objectName}`;
-    
+
     console.log(`✅ 文件上传成功: ${objectName}`);
-    
+
     return publicUrl;
   } catch (error) {
     console.error('❌ 文件上传失败:', error);

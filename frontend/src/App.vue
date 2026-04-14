@@ -10,7 +10,7 @@
           </el-button>
           <!-- 桌面端折叠按钮 -->
           <el-button text @click="isCollapse = !isCollapse" class="mr-3 hidden md:flex">
-            <el-icon size="20"><Fold v-if="!isCollapse" /><Expand v-else /></el-icon>
+            <el-icon size="20"><component :is="isCollapse ? Expand : Fold" /></el-icon>
           </el-button>
           <div class="flex items-center">
             <span class="text-xl font-bold text-primary">Auyo</span>

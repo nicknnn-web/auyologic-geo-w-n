@@ -15,6 +15,7 @@
     "axios": "^1.6.0",
     "dompurify": "^3.3.3",
     "echarts": "^5.5.0",
+    "echarts-wordcloud": "^2.1.0",
     "element-plus": "^2.5.0",
     "jieba": "^1.0.0",
     "marked": "^17.0.5",

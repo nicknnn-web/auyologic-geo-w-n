@@ -1045,47 +1045,47 @@ app.get('/api/geo-health-report', async (req, res) => {
     const reports = toCamelCase(reportsRes.rows);
     const detections = toCamelCase(detectionRes.rows);
 
-    // ===== 计算健康指标 =====
+    const normKw = (k) => String(k || '').trim().toLowerCase();
+    const latestReport = reports[0];
+    const brandKeywordRaw = latestReport?.keyword || '';
+    const brandKwNorm = normKw(brandKeywordRaw);
 
-    // 1. 基础数据
-    const allResults = detections.map(d => {
-      // platformData 里存的是结果数组
-      const platformData = d.platformData || d.platform_data || [];
-      return platformData;
-    }).flat();
+    // KPI 分母：优先非品牌词（与总报告 keyword 完全相同的检测视为品牌直搜并剔除）
+    let nonBrandDetections = detections.filter((d) => normKw(d.keyword) !== brandKwNorm);
+    let kpiDenominator = 'non_brand';
+    if (nonBrandDetections.length === 0 && detections.length > 0) {
+      nonBrandDetections = detections;
+      kpiDenominator = 'all_fallback';
+    }
+    const kpiPool = nonBrandDetections;
+    const totalKpi = kpiPool.length;
 
-    // 2. 首行拦截率（score >= 80 视为可被"记住"）
+    // ===== 计算健康指标（基于 kpiPool）=====
     const totalChecks = detections.length;
-    const topMentions = detections.filter(d => (d.score || 0) >= 80).length;
-    const interceptRate = totalChecks > 0 ? Math.round((topMentions / totalChecks) * 100) : 0;
+    const topMentions = kpiPool.filter((d) => (d.score || 0) >= 80).length;
+    const interceptRate = totalKpi > 0 ? Math.round((topMentions / totalKpi) * 100) : 0;
 
-    // 3. 大模型盲区指数（visible=false 或 score=0 的比例）
-    const blindChecks = detections.filter(d => !d.visible || (d.score || 0) === 0).length;
-    const blindIndex = totalChecks > 0 ? Math.round((blindChecks / totalChecks) * 100) : 0;
+    const blindChecks = kpiPool.filter((d) => !d.visible || (d.score || 0) === 0).length;
+    const blindIndex = totalKpi > 0 ? Math.round((blindChecks / totalKpi) * 100) : 0;
 
-    // 4. 负面事实关联度（分析 summary 文本中是否含负面词）
     const negativeKeywords = ['负面', '丑闻', '问题', '漏洞', '欺骗', '失败', '投诉', '曝光', '危机'];
     let negativeMentions = 0;
-    for (const d of detections) {
-      const summary = (d.summary || '').toLowerCase();
-      if (negativeKeywords.some(kw => summary.includes(kw))) {
-        negativeMentions++;
-      }
+    for (const d of kpiPool) {
+      const summary = String(d.summary || '').toLowerCase();
+      if (negativeKeywords.some((kw) => summary.includes(kw))) negativeMentions++;
     }
-    const negativeRate = totalChecks > 0 ? Math.round((negativeMentions / totalChecks) * 100) : 0;
+    const negativeRate = totalKpi > 0 ? Math.round((negativeMentions / totalKpi) * 100) : 0;
 
-    // 5. 信源权威衰减指数（用 avgScore 代理：高分说明内容质量高=权威）
     const avgScore = totalChecks > 0
       ? Math.round(detections.reduce((s, d) => s + (d.score || 0), 0) / totalChecks)
       : 0;
 
     // 6. 综合健康分（S/A/B/C/D 转为 100-40）
-    const latestReport = reports[0];
     const healthScore = latestReport
       ? { S: 95, A: 82, B: 68, C: 55, D: 38 }[latestReport.overallGrade] || 50
       : 0;
 
-    // 7. 全域可见度矩阵
+    // 7. 全域可见度矩阵（按意图路径 × 平台：同平台多条记录按路径索引轮转）
     const intentPaths = [
       { key: 'core', label: '核心词', type: '品牌词' },
       { key: 'scene', label: '场景词', type: '需求词' },
@@ -1105,36 +1105,306 @@ app.get('/api/geo-health-report', async (req, res) => {
       { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
     ];
 
-    // 动态生成矩阵数据：从检测结果中推算
     const matrixData = {};
-    for (const path of intentPaths) {
+    intentPaths.forEach((path, pi) => {
       matrixData[path.key] = {};
       for (const plat of platforms) {
-        // 按关键词类型和平台过滤检测结果
-        const matched = detections.find(d =>
-          d.platform && d.platform.toLowerCase().includes(plat.key.toLowerCase())
-        );
-        if (matched) {
-          const score = matched.score || 0;
-          if (score >= 80) matrixData[path.key][plat.key] = 'top1';
-          else if (score >= 60) matrixData[path.key][plat.key] = 'top2';
-          else if (score >= 30) matrixData[path.key][plat.key] = 'mention';
-          else matrixData[path.key][plat.key] = 'none';
-        } else {
+        const platMatches = detections
+          .filter((d) => d.platform && String(d.platform).toLowerCase().includes(plat.key.toLowerCase()))
+          .sort((a, b) => new Date(b.checkedAt || b.checked_at || 0) - new Date(a.checkedAt || a.checked_at || 0));
+        const d = platMatches.length ? platMatches[pi % platMatches.length] : null;
+        if (!d) {
           matrixData[path.key][plat.key] = 'none';
+          continue;
         }
+        const score = d.score || 0;
+        const sum = String(d.summary || '');
+        const sumL = sum.toLowerCase();
+        const brandPiece = brandKwNorm.slice(0, Math.min(6, brandKwNorm.length));
+        const competitorHint = /竞品|平替|不如|相较|更推荐|建议选择|首选/i.test(sum)
+          && (!brandPiece || !sumL.includes(brandPiece));
+        let cell = 'none';
+        if (!d.visible || score === 0) cell = 'none';
+        else if (score >= 80) cell = 'top1';
+        else if (score >= 60) cell = 'top2';
+        else if (competitorHint && score >= 15 && score < 60) cell = 'competitor';
+        else if (score >= 30) cell = 'mention';
+        else cell = 'none';
+        matrixData[path.key][plat.key] = cell;
+      }
+    });
+
+    const clamp100 = (n) => Math.min(100, Math.max(0, Math.round(n)));
+
+    // 各平台大模型可见度卡片（矩阵列 + 该平台检测均分）
+    const modelVisibilityCards = platforms.map((plat) => {
+      const pk = plat.key;
+      let top1 = 0;
+      let top2 = 0;
+      let mention = 0;
+      let comp = 0;
+      let none = 0;
+      for (const path of intentPaths) {
+        const v = matrixData[path.key]?.[pk];
+        if (v === 'top1') top1++;
+        else if (v === 'top2') top2++;
+        else if (v === 'mention') mention++;
+        else if (v === 'competitor') comp++;
+        else none++;
+      }
+      const nPaths = intentPaths.length || 1;
+      const platRows = detections.filter(
+        (d) => d.platform && String(d.platform).toLowerCase().includes(pk)
+      );
+      const avgPlat = platRows.length
+        ? Math.round(platRows.reduce((s, d) => s + (d.score || 0), 0) / platRows.length)
+        : 0;
+      const matrixPart = Math.round(((top1 + top2 * 0.72 + mention * 0.48) / nPaths) * 100);
+      const score = clamp100(matrixPart * 0.55 + avgPlat * 0.45);
+
+      const bullets = [];
+      if (none >= Math.ceil(nPaths * 0.5)) {
+        bullets.push({ tone: 'bad', text: `大模型盲区明显（${none}/${nPaths} 路径未有效露出）` });
+      } else if (none >= 2) {
+        bullets.push({ tone: 'warn', text: `部分意图路径未提及（${none} 处）` });
+      }
+      if (comp >= 2) {
+        bullets.push({ tone: 'bad', text: '竞品拦截偏重，多场景被第三方占优' });
+      } else if (comp === 1) {
+        bullets.push({ tone: 'warn', text: '存在竞品优势格，可关注对比类问法' });
+      }
+      if (top1 >= 2) {
+        bullets.push({ tone: 'good', text: `首位心智露出较好（${top1} 条路径首位）` });
+      }
+      if (avgPlat >= 72 && !bullets.some((b) => b.tone === 'good')) {
+        bullets.push({ tone: 'good', text: '该模型检测均分较高' });
+      }
+      if (top2 + mention >= 3 && !bullets.some((b) => b.tone === 'good')) {
+        bullets.push({ tone: 'good', text: '多条路径保持顺位提及' });
+      }
+      if (!bullets.length) {
+        bullets.push({ tone: 'neutral', text: '检测样本较少，建议扩大关键词覆盖' });
+      }
+      while (bullets.length < 2) {
+        bullets.push({ tone: 'neutral', text: '可结合下方矩阵持续观察各路径变化' });
+      }
+
+      let status = 'high';
+      let statusText = '高风险';
+      if (score >= 70) {
+        status = 'good';
+        statusText = '表现良好';
+      } else if (score >= 45) {
+        status = 'mid';
+        statusText = '待加强';
+      }
+
+      return {
+        platformKey: pk,
+        name: plat.name,
+        icon: plat.icon,
+        brandColor: plat.color,
+        simulated: !!plat.simulated,
+        score,
+        status,
+        statusText,
+        bullets: bullets.slice(0, 4),
+      };
+    });
+
+    // 8. 兼容占位：六维情绪（无随机数，由 KPI 推导，前端词云为主）
+    const emotionData = [
+      clamp100(interceptRate + 8),
+      clamp100(100 - blindIndex * 0.85),
+      clamp100(avgScore),
+      clamp100(avgScore * 0.92),
+      clamp100(100 - negativeRate * 1.2),
+      clamp100((interceptRate + (100 - blindIndex)) / 2),
+    ];
+
+    // —— 模块 C：竞品提及、上下文标签、触发词 ——
+    const compPhraseRe = /(?:推荐|首选|建议选择|更推荐|建议使用|不妨尝试)[：:\s「『]*([^。，,\n；;\r]{2,16})/g;
+    const compCounts = new Map();
+    for (const d of detections) {
+      const text = String(d.summary || '');
+      let m;
+      const re = new RegExp(compPhraseRe.source, 'g');
+      while ((m = re.exec(text)) !== null) {
+        let phrase = (m[1] || '').trim().replace(/^["'「『]|["'」』]$/g, '');
+        if (phrase.length < 2 || phrase.length > 18) continue;
+        const pn = normKw(phrase);
+        if (brandKwNorm && (pn === brandKwNorm || pn.includes(brandKwNorm) || brandKwNorm.includes(pn))) continue;
+        compCounts.set(phrase, (compCounts.get(phrase) || 0) + 1);
+      }
+    }
+    const compTotal = [...compCounts.values()].reduce((a, b) => a + b, 0);
+    const sortedPhrases = [...compCounts.entries()].sort((a, b) => b[1] - a[1]);
+    const countA = sortedPhrases[0]?.[1] ?? 0;
+    const countB = sortedPhrases[1]?.[1] ?? 0;
+    const countOther = Math.max(0, compTotal - countA - countB);
+    const compPct = (n) => (compTotal > 0 ? Math.round((n / compTotal) * 100) : 0);
+
+    const competitorMentions = [
+      { name: '竞品A（ChatGPT等）', count: countA, pct: compPct(countA), barTone: 'primary' },
+      { name: '竞品B（Claude等）', count: countB, pct: compPct(countB), barTone: 'primary' },
+      { name: '其他平替', count: countOther, pct: compPct(countOther), barTone: 'muted' },
+    ];
+
+    const ctxKeys = ['平替', '对比', '性价比', '口碑', '首选', '免费', '多模态', '代码能力'];
+    const contextTags = ctxKeys
+      .map((text) => ({
+        text,
+        count: detections.reduce((n, d) => (String(d.summary || '').includes(text) ? n + 1 : n), 0),
+      }))
+      .filter((t) => t.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    const stopBi = new Set('的了是在和与或为有被从对及及等也又就都很还这那之其一个中于及与或吗呢吧啊哦嗯呀么嘛别个种第于以于及'.split(''));
+    const biCounts = new Map();
+    for (const d of detections) {
+      const s = String(d.summary || '').replace(/\s/g, '');
+      for (let i = 0; i < s.length - 1; i++) {
+        const bi = s.slice(i, i + 2);
+        if (!/^[\u4e00-\u9fff]{2}$/.test(bi)) continue;
+        if (stopBi.has(bi[0]) || stopBi.has(bi[1])) continue;
+        biCounts.set(bi, (biCounts.get(bi) || 0) + 1);
+      }
+    }
+    const triggerWords = [...biCounts.entries()]
+      .filter(([, c]) => c >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12)
+      .map(([text]) => text);
+
+    /** 高频触发词颜色档：>50 红，30–50 橙，小于 30 灰 */
+    const levelFromTriggerCount = (c) => {
+      const n = Number(c) || 0;
+      if (n > 50) return 'high';
+      if (n >= 30) return 'orange';
+      return 'neutral';
+    };
+
+    const curatedTriggers = [];
+    let curatedSample = '';
+    let curatedCount = 0;
+    const pingtiRe = /有没有[^。！？\n]{0,22}平替[^。！？\n]{0,10}/;
+    for (const d of detections) {
+      const s = String(d.summary || '');
+      if (pingtiRe.test(s)) curatedCount++;
+    }
+    if (curatedCount > 0) {
+      for (const d of detections) {
+        const s = String(d.summary || '');
+        const m = s.match(pingtiRe);
+        if (m && m[0].length >= 6) {
+          curatedSample = m[0].trim();
+          break;
+        }
+      }
+      if (curatedSample) {
+        curatedTriggers.push({
+          text: `「${curatedSample}」`,
+          count: curatedCount,
+          level: levelFromTriggerCount(curatedCount),
+        });
       }
     }
 
-    // 8. 情感雷达数据
-    const emotionData = [
-      Math.min(100, Math.max(0, avgScore + Math.round(Math.random() * 10))),
-      Math.min(100, Math.max(0, Math.round(avgScore * 0.9))),
-      Math.min(100, Math.max(0, Math.round((100 - blindIndex) * 0.8))),
-      Math.min(100, Math.max(0, Math.round(avgScore * 0.7))),
-      Math.min(100, Math.max(0, Math.round((100 - negativeRate) * 0.6))),
-      Math.min(100, Math.max(0, Math.round((100 - blindIndex) * 0.5))),
-    ];
+    const fromBi = triggerWords
+      .filter((t) => !curatedTriggers.some((c) => String(c.text).includes(t)))
+      .slice(0, 7)
+      .map((text) => {
+        const cnt = biCounts.get(text) || 0;
+        return {
+          text,
+          count: cnt,
+          level: levelFromTriggerCount(cnt),
+        };
+      });
+    const lossTriggerTags = [...curatedTriggers, ...fromBi].slice(0, 8);
+
+    // —— 模块 D：词云 ——
+    const posHints = ['强', '优', '好', '深', '佳', '高', '快', '省', '开源', '中文', '性价比', '推理', '优异', '理解', '便宜'];
+    const negHints = ['差', '弱', '缺', '慢', '贵', '限', '待', '问题', '排队', '暂缺', '不足', '危机', '漏洞', '投诉'];
+    const triCounts = new Map();
+    for (const d of detections) {
+      const s = String(d.summary || '').replace(/\s/g, '');
+      for (const segLen of [2, 3]) {
+        for (let i = 0; i <= s.length - segLen; i++) {
+          const w = s.slice(i, i + segLen);
+          if (!/^[\u4e00-\u9fff]+$/.test(w)) continue;
+          triCounts.set(w, (triCounts.get(w) || 0) + 1);
+        }
+      }
+    }
+    const cloudTop = [...triCounts.entries()]
+      .filter(([, c]) => c >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 28);
+    const maxW = cloudTop.length ? cloudTop[0][1] : 1;
+    const sentimentWordCloud = cloudTop.map(([text, c]) => {
+      let polarity = 'neutral';
+      if (negHints.some((h) => text.includes(h))) polarity = 'negative';
+      else if (posHints.some((h) => text.includes(h))) polarity = 'positive';
+      return { text, weight: c / maxW, polarity };
+    });
+
+    // —— 模块 E：智能诊断 ——
+    let matrixCompetitorCells = 0;
+    for (const pk of Object.keys(matrixData)) {
+      for (const ck of Object.keys(matrixData[pk] || {})) {
+        if (matrixData[pk][ck] === 'competitor') matrixCompetitorCells++;
+      }
+    }
+    const compTopHits = competitorMentions[0]?.count || 0;
+    const diagnosticSuggestions = [];
+    let seq = 1;
+    if (blindIndex >= 50) {
+      diagnosticSuggestions.push({
+        id: String(seq++),
+        accent: 'rose',
+        title: `大模型盲区预警：场景词可见度极低（盲区指数 ${blindIndex}%）`,
+        diagnosis: `AI 认知诊断：在当前非品牌词检测样本中，约 ${blindIndex}% 未形成有效露出或关联偏弱，场景类、对比类路径的可见度尤为分散，易被竞品内容抢占首位心智。`,
+        suggestions: [
+          '针对小红书、知乎及垂直行业媒体增加结构化评测与场景化案例内容',
+          '统一品牌实体与产品命名表述，减少多别名造成的检索稀释',
+        ],
+      });
+    }
+    if (matrixCompetitorCells >= 4 || compTopHits >= 8) {
+      diagnosticSuggestions.push({
+        id: String(seq++),
+        accent: 'orange',
+        title: '竞品拦截风险：摘要中第三方品牌露出偏高',
+        diagnosis: 'AI 认知诊断：检测结果摘要中多次出现「推荐 / 首选 / 平替」类表述指向竞品或替代方案，可能分流本品牌在生成式答案中的心智份额。',
+        suggestions: [
+          '梳理高转化场景下的官方话术与权威背书素材，提升首位推荐概率',
+          '对高频竞品对比词布局差异化卖点与可验证数据',
+        ],
+      });
+    }
+    if (negativeRate >= 18) {
+      diagnosticSuggestions.push({
+        id: String(seq++),
+        accent: 'orange',
+        title: `负面关联偏高（约 ${negativeRate}% 的检测摘要命中风险词）`,
+        diagnosis: 'AI 认知诊断：部分摘要与负面词典共现，可能影响用户对品牌安全与可信度的判断。',
+        suggestions: [
+          '建立舆情关键词监控与正向事实库，在公开渠道主动澄清高频误解点',
+        ],
+      });
+    }
+    if (diagnosticSuggestions.length === 0 && totalChecks > 0) {
+      diagnosticSuggestions.push({
+        id: '1',
+        accent: 'rose',
+        title: '基线健康：维持内容投放与监测节奏',
+        diagnosis: 'AI 认知诊断：当前盲区、竞品与负面指标均未突破高风险阈值，整体处于可维持区间。',
+        suggestions: [
+          '保持现有 GEO 检测频率，并定期复盘各平台摘要用语变化',
+        ],
+      });
+    }
 
     // 9. 信源权威数据（用 avgScore 推算）
     const authorityScore = avgScore;
@@ -1161,6 +1431,7 @@ app.get('/api/geo-health-report', async (req, res) => {
       brandDomain: latestReport?.keyword || '',
       checkTime: latestReport?.checkedAt || new Date().toISOString(),
       comparePercent: Math.max(5, 100 - healthScore) + '%',
+      kpiDenominator,
       interceptRate,
       blindIndex,
       negativeRate,
@@ -1168,12 +1439,20 @@ app.get('/api/geo-health-report', async (req, res) => {
       intentPaths,
       platforms,
       matrixData,
+      modelVisibilityCards,
       emotionData,
+      competitorMentions,
+      contextTags,
+      triggerWords,
+      lossTriggerTags,
+      sentimentWordCloud,
+      diagnosticSuggestions,
       sourceData,
       funnelStages,
       riskLevel: blindIndex >= 50 || negativeRate >= 30 ? 'high' : blindIndex >= 30 || negativeRate >= 15 ? 'mid' : 'low',
       rawData: {
         totalChecks,
+        totalKpiDenominator: totalKpi,
         topMentions,
         blindChecks,
         negativeMentions,

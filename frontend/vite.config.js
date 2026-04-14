@@ -35,7 +35,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           elementPlus: ['element-plus'],
-          echarts: ['echarts', 'vue-echarts'],
+          echarts: ['echarts', 'echarts-wordcloud', 'vue-echarts'],
         },
       },
     },
