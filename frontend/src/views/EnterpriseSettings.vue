@@ -893,10 +893,10 @@ const confirmKeywords = async () => {
   
   // 映射类型简称（用于存储）
   const typeMap = {
-    '品牌核心词': '品牌',
-    '场景需求词': '场景',
-    '产品决策词': '产品',
-    '企业词': '企业'
+    '品牌核心词': '01',
+    '场景需求词': '03',
+    '产品决策词': '02',
+    '企业词': '04'
   }
   
   let count = 0
@@ -904,7 +904,7 @@ const confirmKeywords = async () => {
   
   for (const kw of uniqueSelected) {
     const group = kwGroups.value.find(g => g.items.includes(kw))
-    const keywordType = group ? (typeMap[group.type] || group.type) : '品牌'
+    const keywordType = group ? (typeMap[group.type] || group.type) : '01'
     
     // 同时写入后端 API 和 localStorage
     try {

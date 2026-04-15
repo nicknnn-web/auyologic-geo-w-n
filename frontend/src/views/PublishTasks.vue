@@ -34,9 +34,9 @@
       </el-button>
     </div>
 
-    <el-table :data="tasks" style="width: 100%">
+    <el-table v-loading="tasksLoading" :data="tasks" style="width: 100%">
       <el-table-column label="序号" width="60" align="center">
-        <template #default="{ $index }">{{ $index + 1 }}</template>
+        <template #default="{ $index }">{{ (page - 1) * pageSize + $index + 1 }}</template>
       </el-table-column>
       <el-table-column prop="task_name" label="任务名称" min-width="140" />
       <el-table-column prop="draft_title" label="内容标题" min-width="160" />
@@ -112,7 +112,14 @@
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="tasks.length === 0" description="暂无投放任务" />
+    <el-empty v-if="!tasksLoading && tasks.length === 0" description="暂无投放任务" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="taskTotal"
+      @change="loadTasks"
+    />
 
     <!-- ===== 创建任务弹窗 ===== -->
     <el-dialog v-model="createDialogVisible" title="新建投放任务" width="600px" @close="resetForm">
@@ -239,11 +246,15 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {Plus, CircleCheck, Loading, Download, Warning} from '@element-plus/icons-vue'
-import api from '../utils/api'
+import api, { publishTasksAPI } from '../utils/api'
+import { fetchAllPages, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 
 const router = useRouter()
 const route = useRoute()
+
+const API_ORIGIN = window.VITE_API_URL || window.location.origin
 
 const TASKS_API = '/api/publish-tasks'
 const ACCOUNTS_API = '/api/platform-accounts'
@@ -256,28 +267,46 @@ const handleDownloadAgent = () => {
 }
 // ---- 数据 ----
 const tasks = ref([])
+const taskTotal = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const tasksLoading = ref(false)
 const drafts = ref([])
-const authorizedAccounts = ref([])   // 只存已授权账号test
+const authorizedAccounts = ref([])   // 只存已授权账号（下拉用，分页拉全）
 
 // 当前正在执行轮询的任务ID
 const executingId = ref(null)
 let pollTimer = null
 
+const listFetchHeaders = { 'x-user-id': 'default_user' }
+
 // ---- 加载数据 ----
 const loadTasks = async () => {
+  tasksLoading.value = true
   try {
-    const data = await api.get(TASKS_API)
-    tasks.value = Array.isArray(data) ? data : []
+    const { list, total } = await publishTasksAPI.list({
+      page: page.value,
+      pageSize: pageSize.value,
+    })
+    tasks.value = list
+    taskTotal.value = total
   } catch (err) {
     ElMessage.error('加载任务列表失败：' + err.message)
     tasks.value = []
+    taskTotal.value = 0
+  } finally {
+    tasksLoading.value = false
   }
 }
 
 const loadAccounts = async () => {
   try {
-    const data = await api.get(ACCOUNTS_API)
-    authorizedAccounts.value = Array.isArray(data) ? data.filter(a => a.auth_status === 'authorized') : []
+    const all = await fetchAllPages(
+      (p, ps) =>
+        `${API_ORIGIN}${ACCOUNTS_API}?page=${p}&pageSize=${ps}&authStatus=authorized`,
+      { pageSize: 100, fetchOptions: { headers: listFetchHeaders } }
+    )
+    authorizedAccounts.value = all
   } catch {
     authorizedAccounts.value = []
   }
@@ -285,8 +314,12 @@ const loadAccounts = async () => {
 
 const loadDrafts = async () => {
   try {
-    const data = await api.get('/api/drafts')
-    drafts.value = Array.isArray(data) ? data : []
+    const all = await fetchAllPages(
+      (p, ps) =>
+        `${API_ORIGIN}/api/drafts?page=${p}&pageSize=${ps}`,
+      { pageSize: 100, fetchOptions: { headers: listFetchHeaders } }
+    )
+    drafts.value = all
   } catch {
     drafts.value = []
   }
@@ -383,6 +416,7 @@ const handleCreate = async () => {
       })
       ElMessage.success('任务创建成功')
       createDialogVisible.value = false
+      page.value = 1
       await loadTasks()
     } catch (err) {
       ElMessage.error(err.message || '创建失败')
@@ -424,7 +458,7 @@ const handleDelete = async (id) => {
   try {
     await api.delete(`${TASKS_API}/${id}`)
     ElMessage.success('删除成功')
-    await loadTasks()
+    await reloadPagedListAfterRemoval({ page, list: tasks, loadData: loadTasks })
   } catch (err) {
     ElMessage.error(err.message || '删除失败')
   }

@@ -40,7 +40,8 @@
     </div>
 
     <!-- 账号卡片列表 -->
-    <div v-if="accounts.length > 0" class="grid grid-cols-1 gap-4">
+    <div v-if="listLoading" class="text-sm text-gray-500 py-6">加载中…</div>
+    <div v-else-if="accounts.length > 0" class="grid grid-cols-1 gap-4">
       <div
         v-for="account in accounts"
         :key="account.id"
@@ -122,6 +123,13 @@
     </div>
 
     <el-empty v-else description="暂无账号，请点击「添加账号」" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadAccounts"
+    />
 
     <!-- ===== 添加 / 编辑账号弹窗 test ===== -->
     <el-dialog
@@ -281,7 +289,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Key, Phone, Loading, CircleCheck, Warning, Download } from '@element-plus/icons-vue'
-import api from '../utils/api'
+import api, { mediaAccountsAPI } from '../utils/api'
+import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 
 const API = '/api/platform-accounts'
@@ -295,17 +305,29 @@ const handleDownloadAgent = () => {
   window.open(`${base}/api/agent/download`, '_blank')
 }
 
-// ---- 账号列表 ----
+// ---- 账号列表（服务端分页）----
 const accounts = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const listLoading = ref(false)
 const verifyingId = ref(null)
 
 const loadAccounts = async () => {
+  listLoading.value = true
   try {
-    const data = await api.get(API)
-    accounts.value = Array.isArray(data) ? data : []
+    const { list, total: t } = await mediaAccountsAPI.list({
+      page: page.value,
+      pageSize: pageSize.value,
+    })
+    accounts.value = list
+    total.value = t
   } catch (err) {
     ElMessage.error('加载账号列表失败：' + err.message)
     accounts.value = []
+    total.value = 0
+  } finally {
+    listLoading.value = false
   }
 }
 
@@ -372,7 +394,7 @@ const handleDelete = async (id) => {
   try {
     await api.delete(`${API}/${id}`)
     ElMessage.success('删除成功')
-    await loadAccounts()
+    await reloadPagedListAfterRemoval({ page, list: accounts, loadData: loadAccounts })
   } catch (err) {
     ElMessage.error(err.message || '删除失败')
   }

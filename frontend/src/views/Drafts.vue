@@ -22,11 +22,16 @@
       </div>
     </div>
 
-    <el-table :data="tableData" style="width: 100%" @selection-change="handleSelectionChange">
+    <el-table
+      v-loading="loading"
+      :data="tableData"
+      style="width: 100%"
+      @selection-change="handleSelectionChange"
+    >
       <el-table-column type="selection" width="50" />
       <el-table-column label="序号" width="80" align="center">
         <template #default="{ $index }">
-          {{ $index + 1 }}
+          {{ (page - 1) * pageSize + $index + 1 }}
         </template>
       </el-table-column>
       <el-table-column prop="title" label="文章标题" />
@@ -64,7 +69,14 @@
       </template>
     </el-dialog>
 
-    <el-empty v-if="tableData.length === 0" description="暂无草稿，请在内容生成页面创建" />
+    <el-empty v-if="!loading && tableData.length === 0" description="暂无草稿，请在内容生成页面创建" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadData"
+    />
   </div>
 </template>
 
@@ -72,6 +84,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { draftsAPI } from '../utils/api'
+import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -86,6 +101,10 @@ const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const router = useRouter()
 const tableData = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const loading = ref(false)
 const previewVisible = ref(false)
 const currentDraft = ref(null)
 const selectedRows = ref([])
@@ -118,41 +137,39 @@ const handleBatchDelete = async () => {
     }
   }
   
-  // 同时从本地列表移除
-  await loadData()
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   selectedRows.value = []
   ElMessage.success(`已删除 ${ids.length} 条草稿`)
 }
 
-// 加载数据 - 优先从后端 API，失败则 fallback 到 localStorage
+// 加载数据（服务端分页）；仅在网络/API 异常时回退 localStorage 备份
 const loadData = async () => {
-  const userId = 'default_user'
+  loading.value = true
   try {
-    const res = await fetch(`${API_BASE_URL}/api/drafts`, {
-      headers: { 'x-user-id': userId }
+    const { list, total: t } = await draftsAPI.list({
+      page: page.value,
+      pageSize: pageSize.value,
     })
-    if (res.ok) {
-      const data = await res.json()
-      if (data.length > 0) {
-        tableData.value = [...data].sort((a, b) => a.id - b.id)
-        // 保存到 localStorage 备份
-        localStorage.setItem('drafts_backup', JSON.stringify(data))
-        return
-      }
-    }
+    tableData.value = [...list].sort((a, b) => (a.id || 0) - (b.id || 0))
+    total.value = t
   } catch (e) {
     console.warn('从后端加载草稿失败:', e)
-  }
-  // API 返回空或失败，尝试从 localStorage 备份加载
-  const backup = localStorage.getItem('drafts_backup')
-  if (backup) {
-    try {
-      tableData.value = JSON.parse(backup)
-    } catch {
+    const backup = localStorage.getItem('drafts_backup')
+    if (backup) {
+      try {
+        const parsed = JSON.parse(backup)
+        tableData.value = Array.isArray(parsed) ? parsed : []
+        total.value = tableData.value.length
+      } catch {
+        tableData.value = []
+        total.value = 0
+      }
+    } else {
       tableData.value = []
+      total.value = 0
     }
-  } else {
-    tableData.value = []
+  } finally {
+    loading.value = false
   }
 }
 
@@ -186,8 +203,7 @@ const handleDelete = async (id) => {
   } catch (e) {
     console.warn(`删除草稿 ${id} 失败:`, e)
   }
-  // 从本地列表移除
-  await loadData()
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   ElMessage.success('删除成功')
 }
 

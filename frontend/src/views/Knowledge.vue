@@ -247,9 +247,9 @@ onMounted(() => {
 const loadKnowledgeDocs = async () => {
   try {
     // 优先从后端 API 加载
-    const data = await knowledgeAPI.list()
-    if (Array.isArray(data) && data.length > 0) {
-      tableData.value = data.map(doc => ({
+    const { list } = await knowledgeAPI.list()
+    if (Array.isArray(list) && list.length > 0) {
+      tableData.value = list.map(doc => ({
         id: doc.id,
         name: doc.name || doc.filename || '未命名文档',
         type: doc.type || doc.fileType || 'txt',

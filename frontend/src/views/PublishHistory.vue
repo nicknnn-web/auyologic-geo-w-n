@@ -7,10 +7,10 @@
       </div>
     </div>
 
-    <el-table :data="sortedData" style="width: 100%">
+    <el-table v-loading="loading" :data="tableData" style="width: 100%">
       <el-table-column label="序号" width="80" align="center">
         <template #default="{ $index }">
-          {{ $index + 1 }}
+          {{ (page - 1) * pageSize + $index + 1 }}
         </template>
       </el-table-column>
       <el-table-column prop="draftTitle" label="文章标题" />
@@ -39,20 +39,29 @@
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="sortedData.length === 0" description="暂无发布记录" />
+    <el-empty v-if="!loading && tableData.length === 0" description="暂无发布记录" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadData"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { publishRecordsAPI } from '../utils/api'
+import { DEFAULT_PAGE_SIZE } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const tableData = ref([])
-
-const sortedData = computed(() => {
-  return [...tableData.value].sort((a, b) => b.id - a.id)
-})
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const loading = ref(false)
 
 const getPlatformColor = (platform) => {
   const map = { '微信公众号': 'success', '小红书': 'danger', '抖音': 'info', '微博': 'warning', '知乎': 'primary', 'B站': 'primary' }
@@ -66,11 +75,20 @@ const formatTime = (ts) => {
 }
 
 const loadData = async () => {
+  loading.value = true
   try {
-    const data = await publishRecordsAPI.list()
-    tableData.value = Array.isArray(data) ? data : []
+    const { list, total: t } = await publishRecordsAPI.list({
+      page: page.value,
+      pageSize: pageSize.value,
+    })
+    tableData.value = [...list].sort((a, b) => (b.id || 0) - (a.id || 0))
+    total.value = t
   } catch (e) {
+    tableData.value = []
+    total.value = 0
     ElMessage.error('加载发布记录失败：' + e.message)
+  } finally {
+    loading.value = false
   }
 }
 

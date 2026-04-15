@@ -3,16 +3,19 @@
     <div class="flex items-center mb-4">
       <div>
         <div class="text-lg font-bold">拓展问题</div>
-        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ tableData.length }} 条，已审核 {{ approvedCount }} 条）</div>
+        <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ total }} 条，已审核 {{ approvedTotal }} 条）</div>
       </div>
       <div class="flex items-center filter-actions gap-4 ml-auto">
-        <el-select v-model="filterKeywordType" placeholder="全部类型" class="w-28" clearable>
+        <el-select v-model="filterKeywordType" placeholder="全部类型" class="w-28" clearable @change="onFilterChange">
           <el-option label="全部类型" value="" />
-          <el-option label="品牌" value="品牌" />
-          <el-option label="产品" value="产品" />
-          <el-option label="场景" value="场景" />
+          <el-option
+            v-for="d in keywordTypeOptions"
+            :key="d.dataKey"
+            :label="d.dataValue"
+            :value="d.dataKey"
+          />
         </el-select>
-        <el-select v-model="filterStatus" placeholder="全部状态" class="w-28" clearable>
+        <el-select v-model="filterStatus" placeholder="全部状态" class="w-28" clearable @change="onFilterChange">
           <el-option label="全部状态" value="" />
           <el-option label="待审核" value="待审核" />
           <el-option label="已审核" value="已审核" />
@@ -31,7 +34,7 @@
           plain
           class="ml-2"
           @click="handleClearAll"
-          :disabled="tableData.length === 0 || isLoading"
+          :disabled="total === 0 || isLoading"
         >
           <el-icon class="mr-1"><Delete /></el-icon>
           清空全部
@@ -53,11 +56,16 @@
       </div>
     </div>
 
-    <el-table :data="sortedData" style="width: 100%" @selection-change="handleSelectionChange">
+    <el-table
+      v-loading="listLoading"
+      :data="displayRows"
+      style="width: 100%"
+      @selection-change="handleSelectionChange"
+    >
       <el-table-column type="selection" width="50" />
       <el-table-column label="序号" width="80" align="center">
-        <template #default="{ row }">
-          {{ tableData.findIndex(t => t.id === row.id) + 1 }}
+        <template #default="{ $index }">
+          {{ (page - 1) * pageSize + $index + 1 }}
         </template>
       </el-table-column>
       <el-table-column prop="question" label="问题内容" sortable :sort-by="(row) => row.question">
@@ -73,7 +81,7 @@
       <el-table-column prop="keywordType" label="关键词类型" width="120">
         <template #default="{ row }">
           <el-tag :type="getTypeColor(row.keywordType)" @click.stop="cycleKeywordType(row)" style="cursor:pointer">
-            {{ row.keywordType }}
+            {{ keywordTypeLabel(row.keywordType) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -108,7 +116,17 @@
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="sortedData.length === 0" :description="tableData.length === 0 ? '暂无问题，请先在蒸馏词页面添加关键词并生成问题' : '没有匹配筛选条件的问题'" />
+    <el-empty
+      v-if="!listLoading && displayRows.length === 0"
+      :description="total === 0 ? '暂无问题，请先在蒸馏词页面添加关键词并生成问题' : '没有匹配筛选条件的问题'"
+    />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadData"
+    />
 
     <el-dialog v-model="dialogVisible" title="手动添加问题" width="500px">
       <el-form :model="form" label-width="100px">
@@ -117,9 +135,12 @@
         </el-form-item>
         <el-form-item label="关键词类型">
           <el-select v-model="form.keywordType" placeholder="请选择类型">
-            <el-option label="品牌词" value="品牌" />
-            <el-option label="产品词" value="产品" />
-            <el-option label="场景词" value="场景" />
+            <el-option
+              v-for="d in keywordTypeOptions"
+              :key="d.dataKey"
+              :label="d.dataValue"
+              :value="d.dataKey"
+            />
           </el-select>
         </el-form-item>
       </el-form>
@@ -136,6 +157,19 @@ import { ref, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, MagicStick, SortUp, SortDown, Rank, Delete } from '@element-plus/icons-vue'
+import {
+  fetchDictList,
+  normalizeKeywordTypeKey,
+  keywordTypeKeysOrdered,
+  KEYWORD_TYPE_DEFAULT_OPTIONS
+} from '../utils/sysDict.js'
+import {
+  unwrapListPayload,
+  DEFAULT_PAGE_SIZE,
+  fetchAllPages,
+  reloadPagedListAfterRemoval,
+} from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -153,66 +187,103 @@ const formatDate = (dateStr) => {
 }
 
 const tableData = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const listLoading = ref(false)
+const approvedTotal = ref(0)
+const questionSortOrder = ref('') // '' | 'asc' | 'desc' — 仅对当前页排序
 
-// 正序（ oldest first / newest last）+ 筛选
-const normalize = (s) => {
-  if (!s) return ''
-  return s.replace(/[^\w\u4e00-\u9fa5]/g, '').toLowerCase().trim()
+const onFilterChange = () => {
+  page.value = 1
+  loadData()
 }
 
-const approvedCount = computed(() => tableData.value.filter(q => q.status === '已审核').length)
-
-const sortedData = computed(() => {
-  let data = [...tableData.value]
-
-  if (filterKeywordType.value) {
-    data = data.filter(item => item.keywordType === filterKeywordType.value)
+const displayRows = computed(() => {
+  const data = [...tableData.value]
+  if (questionSortOrder.value === 'asc') {
+    data.sort((a, b) => String(a.question || '').localeCompare(String(b.question || ''), 'zh-CN'))
+  } else if (questionSortOrder.value === 'desc') {
+    data.sort((a, b) => String(b.question || '').localeCompare(String(a.question || ''), 'zh-CN'))
   }
-  if (filterStatus.value) {
-    data = data.filter(item => item.status === filterStatus.value)
-  }
-
-  // 去重：保留最早添加的那条
-  const seen = new Set()
-  data = data.filter(item => {
-    const norm = normalize(item.question)
-    if (seen.has(norm)) return false
-    seen.add(norm)
-    return true
-  })
-
   return data
 })
+
+const toggleQuestionSort = () => {
+  const o = questionSortOrder.value
+  questionSortOrder.value = o === '' ? 'asc' : o === 'asc' ? 'desc' : ''
+}
 
 const dialogVisible = ref(false)
 const form = ref({ question: '', keywordType: '' })
 const filterKeywordType = ref('')
 const filterStatus = ref('')
 const selectedRows = ref([])
-const questionSortOrder = ref('') // '' | 'asc' | 'desc'
 
-// 加载数据
+const keywordTypeOptions = ref([])
+const keywordTypeKeys = computed(() => keywordTypeKeysOrdered(keywordTypeOptions.value))
+
+const KEYWORD_TYPE_FALLBACK_LABEL = {
+  '01': '品牌词',
+  '02': '产品词',
+  '03': '场景词',
+  '04': '企业词'
+}
+
+const keywordTypeLabel = (raw) => {
+  const k = normalizeKeywordTypeKey(raw)
+  const row = keywordTypeOptions.value.find((x) => (x.dataKey || x.data_key) === k)
+  if (row?.dataValue || row?.data_value) return row.dataValue || row.data_value
+  if (KEYWORD_TYPE_FALLBACK_LABEL[k]) return KEYWORD_TYPE_FALLBACK_LABEL[k]
+  return raw || '-'
+}
+
+const loadKeywordTypeDict = async () => {
+  const list = await fetchDictList('keyword_type')
+  const mapped = list.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0
+  }))
+  keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+}
+
+// 加载数据（服务端分页 + 筛选；已审核总数由接口 approvedTotal 提供）
 const loadData = async () => {
   const userId = 'default_user'
+  listLoading.value = true
   try {
-    const res = await fetch(`${API_BASE_URL}/api/questions`, {
-      headers: { 'x-user-id': userId }
+    const qs = new URLSearchParams({
+      page: String(page.value),
+      pageSize: String(pageSize.value),
+    })
+    if (filterKeywordType.value) qs.set('keywordType', filterKeywordType.value)
+    if (filterStatus.value) qs.set('status', filterStatus.value)
+    const res = await fetch(`${API_BASE_URL}/api/questions?${qs}`, {
+      headers: { 'x-user-id': userId },
     })
     if (res.ok) {
       const data = await res.json()
-      tableData.value = Array.isArray(data) ? data : []
+      const { list, total: t, approvedTotal: at } = unwrapListPayload(data)
+      tableData.value = list
+      total.value = t
+      if (at != null) approvedTotal.value = at
     } else {
       tableData.value = []
+      total.value = 0
       ElMessage.error('加载问题列表失败')
     }
   } catch {
     tableData.value = []
+    total.value = 0
     ElMessage.error('加载问题列表失败，请检查网络')
+  } finally {
+    listLoading.value = false
   }
 }
 
-onMounted(() => {
-  loadData()
+onMounted(async () => {
+  await Promise.all([loadData(), loadKeywordTypeDict()])
   // 检查是否有传递过来的关键词ID（只执行一次，执行后清除参数）
   if (route.query.keywordIds) {
     setTimeout(() => {
@@ -225,8 +296,14 @@ onMounted(() => {
 })
 
 const getTypeColor = (type) => {
-  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning', '企业': 'danger' }
-  return map[type] || 'info'
+  const k = normalizeKeywordTypeKey(type)
+  const map = {
+    '01': 'primary',
+    '02': 'success',
+    '03': 'warning',
+    '04': 'danger'
+  }
+  return map[k] || 'info'
 }
 
 const getStatusType = (status) => {
@@ -389,8 +466,9 @@ ${existingQuestions.join('、')}`
 - 问题简短（不超过20字）
 - 禁止写成正式提问（如"请分析xxx的优缺点"）`
 
+  const k = normalizeKeywordTypeKey(type) || '02'
   const typePrompts = {
-    '品牌': `请基于以下企业背景，针对品牌"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+    '01': `请基于以下企业背景，针对品牌"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
 - 生成5个不同角度的问题
@@ -398,7 +476,7 @@ ${existingQuestions.join('、')}`
 - 侧重：品牌口碑、对比推荐、用户体验
 直接输出问题列表，每行一个，不要编号。`,
 
-    '产品': `请基于以下企业背景，针对产品/服务"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+    '02': `请基于以下企业背景，针对产品/服务"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
 - 生成5个不同角度的问题
@@ -406,7 +484,7 @@ ${existingQuestions.join('、')}`
 - 侧重：产品性能、选购决策、真实体验
 直接输出问题列表，每行一个，不要编号。`,
 
-    '场景': `请基于以下企业背景，针对使用场景"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+    '03': `请基于以下企业背景，针对使用场景"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
 - 生成5个不同角度的问题
@@ -414,7 +492,7 @@ ${existingQuestions.join('、')}`
 - 侧重：场景需求、痛点解决、用户决策
 直接输出问题列表，每行一个，不要编号。`,
 
-    '企业': `请基于以下企业背景，针对企业/公司"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+    '04': `请基于以下企业背景，针对企业/公司"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
 
 要求：
 - 生成5个不同角度的问题
@@ -424,15 +502,19 @@ ${existingQuestions.join('、')}`
 直接输出问题列表，每行一个，不要编号。`
   }
 
-  return typePrompts[type] || typePrompts['产品']
+  return typePrompts[k] || typePrompts['02']
 }
 
 // 调用 AI 代理生成问题（加入企业上下文 + 搜索结果 + 去重）
 const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
-  // 获取该关键词已有的问题（用于去重）- 使用API数据
-  const existingQuestions = tableData.value
-    .filter(q => q.sourceKeyword === keyword)
-    .map(q => q.question)
+  const userId = 'default_user'
+  const allForDedupe = await fetchAllPages(
+    (p, ps) => `${API_BASE_URL}/api/questions?page=${p}&pageSize=${ps}`,
+    { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+  )
+  const existingQuestions = allForDedupe
+    .filter((q) => q.sourceKeyword === keyword)
+    .map((q) => q.question)
   
   // 先读取企业信息，构建上下文
   const enterpriseContext = buildEnterpriseContext(searchKeywords)
@@ -525,7 +607,7 @@ const handleAIExpand = async () => {
       for (const pq of paraphrases) {
         const newItem = {
           question: pq,
-          keywordType: original.keywordType || '品牌',
+          keywordType: normalizeKeywordTypeKey(original.keywordType) || '01',
           sourceKeyword: original.sourceKeyword || original.question,
           status: '待审核'
         }
@@ -537,8 +619,6 @@ const handleAIExpand = async () => {
             body: JSON.stringify(newItem)
           })
           if (res.ok) {
-            const saved = await res.json()
-            tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
             successCount++
           }
         } catch (e) {
@@ -568,13 +648,11 @@ const handleAIExpand = async () => {
     
     // 优先从 API 获取关键词
     try {
-      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-        headers: { 'x-user-id': 'default_user' }
-      })
-      if (res.ok) {
-        const allKeywords = await res.json()
-        keywords = allKeywords.filter(k => ids.includes(k.id))
-      }
+      const allKeywords = await fetchAllPages(
+        (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
+        { pageSize: 100, fetchOptions: { headers: { 'x-user-id': 'default_user' } } }
+      )
+      keywords = allKeywords.filter((k) => ids.includes(k.id))
     } catch (e) {
       console.warn('从 API 获取关键词失败，尝试从 localStorage', e)
     }
@@ -587,14 +665,10 @@ const handleAIExpand = async () => {
   } else {
     // 无 keywordIds 参数时，尝试加载全部关键词
     try {
-      const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-        headers: { 'x-user-id': 'default_user' }
-      })
-      if (res.ok) {
-        keywords = await res.json()
-      } else {
-        keywords = []
-      }
+      keywords = await fetchAllPages(
+        (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
+        { pageSize: 100, fetchOptions: { headers: { 'x-user-id': 'default_user' } } }
+      )
     } catch {
       keywords = []
     }
@@ -651,7 +725,11 @@ const handleAIExpand = async () => {
     for (const kw of keywords) {
       try {
         const questions = await Promise.race([
-          generateQuestionsFromAI(kw.keyword, kw.type, searchKeywords),
+          generateQuestionsFromAI(
+            kw.keyword,
+            normalizeKeywordTypeKey(kw.type) || '02',
+            searchKeywords
+          ),
           new Promise((_, reject) => setTimeout(() => reject(new Error('单关键词生成超时')), 15000))
         ])
 
@@ -663,7 +741,7 @@ const handleAIExpand = async () => {
         for (const q of questions) {
           const newQuestion = {
             question: q,
-            keywordType: kw.type,
+            keywordType: normalizeKeywordTypeKey(kw.type) || '02',
             sourceKeyword: kw.keyword,
             status: '待审核'
           }
@@ -679,8 +757,6 @@ const handleAIExpand = async () => {
               body: JSON.stringify(newQuestion)
             })
             if (res.ok) {
-              const saved = await res.json()
-              tableData.value.unshift({ ...newQuestion, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
               successCount++
             } else {
               failCount++
@@ -734,14 +810,17 @@ const cycleStatus = async (row) => {
     console.warn('同步到后端失败:', e)
   }
   
-  // 只更新当前行的状态，不重新加载整个列表
   row.status = newStatus
+  await loadData()
   ElMessage.success('状态已更新')
 }
 
 const cycleKeywordType = async (row) => {
-  const typeOrder = ['品牌', '产品', '场景']
-  const currentIndex = typeOrder.indexOf(row.keywordType)
+  const typeOrder = keywordTypeKeys.value
+  if (!typeOrder.length) return
+  const current = normalizeKeywordTypeKey(row.keywordType)
+  let currentIndex = typeOrder.indexOf(current)
+  if (currentIndex < 0) currentIndex = -1
   const nextIndex = (currentIndex + 1) % typeOrder.length
   const newType = typeOrder[nextIndex]
   
@@ -760,8 +839,8 @@ const cycleKeywordType = async (row) => {
     console.warn('同步到后端失败:', e)
   }
   
-  // 只更新当前行的类型，不重新加载整个列表
   row.keywordType = newType
+  await loadData()
   ElMessage.success('关键词类型已更新')
 }
 
@@ -785,19 +864,18 @@ const handleBatchDelete = async () => {
       console.warn('从后端删除失败:', e)
     }
   }
-  // 直接从列表中移除选中项
-  tableData.value = tableData.value.filter(item => !idsToDelete.includes(item.id))
-  ElMessage.success(`已删除 ${selectedRows.value.length} 条记录`)
   selectedRows.value = []
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
+  ElMessage.success(`已删除 ${idsToDelete.length} 条记录`)
 }
 
-// 清空全部问题
+// 清空全部问题（按当前筛选条件拉全量后逐条删除）
 const handleClearAll = async () => {
-  if (tableData.value.length === 0) return
-  
+  if (total.value === 0) return
+
   try {
     await ElMessageBox.confirm(
-      `确定要清空全部 ${tableData.value.length} 条问题吗？此操作不可恢复！`,
+      `确定要清空当前筛选下全部 ${total.value} 条问题吗？此操作不可恢复！`,
       '清空确认',
       {
         confirmButtonText: '确认清空',
@@ -807,29 +885,37 @@ const handleClearAll = async () => {
       }
     )
   } catch {
-    return // 用户取消
+    return
   }
-  
+
   const userId = 'default_user'
-  const count = tableData.value.length
-  
-  // 逐个从后端删除
-  for (const row of tableData.value) {
+  const buildQs = (p, ps) => {
+    const qs = new URLSearchParams({ page: String(p), pageSize: String(ps) })
+    if (filterKeywordType.value) qs.set('keywordType', filterKeywordType.value)
+    if (filterStatus.value) qs.set('status', filterStatus.value)
+    return `${API_BASE_URL}/api/questions?${qs}`
+  }
+  const rows = await fetchAllPages(buildQs, {
+    pageSize: 100,
+    fetchOptions: { headers: { 'x-user-id': userId } },
+  })
+  const count = rows.length
+
+  for (const row of rows) {
     try {
       await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': userId }
+        headers: { 'x-user-id': userId },
       })
     } catch (e) {
       console.warn('从后端删除失败:', e)
     }
   }
-  
-  // 清空本地列表
-  tableData.value = []
+
+  page.value = 1
   selectedRows.value = []
-  
-  ElMessage.success(`已清空全部 ${count} 条问题`)
+  await loadData()
+  ElMessage.success(`已清空 ${count} 条问题`)
 }
 
 const handleAdd = () => {
@@ -867,8 +953,8 @@ const handleSubmit = async () => {
       body: JSON.stringify(newItem)
     })
     if (res.ok) {
-      const saved = await res.json()
-      tableData.value.unshift({ ...newItem, id: saved.id, createdAt: new Date().toLocaleString('zh-CN') })
+      page.value = 1
+      await loadData()
       ElMessage.success('添加成功')
     } else {
       ElMessage.error('添加失败，请重试')
@@ -893,8 +979,7 @@ const handleDelete = async (id) => {
   } catch (e) {
     console.warn('从后端删除失败:', e)
   }
-  // 直接从列表中移除，不重新加载
-  tableData.value = tableData.value.filter(item => item.id !== id)
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   ElMessage.success('删除成功')
 }
 </script>

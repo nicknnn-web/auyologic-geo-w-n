@@ -19,6 +19,7 @@ import {
   getTaskStatus,
   cleanupTask,
 } from './services/playwrightPublisher.js';
+import { parsePagination, pagedResponse } from './pagination.js';
 
 const { Pool } = pg;
 const app = express();
@@ -29,8 +30,118 @@ process.env.TZ = 'Asia/Shanghai';
 
 const BUILD_VERSION = 'v2026032901';
 
-// 初始化数据库表
-initDB().catch(console.error);
+// 初始化数据库表 + sys_dict 与关键词类型英文 key 迁移
+initDB()
+  .then(() => ensureSysDictAndMigrate())
+  .catch((e) => {
+    console.error('initDB:', e)
+    ensureSysDictAndMigrate().catch((e2) => console.error('sys_dict migrate:', e2))
+  })
+
+/** 系统字典表 + 种子；keywords.type / questions.keyword_type 统一为数字 data_key（01–04） */
+async function ensureSysDictAndMigrate() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sys_dict (
+      id SERIAL PRIMARY KEY,
+      dict_type VARCHAR(64) NOT NULL,
+      data_key VARCHAR(64) NOT NULL,
+      data_value VARCHAR(255) NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      enabled BOOLEAN DEFAULT TRUE,
+      remark VARCHAR(500),
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE(dict_type, data_key)
+    )
+  `)
+  const dataMigrations = [
+    [`UPDATE keywords SET type = '01' WHERE type IN ('品牌','brand')`, []],
+    [`UPDATE keywords SET type = '02' WHERE type IN ('产品','product')`, []],
+    [`UPDATE keywords SET type = '03' WHERE type IN ('场景','scene')`, []],
+    [`UPDATE keywords SET type = '04' WHERE type IN ('企业','enterprise')`, []],
+    [`UPDATE questions SET keyword_type = '01' WHERE keyword_type IN ('品牌','brand')`, []],
+    [`UPDATE questions SET keyword_type = '02' WHERE keyword_type IN ('产品','product')`, []],
+    [`UPDATE questions SET keyword_type = '03' WHERE keyword_type IN ('场景','scene')`, []],
+    [`UPDATE questions SET keyword_type = '04' WHERE keyword_type IN ('企业','enterprise')`, []],
+  ]
+  for (const [sql] of dataMigrations) {
+    try {
+      await pool.query(sql)
+    } catch (e) {
+      console.warn('sys_dict migrate sql:', e.message)
+    }
+  }
+  try {
+    await pool.query(
+      `DELETE FROM sys_dict WHERE dict_type = 'keyword_type' AND data_key IN ('brand','product','scene','enterprise')`
+    )
+  } catch (e) {
+    console.warn('sys_dict cleanup old keys:', e.message)
+  }
+  const seeds = [
+    ['keyword_type', '01', '品牌词', 10],
+    ['keyword_type', '02', '产品词', 20],
+    ['keyword_type', '03', '场景词', 30],
+    ['keyword_type', '04', '企业词', 40],
+  ]
+  for (const [dictType, dataKey, dataValue, sortOrder] of seeds) {
+    await pool.query(
+      `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
+       VALUES ($1, $2, $3, $4, true)
+       ON CONFLICT (dict_type, data_key) DO UPDATE SET
+         data_value = EXCLUDED.data_value,
+         sort_order = EXCLUDED.sort_order,
+         enabled = true`,
+      [dictType, dataKey, dataValue, sortOrder]
+    )
+  }
+  try {
+    await pool.query(`ALTER TABLE keywords ALTER COLUMN type SET DEFAULT '01'`)
+  } catch (_) {
+    /* ignore if column missing */
+  }
+
+  /** 字典类型元数据：key（英文标识）+ value（中文名），与 sys_dict.dict_type 对齐 */
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sys_dict_type (
+      dict_type_key VARCHAR(64) PRIMARY KEY,
+      dict_type_value VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  await pool
+    .query(
+      `INSERT INTO sys_dict_type (dict_type_key, dict_type_value) VALUES ('keyword_type', '关键词类型')
+       ON CONFLICT (dict_type_key) DO UPDATE SET
+         dict_type_value = EXCLUDED.dict_type_value,
+         updated_at = NOW()`
+    )
+    .catch((e) => console.warn('sys_dict_type seed:', e.message))
+  await pool
+    .query(
+      `INSERT INTO sys_dict_type (dict_type_key, dict_type_value)
+       SELECT DISTINCT d.dict_type::text, d.dict_type::text
+       FROM sys_dict d
+       WHERE NOT EXISTS (SELECT 1 FROM sys_dict_type t WHERE t.dict_type_key = d.dict_type::text)`
+    )
+    .catch((e) => console.warn('sys_dict_type backfill:', e.message))
+  await pool
+    .query(`UPDATE sys_dict_type SET dict_type_value = '关键词类型' WHERE dict_type_key = 'keyword_type'`)
+    .catch(() => {})
+}
+
+/** 写入或更新字典类型中文名 */
+async function upsertSysDictType(dictTypeKey, dictTypeValue) {
+  const v = String(dictTypeValue || '').trim().slice(0, 255)
+  if (!v) throw new Error('dictTypeValue 不能为空')
+  await pool.query(
+    `INSERT INTO sys_dict_type (dict_type_key, dict_type_value) VALUES ($1, $2)
+     ON CONFLICT (dict_type_key) DO UPDATE SET
+       dict_type_value = EXCLUDED.dict_type_value,
+       updated_at = NOW()`,
+    [dictTypeKey, v]
+  )
+}
 
 // 中间件
 app.use(cors());
@@ -139,19 +250,301 @@ const toCamelCase = (obj) => {
   return obj;
 };
 
+/** 使用 LIMIT/OFFSET 分页的通用 CRUD 表（与前端 el-pagination 对齐） */
+const PAGED_CRUD_TABLES = new Set([
+  'keywords',
+  'questions',
+  'instruction_templates',
+  'drafts',
+  'publish_records',
+])
+
+function buildCrudTableFilter(table, req) {
+  const parts = []
+  const params = []
+  if (table === 'keywords' && req.query.type) {
+    parts.push(`type = $${params.length + 1}`)
+    params.push(String(req.query.type))
+  }
+  if (table === 'questions') {
+    if (req.query.keywordType) {
+      parts.push(`keyword_type = $${params.length + 1}`)
+      params.push(String(req.query.keywordType))
+    }
+    if (req.query.status) {
+      parts.push(`status = $${params.length + 1}`)
+      params.push(String(req.query.status))
+    }
+  }
+  if (table === 'drafts' && req.query.status) {
+    parts.push(`status = $${params.length + 1}`)
+    params.push(String(req.query.status))
+  }
+  const where = parts.length ? `WHERE ${parts.join(' AND ')}` : ''
+  return { where, params }
+}
+
+async function fetchPagedCrudList(table, req) {
+  await ensureTable(table)
+  const { page, pageSize, offset } = parsePagination(req)
+  const { where, params } = buildCrudTableFilter(table, req)
+  const countR = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM ${table} ${where}`,
+    params
+  )
+  const total = countR.rows[0]?.c ?? 0
+  const lim = params.length + 1
+  const off = params.length + 2
+  const orderSql =
+    table === 'publish_records'
+      ? 'ORDER BY created_at DESC NULLS LAST, id DESC'
+      : 'ORDER BY id DESC'
+  const dataR = await pool.query(
+    `SELECT * FROM ${table} ${where} ${orderSql} LIMIT $${lim} OFFSET $${off}`,
+    [...params, pageSize, offset]
+  )
+  const out = pagedResponse(toCamelCase(dataR.rows), total, page, pageSize)
+  if (table === 'questions') {
+    const appR = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM questions WHERE status = '已审核'`
+    )
+    out.approvedTotal = appR.rows[0]?.c ?? 0
+  }
+  return out
+}
+
+async function handleCrudTableGet(req, res, table) {
+  try {
+    if (PAGED_CRUD_TABLES.has(table)) {
+      const body = await fetchPagedCrudList(table, req)
+      return res.json(body)
+    }
+    await ensureTable(table)
+    const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`)
+    res.json(toCamelCase(result.rows))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+}
+
+/** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–04） */
+app.get('/api/sys-dict', async (req, res) => {
+  try {
+    const dictType = req.query.dictType || req.query.type
+    if (!dictType) {
+      return res.status(400).json({ error: 'dictType is required' })
+    }
+    await ensureSysDictAndMigrate()
+    const result = await pool.query(
+      `SELECT data_key, data_value, sort_order FROM sys_dict
+       WHERE dict_type = $1 AND enabled = true
+       ORDER BY sort_order ASC NULLS LAST, data_key ASC`,
+      [dictType]
+    )
+    res.json(toCamelCase(result.rows))
+  } catch (err) {
+    console.error('sys-dict:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+const SYS_DICT_KEY_RE = /^[a-zA-Z0-9_-]{1,64}$/
+
+/** 字典类型列表（管理页筛选）：{ dictTypeKey, dictTypeValue }[] */
+app.get('/api/sys-dict/types', async (req, res) => {
+  try {
+    await ensureSysDictAndMigrate()
+    const r = await pool.query(
+      `SELECT dict_type_key, dict_type_value FROM sys_dict_type ORDER BY dict_type_key ASC`
+    )
+    res.json({ types: toCamelCase(r.rows) })
+  } catch (err) {
+    console.error('sys-dict/types:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/** 字典条目列表（管理用，含禁用项，分页） */
+app.get('/api/sys-dict/entries', async (req, res) => {
+  try {
+    await ensureSysDictAndMigrate()
+    const dictType = req.query.dictType || req.query.type
+    const { page, pageSize, offset } = parsePagination(req)
+    const params = []
+    let where = '1=1'
+    if (dictType) {
+      params.push(String(dictType))
+      where += ` AND d.dict_type = $${params.length}`
+    }
+    const countR = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM sys_dict d WHERE ${where}`,
+      params
+    )
+    const total = countR.rows[0]?.c ?? 0
+    const lim = params.length + 1
+    const off = params.length + 2
+    const orderBy = dictType
+      ? 'ORDER BY d.sort_order ASC NULLS LAST, d.data_key ASC'
+      : 'ORDER BY d.dict_type ASC, d.sort_order ASC NULLS LAST, d.data_key ASC'
+    const result = await pool.query(
+      `SELECT d.id, d.dict_type, COALESCE(t.dict_type_value, d.dict_type) AS dict_type_value,
+              d.data_key, d.data_value, d.sort_order, d.enabled, d.remark, d.created_at
+       FROM sys_dict d
+       LEFT JOIN sys_dict_type t ON t.dict_type_key = d.dict_type
+       WHERE ${where} ${orderBy} LIMIT $${lim} OFFSET $${off}`,
+      [...params, pageSize, offset]
+    )
+    res.json(pagedResponse(toCamelCase(result.rows), total, page, pageSize))
+  } catch (err) {
+    console.error('sys-dict/entries:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/sys-dict/entries', async (req, res) => {
+  try {
+    await ensureSysDictAndMigrate()
+    const { dictType, dictTypeValue, dataKey, dataValue, sortOrder, enabled, remark } = req.body || {}
+    if (!dictType || !dataKey || dataValue === undefined || dataValue === '') {
+      return res.status(400).json({ error: 'dictType、dataKey、dataValue 为必填' })
+    }
+    const dtv = dictTypeValue !== undefined && dictTypeValue !== null ? String(dictTypeValue).trim() : ''
+    if (!dtv) {
+      return res.status(400).json({ error: 'dictTypeValue（字典类型中文名）为必填' })
+    }
+    if (!SYS_DICT_KEY_RE.test(dictType) || !SYS_DICT_KEY_RE.test(dataKey)) {
+      return res.status(400).json({ error: 'dictType / dataKey 仅允许字母数字下划线与中划线，长度 1–64' })
+    }
+    const so = sortOrder === undefined || sortOrder === null ? 0 : Number(sortOrder)
+    const en = enabled === false ? false : true
+    const rm = remark != null ? String(remark).slice(0, 500) : null
+    await upsertSysDictType(dictType, dtv)
+    const result = await pool.query(
+      `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled, remark)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, dict_type, data_key, data_value, sort_order, enabled, remark, created_at`,
+      [dictType, dataKey, String(dataValue).slice(0, 255), Number.isFinite(so) ? so : 0, en, rm]
+    )
+    const row = result.rows[0]
+    const tv = await pool.query(
+      `SELECT dict_type_value FROM sys_dict_type WHERE dict_type_key = $1`,
+      [row.dict_type]
+    )
+    res.status(201).json(
+      toCamelCase({
+        ...row,
+        dict_type_value: tv.rows[0]?.dict_type_value ?? dtv,
+      })
+    )
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: '该字典类型下已存在相同 dataKey' })
+    }
+    console.error('sys-dict/entries POST:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.put('/api/sys-dict/entries/:id', async (req, res) => {
+  try {
+    await ensureSysDictAndMigrate()
+    const id = parseInt(req.params.id, 10)
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: '无效的 id' })
+    }
+    const { dictType, dictTypeValue, dataKey, dataValue, sortOrder, enabled, remark } = req.body || {}
+    const cur = await pool.query(`SELECT * FROM sys_dict WHERE id = $1`, [id])
+    if (cur.rows.length === 0) {
+      return res.status(404).json({ error: '记录不存在' })
+    }
+    const old = cur.rows[0]
+    const nextType =
+      dictType !== undefined && dictType !== null ? String(dictType) : old.dict_type
+    const nextKey =
+      dataKey !== undefined && dataKey !== null ? String(dataKey) : old.data_key
+    const nextVal =
+      dataValue !== undefined && dataValue !== null
+        ? String(dataValue).slice(0, 255)
+        : old.data_value
+    if (!nextVal) {
+      return res.status(400).json({ error: 'dataValue 不能为空' })
+    }
+    if (!SYS_DICT_KEY_RE.test(nextType) || !SYS_DICT_KEY_RE.test(nextKey)) {
+      return res.status(400).json({ error: 'dictType / dataKey 仅允许字母数字下划线与中划线，长度 1–64' })
+    }
+    const nextSo =
+      sortOrder !== undefined && sortOrder !== null
+        ? Number(sortOrder)
+        : old.sort_order
+    const nextEn =
+      enabled !== undefined && enabled !== null ? Boolean(enabled) : old.enabled
+    const nextRm =
+      remark !== undefined
+        ? remark === null || remark === ''
+          ? null
+          : String(remark).slice(0, 500)
+        : old.remark
+
+    const result = await pool.query(
+      `UPDATE sys_dict SET
+        dict_type = $1,
+        data_key = $2,
+        data_value = $3,
+        sort_order = $4,
+        enabled = $5,
+        remark = $6
+       WHERE id = $7
+       RETURNING id, dict_type, data_key, data_value, sort_order, enabled, remark, created_at`,
+      [nextType, nextKey, nextVal, Number.isFinite(nextSo) ? nextSo : 0, nextEn, nextRm, id]
+    )
+    const updated = result.rows[0]
+    if (dictTypeValue !== undefined && dictTypeValue !== null && String(dictTypeValue).trim() !== '') {
+      await upsertSysDictType(nextType, dictTypeValue)
+    }
+    const tv = await pool.query(
+      `SELECT dict_type_value FROM sys_dict_type WHERE dict_type_key = $1`,
+      [updated.dict_type]
+    )
+    res.json(
+      toCamelCase({
+        ...updated,
+        dict_type_value: tv.rows[0]?.dict_type_value ?? updated.dict_type,
+      })
+    )
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: '该字典类型下已存在相同 dataKey' })
+    }
+    console.error('sys-dict/entries PUT:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.delete('/api/sys-dict/entries/:id', async (req, res) => {
+  try {
+    await ensureSysDictAndMigrate()
+    const id = parseInt(req.params.id, 10)
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ error: '无效的 id' })
+    }
+    const r = await pool.query(`DELETE FROM sys_dict WHERE id = $1 RETURNING id`, [id])
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: '记录不存在' })
+    }
+    res.json({ ok: true, id })
+  } catch (err) {
+    console.error('sys-dict/entries DELETE:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 tables.forEach(table => {
   const routePath = `/api/${table}`;
   const hyphenPath = `/api/${table.replace(/_/g, '-')}`;
 
   // 如果有下划线，添加 hyphenated 别名路由
   if (table.includes('_')) {
-    app.get(hyphenPath, async (req, res) => {
-      try {
-        await ensureTable(table);
-        const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`);
-        res.json(toCamelCase(result.rows));
-      } catch (err) { res.status(500).json({ error: err.message }); }
-    });
+    app.get(hyphenPath, (req, res) => handleCrudTableGet(req, res, table));
     app.post(hyphenPath, async (req, res) => {
       try {
         await ensureTable(table);
@@ -190,13 +583,7 @@ tables.forEach(table => {
     });
   }
 
-  app.get(routePath, async (req, res) => {
-    try {
-      await ensureTable(table);
-      const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`);
-      res.json(toCamelCase(result.rows));
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
+  app.get(routePath, (req, res) => handleCrudTableGet(req, res, table));
 
   app.post(routePath, async (req, res) => {
     try {
@@ -255,6 +642,51 @@ tables.forEach(table => {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 });
+
+/** 控制台卡片统计（避免列表分页后总数不准） */
+app.get('/api/dashboard-stats', async (req, res) => {
+  try {
+    for (const t of ['keywords', 'questions', 'drafts', 'publish_records']) {
+      await ensureTable(t)
+    }
+    const [
+      kwTotal,
+      kwBrand,
+      kwProduct,
+      kwIndustry,
+      qTotal,
+      qApproved,
+      dTotal,
+      prPublished,
+    ] = await Promise.all([
+      pool.query('SELECT COUNT(*)::int AS c FROM keywords'),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM keywords WHERE type IN ('01','brand','品牌')`
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM keywords WHERE type IN ('02','product','产品')`
+      ),
+      pool.query(`SELECT COUNT(*)::int AS c FROM keywords WHERE type = '行业'`),
+      pool.query('SELECT COUNT(*)::int AS c FROM questions'),
+      pool.query(`SELECT COUNT(*)::int AS c FROM questions WHERE status = '已审核'`),
+      pool.query('SELECT COUNT(*)::int AS c FROM drafts'),
+      pool.query(`SELECT COUNT(*)::int AS c FROM publish_records WHERE status = '已发布'`),
+    ])
+    res.json({
+      keywordsTotal: kwTotal.rows[0]?.c ?? 0,
+      keywordBrand: kwBrand.rows[0]?.c ?? 0,
+      keywordProduct: kwProduct.rows[0]?.c ?? 0,
+      keywordIndustry: kwIndustry.rows[0]?.c ?? 0,
+      questionsTotal: qTotal.rows[0]?.c ?? 0,
+      questionsApproved: qApproved.rows[0]?.c ?? 0,
+      draftsTotal: dTotal.rows[0]?.c ?? 0,
+      publishedTotal: prPublished.rows[0]?.c ?? 0,
+    })
+  } catch (err) {
+    console.error('dashboard-stats:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
 
 // 健康检查
 app.get('/api/health', async (req, res) => {
@@ -348,12 +780,28 @@ app.put('/api/settings', async (req, res) => {
 
 app.get('/api/platform-accounts', async (req, res) => {
   try {
+    const { page, pageSize, offset } = parsePagination(req)
+    const parts = []
+    const params = []
+    if (req.query.authStatus) {
+      params.push(String(req.query.authStatus))
+      parts.push(`auth_status = $${params.length}`)
+    }
+    const where = parts.length ? `WHERE ${parts.join(' AND ')}` : ''
+    const countR = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM media_accounts ${where}`,
+      params
+    )
+    const total = countR.rows[0]?.c ?? 0
+    const lim = params.length + 1
+    const off = params.length + 2
     const result = await pool.query(
       `SELECT id, platform, account_name, phone_number,
               auth_status, auth_time, last_verified_at, status, created_at, updated_at
-       FROM media_accounts ORDER BY created_at DESC`
-    );
-    res.json(result.rows);
+       FROM media_accounts ${where} ORDER BY created_at DESC LIMIT $${lim} OFFSET $${off}`,
+      [...params, pageSize, offset]
+    )
+    res.json(pagedResponse(result.rows, total, page, pageSize))
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -760,13 +1208,18 @@ app.get('/api/agent/download', (req, res) => {
 
 app.get('/api/publish-tasks', async (req, res) => {
   try {
+    const { page, pageSize, offset } = parsePagination(req)
+    const baseFrom = `FROM publish_tasks pt
+       LEFT JOIN media_accounts ma ON pt.account_id = ma.id`
+    const countR = await pool.query(`SELECT COUNT(*)::int AS c ${baseFrom}`)
+    const total = countR.rows[0]?.c ?? 0
     const result = await pool.query(
-      `SELECT pt.*, ma.account_name
-       FROM publish_tasks pt
-       LEFT JOIN media_accounts ma ON pt.account_id = ma.id
-       ORDER BY pt.created_at DESC`
-    );
-    res.json(result.rows);
+      `SELECT pt.*, ma.account_name ${baseFrom}
+       ORDER BY pt.created_at DESC NULLS LAST, pt.id DESC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, offset]
+    )
+    res.json(pagedResponse(result.rows, total, page, pageSize))
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -886,19 +1339,6 @@ app.get('/api/publish-tasks/:id/status', async (req, res) => {
       publishedUrl: row.published_url || '',
       errorMessage: row.error_message || '',
     });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ========== 发布记录 ==========
-
-app.get('/api/publish-records', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT id, draft_title, platform, account_name, published_url, status, error_message, created_at
-       FROM publish_records
-       ORDER BY created_at DESC`
-    );
-    res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

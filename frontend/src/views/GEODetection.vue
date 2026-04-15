@@ -61,14 +61,22 @@
           <div class="question-list-panel">
             <div class="panel-header"><span class="panel-title">问题列表</span><el-tag size="small" type="info">{{ filteredQuestions.length }} 条</el-tag></div>
             <div class="filter-row">
-              <el-select v-model="questionFilter" placeholder="全部分类" size="small" style="width:130px"><el-option label="全部分类" value="" /><el-option label="品牌" value="品牌" /><el-option label="产品" value="产品" /><el-option label="场景" value="场景" /></el-select>
+              <el-select v-model="questionFilter" placeholder="全部分类" size="small" style="width:130px">
+                <el-option label="全部分类" value="" />
+                <el-option
+                  v-for="d in keywordTypeOptions"
+                  :key="d.dataKey"
+                  :label="d.dataValue"
+                  :value="d.dataKey"
+                />
+              </el-select>
               <el-checkbox v-model="selectAllCurrent" @change="handleSelectAllQuestions" label="本页全选" size="small" />
             </div>
             <div class="question-scroll">
               <div v-for="q in filteredQuestions" :key="q.id" class="question-item" :class="{ selected: isQuestionSelected(q.id) }" @click="toggleQuestion(q)">
                 <el-checkbox :model-value="isQuestionSelected(q.id)" @click.stop />
                 <span class="question-text">{{ q.text }}</span>
-                <el-tag size="small" :type="getCategoryColor(q.category)">{{ q.category }}</el-tag>
+                <el-tag size="small" :type="getCategoryColor(q.category)">{{ keywordTypeLabel(q.category) }}</el-tag>
               </div>
               <div v-if="filteredQuestions.length === 0" class="empty-hint" style="color:#e6a23c;background:#fdf6ec;border:1px solid #f5dab1;border-radius:8px;padding:12px;">
                 暂无已审核的问题可检测，请先前往「<b>拓展问题</b>」页面添加并审核问题后再来
@@ -184,9 +192,13 @@
       <div class="result-filter-bar">
         <el-radio-group v-model="categoryFilter" size="small">
           <el-radio-button label="">全部 ({{ detectionResults.length }})</el-radio-button>
-          <el-radio-button label="品牌">品牌 ({{ categoryCounts['品牌'] || 0 }})</el-radio-button>
-          <el-radio-button label="产品">产品 ({{ categoryCounts['产品'] || 0 }})</el-radio-button>
-          <el-radio-button label="场景">场景 ({{ categoryCounts['场景'] || 0 }})</el-radio-button>
+          <el-radio-button
+            v-for="d in keywordTypeOptions"
+            :key="d.dataKey"
+            :label="d.dataKey"
+          >
+            {{ d.dataValue }} ({{ categoryCounts[d.dataKey] || 0 }})
+          </el-radio-button>
         </el-radio-group>
       </div>
 
@@ -198,9 +210,9 @@
       <!-- 品牌可见 -->
       <div v-if="resultTab === 'visible'" class="result-list">
         <div v-if="filteredVisibleQuestions.length === 0" class="result-empty"><el-icon size="40" color="#dcdfe6"><SuccessFilled /></el-icon><p>暂无数据</p></div>
-        <div v-for="item in filteredVisibleQuestions" :key="item.questionId" class="result-card visible" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">
+        <div v-for="item in filteredVisibleQuestions" :key="item.questionId" class="result-card visible" :class="'cat-' + categoryCssClass(item.category)">
           <div class="result-card-header">
-            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">{{ item.category }}</el-tag>
+            <el-tag size="small" :class="'cat-tag-' + categoryCssClass(item.category)">{{ keywordTypeLabel(item.category) }}</el-tag>
             <div class="result-score" :class="getScoreClass(item.avgScore)">
               <span class="score-num">{{ item.avgScore }}</span>
               <span class="score-label">分</span>
@@ -231,9 +243,9 @@
       <div v-if="resultTab === 'missing'" class="result-list">
         <div v-if="filteredMissingCount > 0" class="missing-header"><div class="missing-info"><el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon><span>共 <strong>{{ filteredMissingCount }}</strong> 个问题中您的品牌未被提及，这些是需要重点覆盖的内容缺口</span></div></div>
         <div v-if="filteredMissingQuestions.length === 0" class="result-empty"><el-icon size="40" color="#67c23a"><SuccessFilled /></el-icon><p>太棒了！该类型问题中您的品牌都已被提及</p></div>
-        <div v-for="item in filteredMissingQuestions" :key="item.questionId" class="result-card missing" :class="'cat-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">
+        <div v-for="item in filteredMissingQuestions" :key="item.questionId" class="result-card missing" :class="'cat-' + categoryCssClass(item.category)">
           <div class="result-card-header">
-            <el-tag size="small" :class="'cat-tag-' + (item.category === '品牌' ? 'brand' : item.category === '产品' ? 'product' : item.category === '企业' ? 'enterprise' : 'scene')">{{ item.category }}</el-tag>
+            <el-tag size="small" :class="'cat-tag-' + categoryCssClass(item.category)">{{ keywordTypeLabel(item.category) }}</el-tag>
             <div class="result-score missing-score">
               <span class="score-num">0</span>
               <span class="score-label">分</span>
@@ -269,7 +281,12 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock, Document, Loading } from '@element-plus/icons-vue'
-
+import {
+  fetchDictList,
+  normalizeKeywordTypeKey,
+  KEYWORD_TYPE_DEFAULT_OPTIONS
+} from '../utils/sysDict.js'
+import { fetchAllPages } from '../utils/pagedApi.js'
 
 /**
  * 雷达图组件 - 用SVG实现
@@ -834,13 +851,15 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
  * @returns {number} 综合得分 0-100
  */
 const calculateScore = (detection, keywordType, keyword = '') => {
+  const k = normalizeKeywordTypeKey(keywordType) || '03'
   const weights = {
-    '品牌': { mention: 0.4, position: 0.3, sentiment: 0.2, relevance: 0.1 },
-    '产品': { mention: 0.3, position: 0.25, sentiment: 0.25, relevance: 0.2 },
-    '场景': { mention: 0.3, position: 0.2, sentiment: 0.1, relevance: 0.4 }
+    '01': { mention: 0.4, position: 0.3, sentiment: 0.2, relevance: 0.1 },
+    '04': { mention: 0.4, position: 0.3, sentiment: 0.2, relevance: 0.1 },
+    '02': { mention: 0.3, position: 0.25, sentiment: 0.25, relevance: 0.2 },
+    '03': { mention: 0.3, position: 0.2, sentiment: 0.1, relevance: 0.4 }
   }
-  
-  const w = weights[keywordType] || weights['场景']
+
+  const w = weights[k] || weights['03']
   
   // 提及得分
   const mentionScore = detection.mentioned ? 100 : 0
@@ -889,6 +908,35 @@ const calculateScore = (detection, keywordType, keyword = '') => {
 
 const router = useRouter()
 const route = useRoute()
+
+const keywordTypeOptions = ref([])
+const KEYWORD_TYPE_FALLBACK_LABEL = {
+  '01': '品牌',
+  '02': '产品',
+  '03': '场景',
+  '04': '企业'
+}
+const keywordTypeLabel = (raw) => {
+  const k = normalizeKeywordTypeKey(raw)
+  const row = keywordTypeOptions.value.find((x) => (x.dataKey || x.data_key) === k)
+  if (row?.dataValue || row?.data_value) return row.dataValue || row.data_value
+  if (KEYWORD_TYPE_FALLBACK_LABEL[k]) return KEYWORD_TYPE_FALLBACK_LABEL[k]
+  return raw || '-'
+}
+const categoryCssClass = (cat) => {
+  const k = normalizeKeywordTypeKey(cat)
+  return ['01', '02', '03', '04'].includes(k) ? k : '03'
+}
+const loadKeywordTypeDict = async () => {
+  const list = await fetchDictList('keyword_type')
+  const mapped = list.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0
+  }))
+  keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+}
+
 const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '确认检测' }, { label: '查看结果' }]
 
 // ===== 历史检测记录 =====
@@ -1009,9 +1057,10 @@ const categoryFilter = ref('')
 
 // 关键词类型颜色配置
 const categoryColors = {
-  '品牌': { tag: '#722ed1', bg: '#f3e8ff', border: '#b37feb' },  // 紫色
-  '产品': { tag: '#52c41a', bg: '#f6ffed', border: '#95de64' },   // 绿色
-  '场景': { tag: '#fa8c16', bg: '#fff7e6', border: '#ffd591' }    // 橙色
+  '01': { tag: '#722ed1', bg: '#f3e8ff', border: '#b37feb' },
+  '04': { tag: '#722ed1', bg: '#f3e8ff', border: '#b37feb' },
+  '02': { tag: '#52c41a', bg: '#f6ffed', border: '#95de64' },
+  '03': { tag: '#fa8c16', bg: '#fff7e6', border: '#ffd591' }
 }
 
 // 计算雷达图数据（按类型聚合）
@@ -1051,8 +1100,9 @@ const radarChartData = computed(() => {
 // 按类型统计数量
 const categoryCounts = computed(() => {
   const counts = {}
-  detectionResults.value.forEach(item => {
-    counts[item.category] = (counts[item.category] || 0) + 1
+  detectionResults.value.forEach((item) => {
+    const k = normalizeKeywordTypeKey(item.category)
+    counts[k] = (counts[k] || 0) + 1
   })
   return counts
 })
@@ -1061,7 +1111,9 @@ const categoryCounts = computed(() => {
 const filteredVisibleQuestions = computed(() => {
   let list = visibleQuestions.value
   if (categoryFilter.value) {
-    list = list.filter(item => item.category === categoryFilter.value)
+    list = list.filter(
+      (item) => normalizeKeywordTypeKey(item.category) === categoryFilter.value
+    )
   }
   return list
 })
@@ -1070,7 +1122,9 @@ const filteredVisibleQuestions = computed(() => {
 const filteredMissingQuestions = computed(() => {
   let list = missingQuestions.value
   if (categoryFilter.value) {
-    list = list.filter(item => item.category === categoryFilter.value)
+    list = list.filter(
+      (item) => normalizeKeywordTypeKey(item.category) === categoryFilter.value
+    )
   }
   return list
 })
@@ -1161,7 +1215,7 @@ const saveCustomKeywords = async () => {
       await fetch(`${window.VITE_API_URL || window.location.origin}/api/keywords`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-        body: JSON.stringify({ keyword: lastKw, type: '品牌', source: 'geo手动添加' })
+        body: JSON.stringify({ keyword: lastKw, type: '01', source: 'geo手动添加' })
       })
     } catch (e) {
       console.warn('保存关键词到后端失败:', e)
@@ -1171,7 +1225,9 @@ const saveCustomKeywords = async () => {
 
 const filteredQuestions = computed(() => {
   if (!questionFilter.value) return questions.value
-  return questions.value.filter(q => q.category === questionFilter.value)
+  return questions.value.filter(
+    (q) => normalizeKeywordTypeKey(q.category) === questionFilter.value
+  )
 })
 
 // 是否有待审核的问题（用于提醒用户先去 Questions 页面审核）
@@ -1547,11 +1603,18 @@ const handleExportResult = () => {
 }
 
 const getCategoryColor = (cat) => {
-  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning', '企业': 'danger' }
-  return map[cat] || 'info'
+  const k = normalizeKeywordTypeKey(cat)
+  const map = {
+    '01': 'primary',
+    '04': 'danger',
+    '02': 'success',
+    '03': 'warning'
+  }
+  return map[k] || 'info'
 }
 
 onMounted(async () => {
+  await loadKeywordTypeDict()
   // 加载历史记录
   await loadHistory()
 
@@ -1582,14 +1645,13 @@ onMounted(async () => {
 // 从后端 API 加载关键词
 const loadKeywordsFromAPI = async () => {
   const userId = 'default_user'
+  const origin = window.VITE_API_URL || window.location.origin
   try {
-    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/keywords`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      keywords.value = Array.isArray(data) ? data.map(k => k.keyword || '').filter(k => k) : []
-    }
+    const list = await fetchAllPages(
+      (p, ps) => `${origin}/api/keywords?page=${p}&pageSize=${ps}`,
+      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+    )
+    keywords.value = list.map((k) => k.keyword || '').filter(Boolean)
   } catch (e) {
     console.warn('从后端加载关键词失败:', e)
     keywords.value = []
@@ -1599,20 +1661,21 @@ const loadKeywordsFromAPI = async () => {
 // 从后端 API 加载问题
 const loadQuestionsFromAPI = async () => {
   const userId = 'default_user'
+  const origin = window.VITE_API_URL || window.location.origin
   try {
-    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/questions`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      const approvedQuestions = data.filter(q => q.status === '已审核')
-      questions.value = approvedQuestions.map((q, i) => ({
-        id: q.id || i + 1,
-        text: q.question || q.text || '',
-        category: q.keywordType || q.keyword_type || '场景',
-        sourceKeyword: q.sourceKeyword || q.source_keyword || ''
-      }))
-    }
+    const allQ = await fetchAllPages(
+      (p, ps) => `${origin}/api/questions?page=${p}&pageSize=${ps}`,
+      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+    )
+    const approvedQuestions = allQ.filter((q) => q.status === '已审核')
+    questions.value = approvedQuestions.map((q, i) => ({
+      id: q.id || i + 1,
+      text: q.question || q.text || '',
+      category:
+        normalizeKeywordTypeKey(q.keywordType || q.keyword_type) || '03',
+      sourceKeyword: q.sourceKeyword || q.source_keyword || '',
+      status: q.status,
+    }))
   } catch (e) {
     console.warn('从后端加载问题失败:', e)
     questions.value = []
@@ -1699,17 +1762,17 @@ const loadQuestionsFromAPI = async () => {
 .result-card.visible{border-left:3px solid #67c23a}
 
 /* 按类型的差异化样式 */
-.result-card.cat-brand{border-left-color:#b37feb}
-.result-card.cat-product{border-left-color:#52c41a}
-.result-card.cat-scene{border-left-color:#fa8c16}
-.result-card.cat-enterprise{border-left-color:#f89898}
+.result-card.cat-01{border-left-color:#b37feb}
+.result-card.cat-02{border-left-color:#52c41a}
+.result-card.cat-03{border-left-color:#fa8c16}
+.result-card.cat-04{border-left-color:#f89898}
 
 /* 卡片头部 */
 .result-card-header{display:flex;justify-content:space-between;align-items:center}
-.cat-tag-brand{background:#f3e8ff;color:#722ed1;border-color:#b37feb}
-.cat-tag-product{background:#f6ffed;color:#52c41a;border-color:#95de64}
-.cat-tag-scene{background:#fff7e6;color:#fa8c16;border-color:#ffd591}
-.cat-tag-enterprise{background:#fef0f0;color:#f56c6c;border-color:#f89898}
+.cat-tag-01{background:#f3e8ff;color:#722ed1;border-color:#b37feb}
+.cat-tag-02{background:#f6ffed;color:#52c41a;border-color:#95de64}
+.cat-tag-03{background:#fff7e6;color:#fa8c16;border-color:#ffd591}
+.cat-tag-04{background:#fef0f0;color:#f56c6c;border-color:#f89898}
 
 /* 得分显示 */
 .result-score{display:flex;align-items:baseline;gap:2px;padding:4px 12px;border-radius:20px;background:#f0f9eb}

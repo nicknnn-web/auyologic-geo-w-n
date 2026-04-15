@@ -21,15 +21,16 @@
       </div>
     </div>
 
-    <el-table 
-      :data="sortedData" 
+    <el-table
+      v-loading="loading"
+      :data="sortedData"
       style="width: 100%"
       @selection-change="handleSelectionChange"
     >
       <el-table-column type="selection" width="50" />
       <el-table-column label="序号" width="80" align="center">
         <template #default="{ $index }">
-          {{ $index + 1 }}
+          {{ (page - 1) * pageSize + $index + 1 }}
         </template>
       </el-table-column>
       <el-table-column prop="name" label="指令名称" />
@@ -60,7 +61,14 @@
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="tableData.length === 0" description="暂无创作指令，请添加" />
+    <el-empty v-if="!loading && tableData.length === 0" description="暂无创作指令，请添加" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadData"
+    />
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑指令' : '添加指令'" width="500px">
       <el-form :model="form" :rules="formRules" ref="formRef" label-width="100px">
@@ -97,7 +105,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-
+import { commandsAPI } from '../utils/api'
+import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
@@ -110,6 +120,12 @@ const PROMPT_TYPES = [
 ]
 
 const tableData = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const loading = ref(false)
+/** 避免每次进入空列表都重复插入默认指令 */
+const didSeedDefaults = ref(false)
 const selectedRows = ref([])
 const dialogVisible = ref(false)
 const isEdit = ref(false)
@@ -137,27 +153,32 @@ const getTypeColor = (type) => {
   return map[type] || 'info'
 }
 
-// 加载数据
+// 加载数据（服务端分页）
 const loadData = async () => {
-  const userId = 'default_user'
+  loading.value = true
   try {
-    const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
-      headers: { 'x-user-id': userId }
+    const { list, total: t } = await commandsAPI.list({
+      page: page.value,
+      pageSize: pageSize.value,
     })
-    if (res.ok) {
-      const data = await res.json()
-      const list = Array.isArray(data) ? data : (data.value || [])
-      tableData.value = list
-      if (list.length === 0) {
-        await initDefaultCommands()
-      }
-    } else {
-      tableData.value = []
-      ElMessage.error('加载指令列表失败')
+    tableData.value = list
+    total.value = t
+    if (list.length === 0 && t === 0 && !didSeedDefaults.value) {
+      didSeedDefaults.value = true
+      await initDefaultCommands()
+      const again = await commandsAPI.list({
+        page: page.value,
+        pageSize: pageSize.value,
+      })
+      tableData.value = again.list
+      total.value = again.total
     }
   } catch {
     tableData.value = []
+    total.value = 0
     ElMessage.error('加载指令列表失败，请检查网络')
+  } finally {
+    loading.value = false
   }
 }
 
@@ -188,8 +209,8 @@ const handleBatchDelete = async () => {
     } catch { /* silent */ }
   }
 
-  tableData.value = tableData.value.filter(r => !ids.includes(r.id))
   selectedRows.value = []
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   ElMessage.success(`已删除 ${ids.length} 条指令`)
 }
 
@@ -302,8 +323,6 @@ const initDefaultCommands = async () => {
     }
   ]
 
-  // 逐个创建默认指令（使用 for...of 等待每个完成）
-  const savedList = []
   for (const cmd of defaultCommands) {
     try {
       const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
@@ -314,17 +333,13 @@ const initDefaultCommands = async () => {
         },
         body: JSON.stringify({ name: cmd.name, content: cmd.prompt, contentType: cmd.type })
       })
-      if (res.ok) {
-        const saved = await res.json()
-        savedList.push({ ...cmd, id: saved.id, content: saved.content, contentType: saved.contentType })
+      if (!res.ok) {
+        console.warn('保存默认指令失败:', cmd.name)
       }
     } catch (e) {
       console.warn('保存默认指令到后端失败:', e)
     }
   }
-  
-  // 更新 tableData
-  tableData.value = savedList.length > 0 ? savedList : defaultCommands
 }
 
 const handleAdd = () => {
@@ -353,7 +368,7 @@ const handleDelete = async (id) => {
       headers: { 'x-user-id': userId }
     })
   } catch { /* silent */ }
-  tableData.value = tableData.value.filter(r => r.id !== id)
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   ElMessage.success('删除成功')
 }
 
@@ -385,12 +400,13 @@ const handleSubmit = async () => {
           },
           body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })
-        if (res.ok) {
-          tableData.value.unshift(await res.json())
+        if (!res.ok) {
+          ElMessage.error('添加失败，请重试')
+          return
         }
       } catch { /* silent */ }
       ElMessage.success('添加成功')
-      // 刷新数据，确保显示最新内容
+      page.value = 1
       await loadData()
     }
     dialogVisible.value = false

@@ -1,0 +1,429 @@
+<template>
+  <div class="bg-white rounded-md p-5" style="min-height: calc(100vh - 86px);">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+      <div>
+        <div class="text-lg font-bold">字典管理</div>
+        <div class="text-sm text-gray-500">
+          字典类型分「标识 key」与「中文名 value」存库；条目为 data_key + 条目展示值
+        </div>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <el-select
+          v-model="filterDictType"
+          placeholder="全部字典类型"
+          clearable
+          filterable
+          allow-create
+          default-first-option
+          class="w-56"
+          @change="onFilterDictTypeChange"
+        >
+          <el-option label="全部类型" value="" />
+          <el-option
+            v-for="opt in dictTypeSelectOptions"
+            :key="opt.key"
+            :label="opt.optionLabel"
+            :value="opt.key"
+          >
+            <div class="flex justify-between gap-2 items-center">
+              <span>{{ opt.labelZh }}</span>
+              <span class="text-xs text-gray-400 font-mono shrink-0">{{ opt.key }}</span>
+            </div>
+          </el-option>
+        </el-select>
+        <el-button type="primary" @click="openCreate">
+          <el-icon class="mr-1"><Plus /></el-icon>
+          新增条目
+        </el-button>
+        <el-button @click="refresh">
+          <el-icon class="mr-1"><Refresh /></el-icon>
+          刷新
+        </el-button>
+      </div>
+    </div>
+
+    <el-table v-loading="loading" :data="tableData" stripe style="width: 100%">
+      <el-table-column prop="id" label="ID" width="70" align="center" />
+      <el-table-column prop="dictType" label="类型标识(key)" min-width="130" show-overflow-tooltip />
+      <el-table-column prop="dictTypeValue" label="类型名称(value)" min-width="130" show-overflow-tooltip />
+      <el-table-column prop="dataKey" label="字典值key" min-width="110" show-overflow-tooltip />
+      <el-table-column prop="dataValue" label="字典值value" min-width="120" show-overflow-tooltip />
+      <el-table-column prop="sortOrder" label="排序" width="80" align="center" />
+      <el-table-column label="启用" width="88" align="center">
+        <template #default="{ row }">
+          <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
+            {{ row.enabled ? '是' : '否' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="remark" label="备注" min-width="100" show-overflow-tooltip />
+      <el-table-column prop="createdAt" label="创建时间" width="170">
+        <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
+      </el-table-column>
+      <el-table-column label="操作" width="140" align="center" fixed="right">
+        <template #default="{ row }">
+          <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+          <el-popconfirm title="确定删除该字典项？" @confirm="handleDelete(row.id)">
+            <template #reference>
+              <el-button link type="danger" size="small">删除</el-button>
+            </template>
+          </el-popconfirm>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-empty v-if="!loading && tableData.length === 0" description="暂无数据，可新增或调整筛选条件" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadEntries"
+    />
+
+    <el-dialog
+      v-model="dialogVisible"
+      :title="isEdit ? '编辑字典项' : '新增字典项'"
+      width="520px"
+      destroy-on-close
+      @closed="resetForm"
+    >
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+        <el-form-item label="类型标识" prop="dictType">
+          <el-select
+            v-if="!isEdit"
+            v-model="form.dictType"
+            class="w-full"
+            placeholder="选择已有类型，或输入新英文标识后回车"
+            filterable
+            allow-create
+            clearable
+          >
+            <el-option
+              v-for="opt in dictTypeSelectOptions"
+              :key="opt.key"
+              :label="opt.key"
+              :value="opt.key"
+            >
+              <div class="flex justify-between gap-2 items-center">
+
+                <span class="text-xs text-gray-400 font-mono shrink-0">{{ opt.key }}</span>
+                <span>{{ opt.labelZh }}</span>
+              </div>
+            </el-option>
+          </el-select>
+          <el-input v-else v-model="form.dictType" disabled />
+        </el-form-item>
+        <el-form-item label="类型名称" prop="dictTypeValue">
+          <el-input
+            v-model="form.dictTypeValue"
+            placeholder="中文名；选中有预设的类型会自动带出，也可自填或新建类型时必填"
+            maxlength="255"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item label="字典值key" prop="dataKey">
+          <el-input
+            v-model="form.dataKey"
+            placeholder="同一 dict_type 下唯一，如 01、02"
+            :disabled="isEdit"
+          />
+        </el-form-item>
+        <el-form-item label="字典值value" prop="dataValue">
+          <el-input v-model="form.dataValue" placeholder="界面展示文案" />
+        </el-form-item>
+        <el-form-item label="排序" prop="sortOrder">
+          <el-input-number v-model="form.sortOrder" :min="0" :max="999999" class="w-full" />
+        </el-form-item>
+        <el-form-item label="启用">
+          <el-switch v-model="form.enabled" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="form.remark" type="textarea" :rows="2" placeholder="可选" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted, computed, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { Plus, Refresh } from '@element-plus/icons-vue'
+import { fetchDictTypes, fetchDictEntries, getApiBase } from '../utils/sysDict.js'
+import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
+
+const API_BASE = getApiBase()
+
+const loading = ref(false)
+const submitting = ref(false)
+const tableData = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+/** 来自 sys_dict_type：{ dictTypeKey, dictTypeValue } */
+const dictTypeDefs = ref([])
+const filterDictType = ref('')
+
+/** 筛选 / 表单下拉：中文（key） */
+const dictTypeSelectOptions = computed(() =>
+  [...dictTypeDefs.value]
+    .map((d) => ({
+      key: d.dictTypeKey,
+      labelZh: d.dictTypeValue || d.dictTypeKey,
+      optionLabel: `${d.dictTypeValue || d.dictTypeKey}（${d.dictTypeKey}）`,
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key))
+)
+
+const onFilterDictTypeChange = () => {
+  page.value = 1
+  loadEntries()
+}
+
+const dialogVisible = ref(false)
+const isEdit = ref(false)
+const formRef = ref(null)
+const form = ref({
+  id: null,
+  dictType: '',
+  dictTypeValue: '',
+  dataKey: '',
+  dataValue: '',
+  sortOrder: 0,
+  enabled: true,
+  remark: ''
+})
+
+const keyPattern = /^[a-zA-Z0-9_-]{1,64}$/
+
+const rules = {
+  dictType: [
+    { required: true, message: '请选择或输入类型标识', trigger: 'change' },
+    {
+      validator: (_, v, cb) => {
+        if (!keyPattern.test(v || '')) {
+          cb(new Error('仅字母、数字、下划线、中划线，1–64 字符'))
+        } else cb()
+      },
+      trigger: ['blur', 'change']
+    }
+  ],
+  dataKey: [
+    { required: true, message: '请输入键', trigger: 'blur' },
+    {
+      validator: (_, v, cb) => {
+        if (!keyPattern.test(v || '')) {
+          cb(new Error('仅字母、数字、下划线、中划线，1–64 字符'))
+        } else cb()
+      },
+      trigger: 'blur'
+    }
+  ],
+  dataValue: [{ required: true, message: '请输入展示值', trigger: 'blur' }],
+  dictTypeValue: [
+    { required: true, message: '请输入字典类型中文名', trigger: 'blur' },
+    {
+      validator: (_, v, cb) => {
+        if (!String(v || '').trim()) {
+          cb(new Error('字典类型中文名不能为空'))
+        } else if (String(v).trim().length > 255) {
+          cb(new Error('最多 255 字'))
+        } else cb()
+      },
+      trigger: ['blur', 'change']
+    }
+  ]
+}
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return '-'
+  try {
+    const d = new Date(dateStr)
+    if (Number.isNaN(d.getTime())) return '-'
+    return d.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  } catch {
+    return '-'
+  }
+}
+
+const loadTypes = async () => {
+  dictTypeDefs.value = await fetchDictTypes()
+}
+
+watch(
+  () => form.value.dictType,
+  (k) => {
+    if (isEdit.value) return
+    const key = (k || '').trim()
+    if (!key) {
+      form.value.dictTypeValue = ''
+      return
+    }
+    const d = dictTypeDefs.value.find((x) => x.dictTypeKey === key)
+    form.value.dictTypeValue = d?.dictTypeValue ?? ''
+  }
+)
+
+/** 仅拉取条目并写入表格（不含 loading，供并行请求复用） */
+const loadEntriesCore = async () => {
+  const { list, total: t } = await fetchDictEntries(filterDictType.value, {
+    page: page.value,
+    pageSize: pageSize.value,
+  })
+  tableData.value = list
+  total.value = t
+}
+
+const loadEntries = async () => {
+  loading.value = true
+  try {
+    await loadEntriesCore()
+  } finally {
+    loading.value = false
+  }
+}
+
+/** 进入页 / 手动刷新：立即转圈，类型与条目并行请求 */
+const refresh = async () => {
+  loading.value = true
+  try {
+    await Promise.all([loadTypes(), loadEntriesCore()])
+  } finally {
+    loading.value = false
+  }
+}
+
+const resetForm = () => {
+  form.value = {
+    id: null,
+    dictType: filterDictType.value || '',
+    dictTypeValue: '',
+    dataKey: '',
+    dataValue: '',
+    sortOrder: 0,
+    enabled: true,
+    remark: ''
+  }
+  formRef.value?.clearValidate?.()
+}
+
+const openCreate = () => {
+  isEdit.value = false
+  resetForm()
+  form.value.dictType = filterDictType.value || ''
+  const fk = filterDictType.value?.trim()
+  if (fk) {
+    const d = dictTypeDefs.value.find((x) => x.dictTypeKey === fk)
+    if (d?.dictTypeValue) form.value.dictTypeValue = d.dictTypeValue
+  }
+  dialogVisible.value = true
+}
+
+const openEdit = (row) => {
+  isEdit.value = true
+  form.value = {
+    id: row.id,
+    dictType: row.dictType || row.dict_type || '',
+    dictTypeValue: row.dictTypeValue ?? row.dict_type_value ?? '',
+    dataKey: row.dataKey || row.data_key || '',
+    dataValue: row.dataValue || row.data_value || '',
+    sortOrder: row.sortOrder ?? row.sort_order ?? 0,
+    enabled: row.enabled !== false,
+    remark: row.remark || ''
+  }
+  dialogVisible.value = true
+}
+
+const handleSubmit = async () => {
+  const ok = await formRef.value?.validate?.().catch(() => false)
+  if (!ok) return
+
+  submitting.value = true
+  try {
+    if (isEdit.value) {
+      const res = await fetch(`${API_BASE}/api/sys-dict/entries/${form.value.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dictType: form.value.dictType,
+          dictTypeValue: form.value.dictTypeValue?.trim(),
+          dataKey: form.value.dataKey,
+          dataValue: form.value.dataValue,
+          sortOrder: form.value.sortOrder,
+          enabled: form.value.enabled,
+          remark: form.value.remark || null
+        })
+      })
+      const errData = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        ElMessage.error(errData.error || '保存失败')
+        return
+      }
+      ElMessage.success('已保存')
+    } else {
+      const res = await fetch(`${API_BASE}/api/sys-dict/entries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dictType: form.value.dictType,
+          dictTypeValue: form.value.dictTypeValue?.trim(),
+          dataKey: form.value.dataKey,
+          dataValue: form.value.dataValue,
+          sortOrder: form.value.sortOrder,
+          enabled: form.value.enabled,
+          remark: form.value.remark || null
+        })
+      })
+      const errData = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        ElMessage.error(errData.error || '创建失败')
+        return
+      }
+      ElMessage.success('已创建')
+    }
+    dialogVisible.value = false
+    await refresh()
+  } catch (e) {
+    ElMessage.error('网络错误')
+  } finally {
+    submitting.value = false
+  }
+}
+
+const handleDelete = async (id) => {
+  try {
+    const res = await fetch(`${API_BASE}/api/sys-dict/entries/${id}`, { method: 'DELETE' })
+    const errData = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      ElMessage.error(errData.error || '删除失败')
+      return
+    }
+    ElMessage.success('已删除')
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData: loadEntries })
+  } catch {
+    ElMessage.error('网络错误')
+  }
+}
+
+onMounted(() => {
+  refresh()
+})
+</script>
+
+<style scoped>
+.w-44 {
+  width: 11rem;
+}
+</style>

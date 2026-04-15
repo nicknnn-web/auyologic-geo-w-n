@@ -62,7 +62,7 @@ export async function initDB() {
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255),
         keyword VARCHAR(500),
-        type VARCHAR(50) DEFAULT '品牌',
+        type VARCHAR(50) DEFAULT '01',
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);

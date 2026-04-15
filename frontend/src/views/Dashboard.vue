@@ -345,69 +345,25 @@ onMounted(async () => {
     console.warn('获取网站报告失败:', e)
   }
 
-  // 关键词 - 从后端 API
+  // 关键词 / 问题 / 草稿 / 已发布 — 聚合统计（与列表分页无关）
   try {
-    const res = await fetch(`${API_BASE_URL}/api/keywords`, {
+    const res = await fetch(`${API_BASE_URL}/api/dashboard-stats`, {
       headers: { 'x-user-id': userId }
     })
     if (res.ok) {
-      const data = await res.json()
-      if (data && data.length > 0) {
-        keywordStats.value.total = data.length
-        keywordStats.value.brand = data.filter(k => k.type === '品牌').length
-        keywordStats.value.product = data.filter(k => k.type === '产品').length
-        keywordStats.value.industry = data.filter(k => k.type === '行业').length
-      }
+      const s = await res.json()
+      keywordStats.value.total = s.keywordsTotal ?? 0
+      keywordStats.value.brand = s.keywordBrand ?? 0
+      keywordStats.value.product = s.keywordProduct ?? 0
+      keywordStats.value.industry = s.keywordIndustry ?? 0
+      keywordStats.value.questions = s.questionsTotal ?? 0
+      keywordStats.value.questionsApproved = s.questionsApproved ?? 0
+      totalQuestions.value = s.questionsTotal ?? 0
+      contentStats.value.drafts = s.draftsTotal ?? 0
+      contentStats.value.published = s.publishedTotal ?? 0
     }
   } catch (e) {
-    console.warn('获取关键词失败:', e)
-  }
-
-  // 问题 - 从后端 API
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/questions`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      if (data && data.length > 0) {
-        keywordStats.value.questions = data.length
-        keywordStats.value.questionsApproved = data.filter(q => q.status === '已审核').length
-        totalQuestions.value = data.length
-      }
-    }
-  } catch (e) {
-    console.warn('获取问题失败:', e)
-  }
-
-  // 草稿 - 从后端 API
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/drafts`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      if (data && data.length > 0) {
-        contentStats.value.drafts = data.length
-      }
-    }
-  } catch (e) {
-    console.warn('获取草稿失败:', e)
-  }
-
-  // 发布记录 - 从后端 API
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/publish-records`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      if (data && data.length > 0) {
-        contentStats.value.published = data.length
-      }
-    }
-  } catch (e) {
-    console.warn('获取发布记录失败:', e)
+    console.warn('获取控制台统计失败:', e)
   }
 
   // GEO检测历史 - 从后端 API

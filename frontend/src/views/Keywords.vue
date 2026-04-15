@@ -6,11 +6,14 @@
         <div class="text-sm text-gray-500">管理品牌核心关键词</div>
       </div>
       <div class="flex items-center filter-actions gap-4 ml-auto">
-        <el-select v-model="filterType" placeholder="全部类型" class="w-28" clearable>
+        <el-select v-model="filterType" placeholder="全部类型" class="w-28" clearable @change="onFilterTypeChange">
           <el-option label="全部类型" value="" />
-          <el-option label="品牌" value="品牌" />
-          <el-option label="产品" value="产品" />
-          <el-option label="场景" value="场景" />
+          <el-option
+            v-for="d in keywordTypeOptions"
+            :key="d.dataKey"
+            :label="d.dataValue"
+            :value="d.dataKey"
+          />
         </el-select>
         <el-button type="success" class="ml-0" @click="handleGenerateQuestions" :disabled="selectedKeywords.length === 0">
           <el-icon class="mr-1"><MagicStick /></el-icon>
@@ -26,22 +29,23 @@
       </div>
     </div>
 
-    <el-table 
-      :data="sortedData" 
+    <el-table
+      v-loading="loading"
+      :data="tableData"
       style="width: 100%"
       @selection-change="handleSelectionChange"
     >
       <el-table-column type="selection" width="50" />
       <el-table-column label="序号" width="80" align="center">
-        <template #default="{ row }">
-          {{ tableData.findIndex(t => t.id === row.id) + 1 }}
+        <template #default="{ $index }">
+          {{ (page - 1) * pageSize + $index + 1 }}
         </template>
       </el-table-column>
       <el-table-column prop="keyword" label="关键词" />
       <el-table-column prop="type" label="类型" width="120">
         <template #default="{ row }">
           <el-tag :type="getTypeColor(row.type)" @click="cycleType(row)" style="cursor:pointer">
-            {{ row.type }}
+            {{ keywordTypeLabel(row.type) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -60,7 +64,17 @@
       </el-table-column>
     </el-table>
 
-    <el-empty v-if="sortedData.length === 0" :description="tableData.length === 0 ? '暂无关键词，请添加' : '没有匹配筛选条件的关键词'" />
+    <el-empty
+      v-if="!loading && tableData.length === 0"
+      :description="total === 0 ? '暂无关键词，请添加' : '没有匹配筛选条件的关键词'"
+    />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      @change="loadData"
+    />
 
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑关键词' : '添加关键词'" width="500px">
       <el-form :model="form" label-width="80px">
@@ -69,10 +83,12 @@
         </el-form-item>
         <el-form-item label="类型">
           <el-select v-model="form.type" placeholder="请选择类型">
-            <el-option label="品牌词" value="品牌" />
-            <el-option label="产品词" value="产品" />
-            <el-option label="场景词" value="场景" />
-            <el-option label="企业词" value="企业" />
+            <el-option
+              v-for="d in keywordTypeOptions"
+              :key="d.dataKey"
+              :label="d.dataValue"
+              :value="d.dataKey"
+            />
           </el-select>
         </el-form-item>
       </el-form>
@@ -88,56 +104,108 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import {
+  fetchDictList,
+  normalizeKeywordTypeKey,
+  keywordTypeKeysOrdered,
+  KEYWORD_TYPE_DEFAULT_OPTIONS
+} from '../utils/sysDict.js'
+import { unwrapListPayload, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const router = useRouter()
 
 const tableData = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
+const loading = ref(false)
 
-// 正序（ oldest first / newest last）+ 筛选
-const sortedData = computed(() => {
-  let data = [...tableData.value]
-  
-  if (filterType.value) {
-    data = data.filter(item => item.type === filterType.value)
-  }
-  
-  return data
-})
+const onFilterTypeChange = () => {
+  page.value = 1
+  loadData()
+}
 const selectedKeywords = ref([])
 const dialogVisible = ref(false)
 const filterType = ref('')
 const isEdit = ref(false)
 const form = ref({ keyword: '', type: '' })
 
-// 加载数据
+const keywordTypeOptions = ref([])
+const keywordTypeKeys = computed(() => keywordTypeKeysOrdered(keywordTypeOptions.value))
+
+const KEYWORD_TYPE_FALLBACK_LABEL = {
+  '01': '品牌词',
+  '02': '产品词',
+  '03': '场景词',
+  '04': '企业词'
+}
+
+const keywordTypeLabel = (raw) => {
+  const k = normalizeKeywordTypeKey(raw)
+  const row = keywordTypeOptions.value.find((x) => (x.dataKey || x.data_key) === k)
+  if (row?.dataValue || row?.data_value) return row.dataValue || row.data_value
+  if (KEYWORD_TYPE_FALLBACK_LABEL[k]) return KEYWORD_TYPE_FALLBACK_LABEL[k]
+  return raw || '-'
+}
+
+const loadKeywordTypeDict = async () => {
+  const list = await fetchDictList('keyword_type')
+  const mapped = list.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0
+  }))
+  keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+}
+
+// 加载数据（服务端分页 + 类型筛选）
 const loadData = async () => {
   const userId = 'default_user'
+  loading.value = true
   try {
-    const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-      headers: { 'x-user-id': userId }
+    const qs = new URLSearchParams({
+      page: String(page.value),
+      pageSize: String(pageSize.value),
+    })
+    if (filterType.value) qs.set('type', filterType.value)
+    const res = await fetch(`${API_BASE_URL}/api/keywords?${qs}`, {
+      headers: { 'x-user-id': userId },
     })
     if (res.ok) {
       const data = await res.json()
-      tableData.value = Array.isArray(data) ? data : []
+      const { list, total: t } = unwrapListPayload(data)
+      tableData.value = list
+      total.value = t
     } else {
       tableData.value = []
+      total.value = 0
       ElMessage.error('加载关键词失败')
     }
   } catch {
     tableData.value = []
+    total.value = 0
     ElMessage.error('加载关键词失败，请检查网络')
+  } finally {
+    loading.value = false
   }
 }
 
-onMounted(() => {
-  loadData()
+onMounted(async () => {
+  await Promise.all([loadData(), loadKeywordTypeDict()])
 })
 
 const getTypeColor = (type) => {
-  const map = { '品牌': 'primary', '产品': 'success', '场景': 'warning', '企业': 'danger' }
-  return map[type] || 'info'
+  const k = normalizeKeywordTypeKey(type)
+  const map = {
+    '01': 'primary',
+    '02': 'success',
+    '03': 'warning',
+    '04': 'danger'
+  }
+  return map[k] || 'info'
 }
 
 const formatDate = (dateStr) => {
@@ -150,8 +218,11 @@ const formatDate = (dateStr) => {
 }
 
 const cycleType = async (row) => {
-  const typeOrder = ['品牌', '产品', '场景', '企业']
-  const currentIndex = typeOrder.indexOf(row.type)
+  const typeOrder = keywordTypeKeys.value
+  if (!typeOrder.length) return
+  const current = normalizeKeywordTypeKey(row.type)
+  let currentIndex = typeOrder.indexOf(current)
+  if (currentIndex < 0) currentIndex = -1
   const nextIndex = (currentIndex + 1) % typeOrder.length
   const newType = typeOrder[nextIndex]
   const userId = 'default_user'
@@ -167,7 +238,6 @@ const cycleType = async (row) => {
 }
 
 const handleSelectionChange = (selection) => {
-  // selection 是从 sortedData 选中的，需要找回原始对象
   selectedKeywords.value = selection.map(s => {
     return tableData.value.find(t => t.id === s.id)
   }).filter(Boolean)
@@ -201,7 +271,7 @@ const handleDelete = async (id) => {
   try {
     await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } })
   } catch { /* silent */ }
-  await loadData()
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   ElMessage.success('删除成功')
 }
 
@@ -214,8 +284,8 @@ const handleBatchDelete = async () => {
       await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } })
     } catch { /* silent */ }
   }
-  await loadData()
-  ElMessage.success(`已删除 ${selectedKeywords.value.length} 条记录`)
+  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
+  ElMessage.success(`已删除 ${ids.length} 条记录`)
   selectedKeywords.value = []
 }
 

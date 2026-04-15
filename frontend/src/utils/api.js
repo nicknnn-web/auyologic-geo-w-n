@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { unwrapListPayload } from './pagedApi.js'
 
 // API 服务层 - 直接连接后端（Zeabur 环境下）test
 const BASE_URL = window.VITE_API_URL || window.location.origin
@@ -30,7 +31,9 @@ api.interceptors.response.use(
 
 // ========== 通用 CRUD ==========
 const createAPI = (path) => ({
-  list: () => api.get(`/api/${path}`),
+  /** @param {Record<string, string|number>} [params] 查询参数，含 page、pageSize 等 */
+  list: (params = {}) =>
+    api.get(`/api/${path}`, { params }).then((data) => unwrapListPayload(data)),
   get: (id) => api.get(`/api/${path}/${id}`),
   create: (data) => api.post(`/api/${path}`, data),
   update: (id, data) => api.put(`/api/${path}/${id}`, data),

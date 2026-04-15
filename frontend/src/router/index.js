@@ -16,6 +16,7 @@ import GEODetection from '../views/GEODetection.vue'
 import WebsiteOptimization from '../views/WebsiteOptimization.vue'
 import GEOReport from '../views/GEOReport.vue'
 import GEOHealthReport from '../views/GEOHealthReport.vue'
+import SysDictManage from '../views/SysDictManage.vue'
 
 const routes = [
   { path: '/', name: 'dashboard', component: Dashboard },
@@ -27,6 +28,7 @@ const routes = [
   // 知识库
   { path: '/knowledge', name: 'knowledge', component: Knowledge },
   { path: '/images', name: 'images', component: Images },
+  { path: '/sys-dict', name: 'sys-dict', component: SysDictManage },
   { path: '/enterprise-settings', name: 'enterprise-settings', component: EnterpriseSettings },
   
   // AI创作

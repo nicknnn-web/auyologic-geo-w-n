@@ -274,9 +274,9 @@ onMounted(() => {
 // 从后端 API 加载图片
 const loadImagesFromAPI = async () => {
   try {
-    const data = await imagesAPI.list()
-    if (Array.isArray(data) && data.length > 0) {
-      tableData.value = data.map(img => ({
+    const { list } = await imagesAPI.list()
+    if (Array.isArray(list) && list.length > 0) {
+      tableData.value = list.map(img => ({
         id: img.id,
         name: img.title || img.name || '',
         preview: img.imagePath || img.image_path || img.preview || '',

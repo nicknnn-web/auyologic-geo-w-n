@@ -297,6 +297,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
 import { knowledgeAPI, historyAPI } from '../utils/api'
+import { fetchAllPages } from '../utils/pagedApi.js'
 import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 
 // ========== API 配置 ==========
@@ -453,9 +454,9 @@ const generateHistory = ref([])
 const loadHistory = async () => {
   // 优先从后端 API 加载
   try {
-    const data = await historyAPI.list()
-    if (Array.isArray(data) && data.length > 0) {
-      generateHistory.value = data.map(item => ({
+    const { list } = await historyAPI.list()
+    if (Array.isArray(list) && list.length > 0) {
+      generateHistory.value = list.map(item => ({
         id: item.id || item.localId || Date.now(),
         title: item.title || '',
         content: item.content || '',
@@ -583,18 +584,12 @@ const selectedCommand = computed(() => {
 onMounted(async () => {
   const userId = 'default_user'
   
-  // 从后端 API 加载关键词
+  // 从后端 API 加载关键词（分页接口，多页合并）
   try {
-    const res = await fetch(`${API_BASE_URL}/api/keywords`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      keywords.value = Array.isArray(data) ? data : []
-    } else {
-      keywords.value = []
-      ElMessage.warning('关键词加载失败')
-    }
+    keywords.value = await fetchAllPages(
+      (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
+      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+    )
   } catch {
     keywords.value = []
     ElMessage.warning('关键词加载失败，请检查网络')
@@ -602,16 +597,11 @@ onMounted(async () => {
 
   // 从后端 API 加载指令模板
   try {
-    const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      commands.value = migrateCommands(data)
-    } else {
-      commands.value = []
-      ElMessage.warning('指令模板加载失败')
-    }
+    const tplList = await fetchAllPages(
+      (p, ps) => `${API_BASE_URL}/api/instruction-templates?page=${p}&pageSize=${ps}`,
+      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+    )
+    commands.value = migrateCommands(tplList)
   } catch {
     commands.value = []
     ElMessage.warning('指令模板加载失败，请检查网络')
@@ -654,9 +644,9 @@ onMounted(async () => {
 const loadKnowledgeDocs = async () => {
   // 优先从后端 API 加载
   try {
-    const data = await knowledgeAPI.list()
-    if (Array.isArray(data) && data.length > 0) {
-      knowledgeDocs.value = data.map((doc, index) => ({
+    const { list } = await knowledgeAPI.list()
+    if (Array.isArray(list) && list.length > 0) {
+      knowledgeDocs.value = list.map((doc, index) => ({
         docId: doc.id || doc.docId || `doc${index + 1}`,
         docName: doc.name || doc.filename || '未命名文档',
         docContent: doc.content || '',
@@ -799,7 +789,7 @@ const migrateCommands = (cmds) => {
   if (!cmds || cmds.length === 0) return []
   
   const migratedCmds = cmds.map(cmd => {
-    const prompt = cmd.prompt || ''
+    const prompt = cmd.prompt || cmd.content || ''
     
     // 检查是否包含旧变量（需要迁移的标志）
     const hasOldVars = /\{(brand|keyword|knowledge|images)\}/.test(prompt)

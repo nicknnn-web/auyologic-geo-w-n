@@ -6,6 +6,24 @@
 
 const API_BASE = window.VITE_API_URL || window.location.origin
 
+/** 旧版中文类型 → 英文 key（与后端 sys_dict 一致） */
+const LEGACY_KEYWORD_TYPE = {
+  品牌: '01',
+  产品: '02',
+  场景: '03',
+  企业: '04',
+  brand: '01',
+  product: '02',
+  scene: '03',
+  enterprise: '04'
+}
+
+function normalizeKeywordType(val, fallback) {
+  if (!val) return fallback
+  const s = String(val).trim()
+  return LEGACY_KEYWORD_TYPE[s] || s || fallback
+}
+
 async function migrateLocalStorage() {
   if (localStorage.getItem('__migrated') === 'true') {
     console.log('[迁移] 已完成，跳过')
@@ -39,7 +57,10 @@ async function migrateLocalStorage() {
           headers,
           body: JSON.stringify({
             keyword: typeof kw === 'string' ? kw : kw.keyword,
-            type: kw.type || '品牌',
+            type: normalizeKeywordType(
+              typeof kw === 'string' ? '' : kw.type,
+              '01'
+            ),
             source: '迁移自localStorage'
           })
         })
@@ -59,7 +80,10 @@ async function migrateLocalStorage() {
           headers,
           body: JSON.stringify({
             question: q.question || q.text || '',
-            keywordType: q.keywordType || q.type || '场景',
+            keywordType: normalizeKeywordType(
+              q.keywordType || q.type,
+              '03'
+            ),
             sourceKeyword: q.sourceKeyword || q.source || '-',
             status: q.status || '待审核'
           })
