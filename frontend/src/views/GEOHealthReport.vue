@@ -35,9 +35,9 @@
       </div>
       <div class="nav-right">
         <div class="nav-time">检测时间：{{ checkTime }}</div>
-        <el-button size="small" @click="refreshReport" :loading="loading">
-          <el-icon><RefreshRight /></el-icon>
-          重新检测
+        <el-button size="small" type="primary" @click="generateHealthReport" :loading="generating || loading">
+          <el-icon><MagicStick /></el-icon>
+          {{ generating ? generatingText : '生成体检报告' }}
         </el-button>
       </div>
     </div>
@@ -45,87 +45,16 @@
     <!-- 主报告体 -->
     <div class="report-body">
 
-      <!-- ===== 区块1：大模型可见度综合得分（横向滑动）===== -->
+      <!-- ===== 区块1：大模型可见度综合得分（全部模型柱状图）===== -->
       <div class="section-model-visibility">
-        <div class="mv-header">
-          <div class="section-title-row">
-            <h2 class="section-title">大模型可见度综合得分</h2>
-            <span class="section-tag">AI VISIBILITY SCORE</span>
-          </div>
-
-          <span class="mv-scroll-hint">按住鼠标拖拽或左右滑动查看更多</span>
-        </div>
-
-        <div
-          ref="mvScrollRef"
-          class="mv-scroll"
-          role="region"
-          aria-label="各模型可见度得分"
-          @pointerdown="onMvScrollPointerDown"
-          @pointermove="onMvScrollPointerMove"
-          @pointerup="onMvScrollPointerUp"
-          @pointercancel="onMvScrollPointerUp"
-          @lostpointercapture="onMvScrollLostPointerCapture"
-        >
-          <div
-            v-for="m in modelVisibilityCards"
-            :key="m.platformKey"
-            class="mv-card"
-          >
-            <div class="mv-card-inner">
-              <div class="mv-card-left">
-                <div class="mv-plat-head">
-                  <div class="mv-plat-icon" :style="{ background: m.brandColor }">{{ m.icon }}</div>
-                  <div class="mv-plat-titles">
-                    <div class="mv-plat-name">{{ m.name }}</div>
-                    <span v-if="m.simulated" class="mv-plat-badge">AI 推断</span>
-                  </div>
-                </div>
-                <ul class="mv-bullets">
-                  <li
-                    v-for="(b, bi) in m.bullets"
-                    :key="'b'+m.platformKey+bi"
-                    class="mv-bullet"
-                    :class="'mv-bullet--' + (b.tone || 'neutral')"
-                  >
-                    <span class="mv-bullet-dot" aria-hidden="true" />
-                    <span class="mv-bullet-text">{{ b.text }}</span>
-                  </li>
-                </ul>
-              </div>
-              <div class="mv-card-right">
-                <div class="mv-score-widget">
-                  <div class="mv-donut-wrap">
-                    <svg viewBox="0 0 120 120" class="mv-donut-svg">
-                      <circle cx="60" cy="60" r="44" class="mv-donut-bg" fill="none" stroke-width="10" />
-                      <circle
-                        cx="60" cy="60"
-                        r="44"
-                        class="mv-donut-fill"
-                        :class="modelDonutStrokeClass(m.score)"
-                        fill="none"
-                        stroke-width="10"
-                        stroke-linecap="round"
-                        :stroke-dasharray="modelDonutDash(m.score)"
-                        transform="rotate(-90 60 60)"
-                      />
-                    </svg>
-                    <div class="mv-donut-center">
-                      <span class="mv-donut-score">{{ m.score }}</span>
-                      <span class="mv-donut-total">/ 100</span>
-                    </div>
-                  </div>
-                  <div class="mv-score-side">
-                    <div class="mv-status-pill" :class="'mv-pill--' + m.status">
-                      <span v-if="m.status === 'good'" class="mv-pill-dot" />
-                      {{ m.statusText }}
-                    </div>
-                    <div class="mv-score-caption">可见度得分</div>
-                  </div>
-                </div>
-              </div>
+        <div v-if="modelVisibilitySorted.length" class="mv-rest-chart-block" role="region" aria-label="各模型可见度得分">
+          <div class="mv-rest-chart-head">
+            <div class="section-title-row">
+              <h2 class="section-title">大模型可见度综合得分</h2>
+              <span class="section-tag">AI VISIBILITY SCORE</span>
             </div>
           </div>
+          <div ref="mvRestChartDom" class="mv-rest-chart-echarts" />
         </div>
       </div>
 
@@ -171,13 +100,6 @@
         <div class="section-title-row">
           <h2 class="section-title">全域可见度矩阵</h2>
           <span class="section-tag">AI PLATFORM VISIBILITY</span>
-          <div class="matrix-legend">
-            <span class="legend-item"><span class="leg-dot leg-1"></span>首位拦截</span>
-            <span class="legend-item"><span class="leg-dot leg-2"></span>顺位2-3</span>
-            <span class="legend-item"><span class="leg-dot leg-3"></span>竞品优势</span>
-            <span class="legend-item"><span class="leg-dot leg-4"></span>未提及</span>
-            <span class="legend-item"><span class="leg-dot leg-ai"></span>AI推断</span>
-          </div>
         </div>
 
         <div class="matrix-container">
@@ -201,10 +123,20 @@
                     <div class="path-type">{{ path.type }}</div>
                   </td>
                   <td v-for="plat in platforms" :key="plat.key" class="td-result">
-                    <div class="result-cell" :class="getCellClass(path, plat)">
-                      <span class="result-text">{{ getCellText(path, plat) }}</span>
-                      <span v-if="plat.simulated" class="cell-sim-tag">AI</span>
-                    </div>
+                    <el-tooltip
+                      :content="getCellTooltip(path, plat)"
+                      placement="top"
+                      :show-after="200"
+                      :disabled="!getCellTooltip(path, plat)"
+                      popper-class="matrix-cell-tooltip-popper"
+                    >
+                      <div
+                        class="result-cell"
+                        :class="[getCellClass(path, plat), { 'result-cell--has-tip': !!getCellTooltip(path, plat) }]"
+                      >
+                        <span class="result-text">{{ getCellText(path, plat) }}</span>
+                      </div>
+                    </el-tooltip>
                   </td>
                 </tr>
               </tbody>
@@ -235,12 +167,12 @@
           <span class="section-tag">COMPETITOR INTERCEPTION</span>
         </div>
 
-        <p class="competitor-section-sub">抢夺本品牌 AI 流量的竞品排名</p>
+        <p class="competitor-section-sub">抢夺本品牌流量的竞品排名</p>
 
         <div class="competitor-card">
           <div v-if="competitorMentions.length" class="competitor-rank-list">
             <div v-for="(row, idx) in competitorMentions" :key="'cm'+idx" class="competitor-rank-row">
-              <div class="competitor-label">{{ row.name }}</div>
+              <div class="competitor-label" v-if="idx<3">TOP{{idx+1}} {{ row.name }}</div>
               <div class="competitor-bar-line">
                 <div class="competitor-bar-track">
                   <div
@@ -255,25 +187,25 @@
           </div>
           <div v-else class="competitor-empty">暂无竞品提及样本，完成更多场景检测后自动汇总。</div>
 
-          <div class="competitor-trigger-panel">
-            <div class="trigger-head">
-              <span class="trigger-icon" aria-hidden="true">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" fill="#909399"/></svg>
-              </span>
-              <span>导致用户流失的高频触发词</span>
-              <span class="trigger-tag-label">(TRIGGER)</span>
-            </div>
-            <div v-if="normalizedLossTriggerTags.length" class="trigger-pills">
-              <span
-                v-for="(t, i) in normalizedLossTriggerTags"
-                :key="'tg'+i"
-                class="trigger-pill"
-                :data-level="t.level"
-                :title="t.count != null && t.count !== '' ? `出现 ${t.count} 次` : ''"
-              >{{ t.text }}</span>
-            </div>
-            <div v-else class="competitor-empty subtle">暂无高频触发词</div>
-          </div>
+<!--          <div class="competitor-trigger-panel">-->
+<!--            <div class="trigger-head">-->
+<!--              <span class="trigger-icon" aria-hidden="true">-->
+<!--                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" fill="#909399"/></svg>-->
+<!--              </span>-->
+<!--              <span>导致用户流失的高频触发词</span>-->
+<!--              <span class="trigger-tag-label">(TRIGGER)</span>-->
+<!--            </div>-->
+<!--            <div v-if="normalizedLossTriggerTags.length" class="trigger-pills">-->
+<!--              <span-->
+<!--                v-for="(t, i) in normalizedLossTriggerTags"-->
+<!--                :key="'tg'+i"-->
+<!--                class="trigger-pill"-->
+<!--                :data-level="t.level"-->
+<!--                :title="t.count != null && t.count !== '' ? `出现 ${t.count} 次` : ''"-->
+<!--              >{{ t.text }}</span>-->
+<!--            </div>-->
+<!--            <div v-else class="competitor-empty subtle">暂无高频触发词</div>-->
+<!--          </div>-->
         </div>
       </div>
 
@@ -309,8 +241,57 @@
 <!--          <div class="emo-summary-text">{{ sentimentSummary }}</div>-->
 <!--        </div>-->
       </div>
+      <!-- ===== 区块4：信源权威穿透 ===== -->
+      <div class="section-authority">
+        <div class="section-title-row">
+          <h2 class="section-title">底层信源溯源穿透</h2>
+          <span class="section-tag">SOURCE TRACEABILITY</span>
+        </div>
 
-      <!-- ===== 区块4b：智能诊断与优化建议 ===== -->
+        <div class="authority-layout">
+          <div class="authority-chart">
+            <div class="source-bars">
+              <div v-for="src in sourceData" :key="src.type" class="source-bar-item">
+                <div class="source-meta">
+                  <span class="source-type">{{ src.type }}</span>
+                  <span class="source-count">{{ src.count }} 次引用</span>
+                </div>
+                <div class="source-bar-track">
+                  <div
+                      class="source-bar-fill"
+                      :style="{ width: src.pct + '%', background: src.color }"
+                  ></div>
+                </div>
+                <span class="source-pct">{{ src.pct }}%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="authority-pie-wrap">
+            <svg viewBox="0 0 200 200" class="pie-svg">
+              <g transform="translate(100,100)">
+                <path v-for="(slice, i) in pieSlices" :key="'pie'+i"
+                      :d="slice.path"
+                      :fill="slice.color"
+                      :opacity="0.85"
+                />
+                <circle r="45" fill="white"/>
+                <text text-anchor="middle" dy="0.3em" font-size="12" fill="#909399">采信率</text>
+                <text text-anchor="middle" dy="1.5em" font-size="18" font-weight="700" fill="#303133">{{ authorityScore }}</text>
+              </g>
+            </svg>
+            <div class="pie-legend">
+              <div v-for="(src, i) in sourceData" :key="'pl'+i" class="pie-legend-item">
+                <span class="pie-legend-dot" :style="{ background: src.color }"></span>
+                <span>{{ src.type }}</span>
+                <span class="pie-legend-pct">{{ src.pct }}%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== 区块5：智能诊断与优化建议 ===== -->
       <div v-if="diagnosticSuggestions.length" class="section-diagnosis">
         <div class="diagnosis-header-bar">
           <svg class="diagnosis-bolt" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -330,112 +311,87 @@
               <p class="diagnosis-p">{{ item.diagnosis }}</p>
               <div class="diagnosis-suggest-head">💡 优化建议：</div>
               <ul class="diagnosis-ul">
-                <li v-for="(line, li) in item.suggestions" :key="'sg'+li">{{ line }}</li>
+                <li
+                  v-for="(line, li) in item.suggestions"
+                  :key="'sg' + item.id + '-' + li"
+                  class="diagnosis-suggest-li"
+                >
+                  <textarea
+                    v-if="suggestionEditingKey === suggestionKey(item.id, li)"
+                    ref="suggestionEditInputRef"
+                    v-model="suggestionEditDraft"
+                    class="diagnosis-suggest-input"
+                    rows="2"
+                    @blur="commitSuggestionEdit"
+                    @keydown.escape.prevent="cancelSuggestionEdit"
+                  />
+                  <span
+                    v-else
+                    class="diagnosis-suggest-text"
+                    role="button"
+                    tabindex="0"
+                    title="点击编辑"
+                    @click="startSuggestionEdit(item, li)"
+                    @keydown.enter.prevent="startSuggestionEdit(item, li)"
+                  >{{ suggestionDisplayText(item, li) }}</span>
+                </li>
               </ul>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- ===== 区块5：信源权威穿透 ===== -->
-      <div class="section-authority">
-        <div class="section-title-row">
-          <h2 class="section-title">底层信源溯源穿透</h2>
-          <span class="section-tag">SOURCE TRACEABILITY</span>
-        </div>
 
-        <div class="authority-layout">
-          <div class="authority-chart">
-            <div class="source-bars">
-              <div v-for="src in sourceData" :key="src.type" class="source-bar-item">
-                <div class="source-meta">
-                  <span class="source-type">{{ src.type }}</span>
-                  <span class="source-count">{{ src.count }} 次引用</span>
-                </div>
-                <div class="source-bar-track">
-                  <div
-                    class="source-bar-fill"
-                    :style="{ width: src.pct + '%', background: src.color }"
-                  ></div>
-                </div>
-                <span class="source-pct">{{ src.pct }}%</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="authority-pie-wrap">
-            <svg viewBox="0 0 200 200" class="pie-svg">
-              <g transform="translate(100,100)">
-                <path v-for="(slice, i) in pieSlices" :key="'pie'+i"
-                  :d="slice.path"
-                  :fill="slice.color"
-                  :opacity="0.85"
-                />
-                <circle r="45" fill="white"/>
-                <text text-anchor="middle" dy="0.3em" font-size="12" fill="#909399">采信率</text>
-                <text text-anchor="middle" dy="1.5em" font-size="18" font-weight="700" fill="#303133">{{ authorityScore }}</text>
-              </g>
-            </svg>
-            <div class="pie-legend">
-              <div v-for="(src, i) in sourceData" :key="'pl'+i" class="pie-legend-item">
-                <span class="pie-legend-dot" :style="{ background: src.color }"></span>
-                <span>{{ src.type }}</span>
-                <span class="pie-legend-pct">{{ src.pct }}%</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <!-- ===== 区块6：商业流失漏斗 ===== -->
-      <div class="section-funnel">
-        <div class="section-title-row">
-          <h2 class="section-title">商业流失漏斗预演</h2>
-          <span class="section-tag">BUSINESS LOSS FUNNEL</span>
-        </div>
+<!--      <div class="section-funnel">-->
+<!--        <div class="section-title-row">-->
+<!--          <h2 class="section-title">商业流失漏斗预演</h2>-->
+<!--          <span class="section-tag">BUSINESS LOSS FUNNEL</span>-->
+<!--        </div>-->
 
-        <div class="funnel-layout">
-          <div class="funnel-chart">
-            <div class="funnel-stages">
-              <div v-for="(stage, i) in funnelStages" :key="stage.key" class="funnel-stage">
-                <div class="funnel-bar-wrap">
-                  <div
-                    class="funnel-bar"
-                    :style="{
-                      width: stage.width + '%',
-                      background: stage.color,
-                      opacity: 1 - i * 0.12
-                    }"
-                  >
-                    <span class="funnel-bar-label">{{ stage.label }}</span>
-                    <span class="funnel-bar-val">{{ stage.value }}</span>
-                  </div>
-                </div>
-                <div class="funnel-connector" v-if="i < funnelStages.length - 1">
-                  <span class="funnel-loss" :style="{ color: stage.lossColor }">
-                    ↓ {{ stage.lost }} 流失
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
+<!--        <div class="funnel-layout">-->
+<!--          <div class="funnel-chart">-->
+<!--            <div class="funnel-stages">-->
+<!--              <div v-for="(stage, i) in funnelStages" :key="stage.key" class="funnel-stage">-->
+<!--                <div class="funnel-bar-wrap">-->
+<!--                  <div-->
+<!--                    class="funnel-bar"-->
+<!--                    :style="{-->
+<!--                      width: stage.width + '%',-->
+<!--                      background: stage.color,-->
+<!--                      opacity: 1 - i * 0.12-->
+<!--                    }"-->
+<!--                  >-->
+<!--                    <span class="funnel-bar-label">{{ stage.label }}</span>-->
+<!--                    <span class="funnel-bar-val">{{ stage.value }}</span>-->
+<!--                  </div>-->
+<!--                </div>-->
+<!--                <div class="funnel-connector" v-if="i < funnelStages.length - 1">-->
+<!--                  <span class="funnel-loss" :style="{ color: stage.lossColor }">-->
+<!--                    ↓ {{ stage.lost }} 流失-->
+<!--                  </span>-->
+<!--                </div>-->
+<!--              </div>-->
+<!--            </div>-->
+<!--          </div>-->
 
-          <div class="funnel-risk">
-            <div class="risk-header">
-              <el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon>
-              <span>流失风险评估</span>
-            </div>
-            <div class="risk-level" :class="riskLevel">{{ riskLevelText }}</div>
-            <div class="risk-items">
-              <div v-for="risk in riskFactors" :key="risk.key" class="risk-item" :class="risk.level">
-                <span class="risk-icon">{{ risk.level === 'high' ? '⚠' : risk.level === 'mid' ? '◆' : '●' }}</span>
-                <span class="risk-text">{{ risk.text }}</span>
-                <span class="risk-impact">{{ risk.impact }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+<!--          <div class="funnel-risk">-->
+<!--            <div class="risk-header">-->
+<!--              <el-icon color="#f56c6c"><WarnTriangleFilled /></el-icon>-->
+<!--              <span>流失风险评估</span>-->
+<!--            </div>-->
+<!--            <div class="risk-level" :class="riskLevel">{{ riskLevelText }}</div>-->
+<!--            <div class="risk-items">-->
+<!--              <div v-for="risk in riskFactors" :key="risk.key" class="risk-item" :class="risk.level">-->
+<!--                <span class="risk-icon">{{ risk.level === 'high' ? '⚠' : risk.level === 'mid' ? '◆' : '●' }}</span>-->
+<!--                <span class="risk-text">{{ risk.text }}</span>-->
+<!--                <span class="risk-impact">{{ risk.impact }}</span>-->
+<!--              </div>-->
+<!--            </div>-->
+<!--          </div>-->
+<!--        </div>-->
+<!--      </div>-->
 
       <!-- ===== 区块7：操作区 ===== -->
       <div class="section-actions">
@@ -456,14 +412,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import 'echarts-wordcloud'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   RefreshRight, Top, WarnTriangleFilled, ArrowLeft,
-  Download, Share, Aim, Warning, List, DataLine, Document, View
+  Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram,
+  MagicStick
 } from '@element-plus/icons-vue'
 
 const router = useRouter()
@@ -481,79 +438,188 @@ const brandDomain = ref('')
 const checkTime = ref(new Date().toLocaleString('zh-CN'))
 const healthScore = ref(0)
 
-/** 环形进度周长（r=44） */
-const MV_DONUT_LEN = 2 * Math.PI * 44
-
 const modelVisibilityCards = ref([])
-const mvScrollRef = ref(null)
 
-/** 横向列表：鼠标按住拖拽滚动（触摸仍走系统原生滑动）；拖拽时关闭 scroll-snap，避免与 scrollLeft 对抗发涩 */
-const mvDrag = {
-  active: false,
-  pointerId: null,
-  startX: 0,
-  startScrollLeft: 0,
-}
+/** 按得分降序；柱状图展示全部模型 */
+const modelVisibilitySorted = computed(() =>
+  [...modelVisibilityCards.value].sort(
+    (a, b) => (Number(b.score) || 0) - (Number(a.score) || 0)
+  )
+)
 
-const finishMvScrollDrag = (e) => {
-  if (!mvDrag.active) return
-  if (e?.pointerId != null && e.pointerId !== mvDrag.pointerId) return
-  const el = mvScrollRef.value
-  const pid = mvDrag.pointerId
-  mvDrag.active = false
-  mvDrag.pointerId = null
-  if (el) {
-    el.classList.remove('mv-scroll--grabbing')
-    if (pid != null) {
-      try {
-        el.releasePointerCapture(pid)
-      } catch (_) {
-        /* ignore */
-      }
+const mvRestChartDom = ref(null)
+let mvRestChart = null
+
+const disposeMvRestChart = () => {
+  if (mvRestChart) {
+    try {
+      if (!mvRestChart.isDisposed()) mvRestChart.dispose()
+    } catch (_) {
+      /* ignore */
     }
+    mvRestChart = null
   }
 }
 
-const onMvScrollPointerDown = (e) => {
-  if (e.pointerType !== 'mouse' || e.button !== 0) return
-  const el = mvScrollRef.value
-  if (!el) return
-  mvDrag.active = true
-  mvDrag.pointerId = e.pointerId
-  mvDrag.startX = e.clientX
-  mvDrag.startScrollLeft = el.scrollLeft
-  el.classList.add('mv-scroll--grabbing')
+/** 各模型柱状图：白底、蓝柱、仅横向网格、无柱顶数字 */
+const MV_REST_BAR_BLUE = '#5B8FF9'
+
+const buildMvRestBarOption = (rows) => {
+  if (!rows?.length) return {}
+  const names = rows.map((r) => r.name || r.platformKey || '')
+  const scores = rows.map((r) => Math.min(100, Math.max(0, Number(r.score) || 0)))
+  const longLabel = names.some((n) => String(n).length > 5)
+  const bottomPad = longLabel ? 52 : names.length > 8 ? 48 : 36
+  const useZoom = names.length > 8
+  return {
+    backgroundColor: '#ffffff',
+    grid: {
+      left: 44,
+      right: useZoom ? 24 : 16,
+      top: useZoom ? 36 : 28,
+      bottom: useZoom ? bottomPad + 36 : bottomPad,
+      containLabel: false,
+    },
+    dataZoom: useZoom
+      ? [
+          {
+            type: 'slider',
+            show: true,
+            xAxisIndex: 0,
+            height: 22,
+            bottom: 8,
+            borderColor: 'transparent',
+            fillerColor: 'rgba(64, 158, 255, 0.15)',
+            handleStyle: { color: '#409eff' },
+            textStyle: { color: '#909399', fontSize: 11 },
+          },
+        ]
+      : [],
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: {
+        type: 'shadow',
+        shadowStyle: { color: 'rgba(64, 158, 255, 0.15)' },
+      },
+      confine: true,
+      backgroundColor: 'rgba(255, 255, 255, 0.98)',
+      borderColor: '#e4e7ed',
+      borderWidth: 1,
+      padding: [10, 12],
+      extraCssText: 'box-shadow: 0 4px 12px rgba(0,0,0,0.08);',
+      textStyle: { color: '#303133', fontSize: 12 },
+      formatter(params) {
+        const p = Array.isArray(params) ? params[0] : params
+        const idx = p?.dataIndex
+        const row = rows[idx]
+        if (!row) return ''
+        const bullets = Array.isArray(row.bullets) ? row.bullets : []
+        let html = `<div style="font-weight:600;margin-bottom:6px;color:#303133">${row.name || ''}</div>`
+        html += `<div style="color:#606266;margin-bottom:8px">可见度得分：<b>${row.score}</b> / 100</div>`
+        if (bullets.length) {
+          html +=
+            '<div style="border-top:1px solid #ebeef5;padding-top:8px;line-height:1.55;text-align:left">'
+          bullets.forEach((b) => {
+            const tone = b?.tone || 'neutral'
+            const col =
+              tone === 'bad'
+                ? '#f56c6c'
+                : tone === 'warn'
+                  ? '#e6a23c'
+                  : tone === 'good'
+                    ? '#67c23a'
+                    : '#606266'
+            html += `<div style="margin-top:4px;color:${col}">• ${b?.text || ''}</div>`
+          })
+          html += '</div>'
+        }
+        return html
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: names,
+      axisLine: { lineStyle: { color: '#DCDFE6' } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#606266',
+        rotate: names.some((n) => String(n).length > 6) ? 28 : 0,
+        interval: 0,
+        fontSize: 11,
+      },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: 100,
+      interval: 20,
+      splitLine: {
+        show: true,
+        lineStyle: { color: '#EBEEF5', width: 1, type: 'solid' },
+      },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: '#909399',
+        fontSize: 11,
+      },
+    },
+    series: [
+      {
+        type: 'bar',
+        data: scores.map((s) => ({
+          value: s,
+          itemStyle: {
+            color: MV_REST_BAR_BLUE,
+            borderRadius: [3, 3, 0, 0],
+          },
+        })),
+        barMaxWidth: 32,
+        barGap: '26%',
+        barCategoryGap: '42%',
+        label: { show: false },
+        emphasis: {
+          focus: 'series',
+          itemStyle: {
+            shadowBlur: 8,
+            shadowColor: 'rgba(91, 143, 249, 0.35)',
+          },
+        },
+      },
+    ],
+  }
+}
+
+const syncMvRestBarChart = () => {
+  const rows = modelVisibilitySorted.value
+  const el = mvRestChartDom.value
+  if (!rows.length) {
+    disposeMvRestChart()
+    return
+  }
+  if (!el || !el.isConnected) {
+    disposeMvRestChart()
+    return
+  }
+  const domInst = echarts.getInstanceByDom(el)
+  if (domInst && !domInst.isDisposed()) {
+    mvRestChart = domInst
+  } else {
+    disposeMvRestChart()
+    mvRestChart = echarts.init(el, undefined, { renderer: 'canvas' })
+  }
+  const chart = mvRestChart
+  if (!chart || chart.isDisposed()) return
   try {
-    el.setPointerCapture(e.pointerId)
+    chart.setOption(buildMvRestBarOption(rows), true)
+    if (el.clientWidth > 0 && el.clientHeight > 0) chart.resize()
   } catch (_) {
-    /* ignore */
+    disposeMvRestChart()
   }
 }
 
-const onMvScrollPointerMove = (e) => {
-  if (!mvDrag.active || e.pointerId !== mvDrag.pointerId) return
-  const el = mvScrollRef.value
-  if (!el) return
-  const dx = e.clientX - mvDrag.startX
-  el.scrollLeft = mvDrag.startScrollLeft - dx
-}
-
-const onMvScrollPointerUp = (e) => finishMvScrollDrag(e)
-
-const onMvScrollLostPointerCapture = (e) => finishMvScrollDrag(e)
-
-const modelDonutDash = (score) => {
-  const s = Math.min(100, Math.max(0, Number(score) || 0))
-  const arc = (s / 100) * MV_DONUT_LEN
-  return `${arc} ${MV_DONUT_LEN}`
-}
-
-const modelDonutStrokeClass = (score) => {
-  const s = Number(score) || 0
-  if (s >= 70) return 'mv-stroke-good'
-  if (s >= 45) return 'mv-stroke-warn'
-  return 'mv-stroke-bad'
-}
+watch(modelVisibilitySorted, syncMvRestBarChart, { deep: true, flush: 'post' })
 
 // ===== KPI 卡片（动态计算）=====
 const interceptRate = ref(0)
@@ -625,8 +691,8 @@ const platforms = ref([
   { key: 'tongyi',   name: '通义千问',   icon: '通', color: '#8B5CF6', simulated: true },
   { key: 'yiyan',    name: '文心一言',   icon: '文', color: '#EF4444', simulated: true },
   { key: 'deepseek', name: 'DeepSeek',  icon: 'D',  color: '#4F46E5', simulated: false },
-  { key: 'zhipu',    name: '智谱清言',   icon: '智', color: '#10B981', simulated: true },
-  { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
+  // { key: 'zhipu',    name: '智谱清言',   icon: '智', color: '#10B981', simulated: true },
+  // { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
 ])
 
 const intentPaths = ref([
@@ -644,24 +710,63 @@ const getCellClass = (path, plat) => {
   return `cell-${result || 'none'}`
 }
 
-const getCellText = (path, plat) => {
-  const result = matrixData.value[path.key]?.[plat.key]
-  const map = {
-    top1: '首位',
-    top2: '顺位2',
-    mention: '有提及',
-    competitor: '竞品优',
-    none: '未提及'
-  }
-  return map[result] || '—'
+/** 核心词路径：精准命中 / 次位呈现 / 未优先推 / 未提及 */
+const MATRIX_CORE_LABEL = {
+  precise: '精准命中',
+  second: '次位呈现',
+  not_priority: '未优先推',
+  none: '未提及'
+}
+/** 其他路径：行业首位 / 头部梯队 / 中游位置 / 排名末尾 / 未提及 */
+const MATRIX_OTHER_LABEL = {
+  industry_first: '行业首位',
+  head_tier: '头部梯队',
+  mid_tier: '中游位置',
+  rank_tail: '排名末尾',
+  none: '未提及'
 }
 
+/** 悬停释义（核心词路径） */
+const MATRIX_CORE_TOOLTIP = {
+  precise: '精准命中：用户搜该品牌时，结果首位直接出现对应产品',
+  second: '次位呈现：品牌出现在搜索结果第二位，非首位展示',
+  not_priority: '未优先推：品牌未被优先推荐，位置靠后但仍可见',
+  none: '未提及：搜索结果中完全没有出现该品牌'
+}
+/** 悬停释义（其他意图路径） */
+const MATRIX_OTHER_TOOLTIP = {
+  industry_first: '行业首位：泛需求搜索中，该品牌排在结果第一位',
+  head_tier: '头部梯队：品牌出现在结果前列，属于第一梯队',
+  mid_tier: '中游位置：品牌出现在结果中间段，曝光一般',
+  rank_tail: '排名末尾：品牌出现在结果靠后位置，曝光较弱',
+  none: '未提及：泛需求结果中完全没有出现该品牌'
+}
+
+const getCellText = (path, plat) => {
+  const result = matrixData.value[path.key]?.[plat.key]
+  if (path.key === 'core') return MATRIX_CORE_LABEL[result] || '—'
+  return MATRIX_OTHER_LABEL[result] || '—'
+}
+
+const getCellTooltip = (path, plat) => {
+  const result = matrixData.value[path.key]?.[plat.key]
+  if (path.key === 'core') return MATRIX_CORE_TOOLTIP[result] || ''
+  return MATRIX_OTHER_TOOLTIP[result] || ''
+}
+
+/** 强露出：核心词前二档 + 非核心前二档 */
 const interceptCount = computed(() => {
   let count = 0
   const md = matrixData.value
-  for (const pathKey of Object.keys(md)) {
-    for (const platKey of Object.keys(md[pathKey] || {})) {
-      if (md[pathKey][platKey] === 'top1' || md[pathKey][platKey] === 'top2') count++
+  for (const path of intentPaths.value) {
+    const pk = path.key
+    for (const platKey of Object.keys(md[pk] || {})) {
+      const v = md[pk][platKey]
+      if (pk === 'core') {
+        if (v === 'precise' || v === 'second') count++
+      } else if (v === 'industry_first' || v === 'head_tier') {
+        count++
+      }
     }
   }
   return count
@@ -678,12 +783,14 @@ const blindCount = computed(() => {
   return count
 })
 
+/** 弱势格：排名末尾 / 未优先推 */
 const competitorAdvantage = computed(() => {
   let count = 0
   const md = matrixData.value
   for (const pathKey of Object.keys(md)) {
     for (const platKey of Object.keys(md[pathKey] || {})) {
-      if (md[pathKey][platKey] === 'competitor') count++
+      const v = md[pathKey][platKey]
+      if (v === 'rank_tail' || v === 'not_priority') count++
     }
   }
   return count
@@ -694,6 +801,46 @@ const competitorMentions = ref([])
 const lossTriggerTags = ref([])
 const sentimentWordCloud = ref([])
 const diagnosticSuggestions = ref([])
+
+const suggestionOverrides = ref({})
+const suggestionEditingKey = ref(null)
+const suggestionEditDraft = ref('')
+const suggestionEditInputRef = ref(null)
+
+const suggestionKey = (itemId, li) => `${itemId}::${li}`
+
+const suggestionDisplayText = (item, li) => {
+  const k = suggestionKey(item.id, li)
+  if (Object.prototype.hasOwnProperty.call(suggestionOverrides.value, k)) {
+    return suggestionOverrides.value[k]
+  }
+  const raw = item.suggestions?.[li]
+  return raw != null ? String(raw) : ''
+}
+
+const startSuggestionEdit = async (item, li) => {
+  suggestionEditingKey.value = suggestionKey(item.id, li)
+  suggestionEditDraft.value = suggestionDisplayText(item, li)
+  await nextTick()
+  const el = suggestionEditInputRef.value
+  if (el && typeof el.focus === 'function') el.focus()
+  if (el && typeof el.select === 'function') el.select()
+}
+
+const commitSuggestionEdit = () => {
+  const key = suggestionEditingKey.value
+  if (key) {
+    suggestionOverrides.value = {
+      ...suggestionOverrides.value,
+      [key]: suggestionEditDraft.value,
+    }
+  }
+  suggestionEditingKey.value = null
+}
+
+const cancelSuggestionEdit = () => {
+  suggestionEditingKey.value = null
+}
 
 /** ECharts 词云：与 DOM/卸载时序解耦，避免 dispose 后仍 resize */
 const sentimentCloudDom = ref(null)
@@ -855,6 +1002,13 @@ const onWindowResizeForSentimentCloud = () => {
     c.resize()
   } catch (_) {
     /* ignore */
+  }
+  if (mvRestChart && !mvRestChart.isDisposed()) {
+    try {
+      mvRestChart.resize()
+    } catch (_) {
+      /* ignore */
+    }
   }
 }
 
@@ -1060,6 +1214,8 @@ const loadHealthReport = async () => {
     competitorMentions.value = Array.isArray(data.competitorMentions) ? data.competitorMentions : []
     lossTriggerTags.value = Array.isArray(data.lossTriggerTags) ? data.lossTriggerTags : []
     sentimentWordCloud.value = Array.isArray(data.sentimentWordCloud) ? data.sentimentWordCloud : []
+    suggestionOverrides.value = {}
+    suggestionEditingKey.value = null
     diagnosticSuggestions.value = Array.isArray(data.diagnosticSuggestions) ? data.diagnosticSuggestions : []
 
     // 填充信源权威
@@ -1082,10 +1238,83 @@ const loadHealthReport = async () => {
 }
 
 // ===== 操作方法 =====
-const refreshReport = async () => {
-  ElMessage.info('正在跳转到可见度检测...')
-  router.push('/geo-detection')
+const generating = ref(false)
+const generatingText = ref('生成中...')
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * 生成体检报告：
+ * 1) POST /api/geo-brand/tasks 创建任务（后端自动从 questions 按 sys_dict.keyword_type 每类抽样，50 题）
+ * 2) 轮询 GET /api/geo-brand/tasks/:id/progress，直到 status=completed/failed 或 pendingCount=0
+ * 3) 完成后调用 loadHealthReport() 重新加载（具体指标是否变动取决于 /api/geo-health-report 聚合逻辑，数据库里 geo_health_* 表会落库）
+ */
+const generateHealthReport = async () => {
+  if (generating.value) return
+  generating.value = true
+  generatingText.value = '抽取问题中...'
+  try {
+    const createRes = await fetch(`${API_BASE_URL}/api/geo-brand/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
+      body: JSON.stringify({}),
+    })
+    const createData = await createRes.json().catch(() => ({}))
+    if (!createRes.ok || !createData?.success) {
+      throw new Error(createData?.error || `创建任务失败（HTTP ${createRes.status}）`)
+    }
+    const taskId = createData.taskId
+    const total = createData.totalQuestions || 0
+    ElMessage.success(`任务已创建（#${taskId}），共 ${total} 题，后台探针中...`)
+    generatingText.value = `探针中 0/${total || '?'}`
+
+    let lastStatus = ''
+    for (let i = 0; i < 600; i++) {
+      await sleep(2000)
+      let progress = null
+      try {
+        const pr = await fetch(
+          `${API_BASE_URL}/api/geo-brand/tasks/${taskId}/progress`,
+          { headers: { 'x-user-id': 'default_user' } }
+        )
+        progress = await pr.json().catch(() => null)
+      } catch (e) {
+        console.warn('[geo-brand] progress 请求异常，继续轮询:', e)
+        continue
+      }
+      if (!progress?.success) continue
+
+      const done = (progress.successCount || 0) + (progress.failedCount || 0)
+      const t = progress.totalQuestions || total || 1
+      lastStatus = progress.status || lastStatus
+      generatingText.value = `探针中 ${done}/${t}`
+
+      if (
+        progress.status === 'completed' ||
+        progress.status === 'failed' ||
+        (progress.pendingCount === 0 && done >= t)
+      ) {
+        break
+      }
+    }
+
+    if (lastStatus === 'failed') {
+      ElMessage.warning(`任务 #${taskId} 部分失败，请在数据库 geo_health_answer.error_text 中查看`)
+    } else {
+      ElMessage.success(`任务 #${taskId} 已完成，结果已写入 geo_health_answer/geo_health_article`)
+    }
+
+    generatingText.value = '刷新报告...'
+    await loadHealthReport()
+  } catch (err) {
+    console.error('生成体检报告失败:', err)
+    ElMessage.error('生成失败：' + (err.message || err))
+  } finally {
+    generating.value = false
+  }
 }
+
+const refreshReport = generateHealthReport
 
 const goBack = () => router.back()
 const goToGEODetection = () => router.push('/geo-detection')
@@ -1105,9 +1334,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   sentimentWcScopeActive = false
-  mvDrag.active = false
   window.removeEventListener('resize', onWindowResizeForSentimentCloud)
   disposeSentimentWordCloudChart()
+  disposeMvRestChart()
 })
 </script>
 
@@ -1543,6 +1772,45 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.42);
 }
 
+/* P2：白底卡片 + 标题旁图标，与下方 KPI 区块一致 */
+.mv-rest-chart-block {
+  margin-top: 18px;
+  padding: 20px 22px 16px;
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #ebeef5;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.mv-rest-chart-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mv-rest-chart-icon {
+  color: #409eff;
+  flex-shrink: 0;
+}
+
+.mv-rest-chart-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  letter-spacing: 0.02em;
+  margin: 0;
+  padding: 0;
+}
+
+.mv-rest-chart-echarts {
+  width: 100%;
+  height: min(420px, 52vh);
+  min-height: 280px;
+  background: #fff;
+  border-radius: 8px;
+}
+
 /* ===== 区块2：KPI ===== */
 .section-kpi,
 .section-matrix,
@@ -1645,32 +1913,6 @@ onUnmounted(() => {
 }
 
 /* ===== 区块3：可见度矩阵 ===== */
-.matrix-legend {
-  display: flex;
-  gap: 12px;
-  margin-left: auto;
-  font-size: 11px;
-  color: #909399;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.leg-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.leg-1 { background: #67c23a; }
-.leg-2 { background: #409eff; }
-.leg-3 { background: #e6a23c; }
-.leg-4 { background: #f0f0f0; border: 1px solid #dcdfe6; }
-.leg-ai { background: #e6a23c; border-radius: 3px; width: 10px; height: 10px; }
-
 .matrix-table-wrap {
   overflow-x: auto;
   border-radius: 10px;
@@ -1757,13 +1999,37 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 600;
   min-width: 60px;
+  cursor: default;
 }
 
-.cell-top1 { background: rgba(103,194,58,0.15); color: #67c23a; }
-.cell-top2 { background: rgba(64,158,255,0.15); color: #409eff; }
-.cell-mention { background: rgba(112,112,240,0.1); color: #7070f0; }
-.cell-competitor { background: rgba(230,162,60,0.15); color: #e6a23c; }
-.cell-none { background: #f5f5f5; color: #c0c4cc; }
+.result-cell--has-tip {
+  cursor: help;
+}
+
+/* 核心词 / 其他路径共用色阶：最优绿 → 次优蓝 → 中游紫 → 末尾橙 → 未提及灰 */
+.cell-precise,
+.cell-industry_first {
+  background: rgba(103, 194, 58, 0.15);
+  color: #67c23a;
+}
+.cell-second,
+.cell-head_tier {
+  background: rgba(64, 158, 255, 0.15);
+  color: #409eff;
+}
+.cell-not_priority,
+.cell-mid_tier {
+  background: rgba(112, 112, 240, 0.12);
+  color: #7070f0;
+}
+.cell-rank_tail {
+  background: rgba(230, 162, 60, 0.15);
+  color: #e6a23c;
+}
+.cell-none {
+  background: #f5f5f5;
+  color: #c0c4cc;
+}
 
 .cell-sim-tag {
   font-size: 9px;
@@ -2139,6 +2405,53 @@ onUnmounted(() => {
   line-height: 1.7;
 }
 
+.diagnosis-suggest-li {
+  margin-bottom: 6px;
+}
+
+.diagnosis-suggest-li:last-child {
+  margin-bottom: 0;
+}
+
+.diagnosis-suggest-text {
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  padding: 2px 0;
+  display: inline-block;
+  max-width: 100%;
+  word-break: break-word;
+}
+
+.diagnosis-suggest-text:hover {
+  border-bottom-color: #c0c4cc;
+  background: rgba(64, 158, 255, 0.06);
+  border-radius: 4px;
+}
+
+.diagnosis-suggest-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #606266;
+  border: 1px solid #dcdfe6;
+  border-radius: 8px;
+  resize: vertical;
+  min-height: 44px;
+  background: #fff;
+}
+
+.diagnosis-suggest-input:focus {
+  outline: none;
+  border-color: #409eff;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.15);
+}
+
 /* ===== 区块5：信源权威 ===== */
 .authority-layout {
   display: grid;
@@ -2396,8 +2709,15 @@ onUnmounted(() => {
     grid-template-columns: 1fr;
   }
 
-  .matrix-legend {
-    flex-wrap: wrap;
-  }
+}
+</style>
+
+<style>
+/* 矩阵词条释义（tooltip 挂载到 body，需非 scoped） */
+.matrix-cell-tooltip-popper {
+  max-width: 320px;
+  line-height: 1.55;
+  font-size: 12px;
+  box-sizing: border-box;
 }
 </style>

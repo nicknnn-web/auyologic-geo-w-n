@@ -267,6 +267,70 @@ export async function initDB() {
         checked_at TIMESTAMP DEFAULT NOW()
       )
     `);
+
+    // —— 品牌体检任务（表名统一 geo_health_*；问题抽样 → DeepSeek → 原始 JSON + 解析文章）——
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_task (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL DEFAULT 'default_user',
+        keyword VARCHAR(500) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_question (
+        id SERIAL PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES geo_health_task(id) ON DELETE CASCADE,
+        source_question_id INTEGER,
+        question TEXT NOT NULL,
+        question_type VARCHAR(32) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_question_task ON geo_health_question(task_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_question_task_type ON geo_health_question(task_id, question_type)`
+    );
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_answer (
+        id SERIAL PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES geo_health_task(id) ON DELETE CASCADE,
+        question_id INTEGER NOT NULL REFERENCES geo_health_question(id) ON DELETE CASCADE,
+        model_name VARCHAR(64) NOT NULL,
+        raw_json JSONB NOT NULL,
+        valid_count INTEGER DEFAULT 0,
+        error_text TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(question_id, model_name)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_answer_task ON geo_health_answer(task_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_article (
+        id SERIAL PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES geo_health_task(id) ON DELETE CASCADE,
+        question_id INTEGER NOT NULL REFERENCES geo_health_question(id) ON DELETE CASCADE,
+        model_name VARCHAR(64) NOT NULL,
+        platform VARCHAR(256),
+        title TEXT,
+        url TEXT NOT NULL,
+        publish_time VARCHAR(128),
+        summary TEXT,
+        content_hash VARCHAR(64) NOT NULL,
+        dedupe_key VARCHAR(256) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_health_article_task_dedupe ON geo_health_article(task_id, dedupe_key)`
+    );
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_article_task ON geo_health_article(task_id)`);
+
     console.log('✅ 数据库表初始化完成');
   } finally {
     client.release();

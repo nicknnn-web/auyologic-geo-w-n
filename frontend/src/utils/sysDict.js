@@ -34,14 +34,16 @@ export function dictLabelMap(list) {
 }
 
 /**
- * 旧版中文 / 旧英文 data_key → 当前规范键 01–04（与 dict_type 组合唯一）
- * 规范：01 品牌 02 产品 03 场景 04 企业
+ * 旧版中文 / 旧英文 data_key → 当前规范键 01–06（与 dict_type 组合唯一）
+ * 规范：01 品牌 02 产品 03 场景 04 企业 05 对比 06 价格
  */
 export const KEYWORD_TYPE_LEGACY_MAP = {
   品牌: '01',
   产品: '02',
   场景: '03',
   企业: '04',
+  对比词: '05',
+  价格词: '06',
   brand: '01',
   product: '02',
   scene: '03',
@@ -62,7 +64,7 @@ export function keywordTypeKeysOrdered(list) {
   )
   const keys = rows.map((r) => r.dataKey ?? r.data_key).filter(Boolean)
   if (keys.length) return keys
-  return ['01', '02', '03', '04']
+  return ['01', '02', '03', '04', '05', '06']
 }
 
 /** 接口不可用时前端兜底（与 sys_dict keyword_type 一致） */
@@ -70,7 +72,9 @@ export const KEYWORD_TYPE_DEFAULT_OPTIONS = [
   { dataKey: '01', dataValue: '品牌词', sortOrder: 10 },
   { dataKey: '02', dataValue: '产品词', sortOrder: 20 },
   { dataKey: '03', dataValue: '场景词', sortOrder: 30 },
-  { dataKey: '04', dataValue: '企业词', sortOrder: 40 }
+  { dataKey: '04', dataValue: '企业词', sortOrder: 40 },
+  { dataKey: '05', dataValue: '对比词', sortOrder: 50 },
+  { dataKey: '06', dataValue: '价格词', sortOrder: 60 },
 ]
 
 /** dict_type（英文标识）→ 中文名称；字典管理筛选/表单/表格展示用，可与后端种子扩展 */

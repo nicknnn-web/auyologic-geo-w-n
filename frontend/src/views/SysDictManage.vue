@@ -16,6 +16,7 @@
           allow-create
           default-first-option
           class="w-56"
+          :disabled="loading"
           @change="onFilterDictTypeChange"
         >
           <el-option label="全部类型" value="" />
@@ -31,18 +32,37 @@
             </div>
           </el-option>
         </el-select>
-        <el-button type="primary" @click="openCreate">
+        <el-button type="primary" :disabled="loading" @click="openCreate">
           <el-icon class="mr-1"><Plus /></el-icon>
           新增条目
         </el-button>
-        <el-button @click="refresh">
+        <el-button :disabled="loading" @click="refresh">
           <el-icon class="mr-1"><Refresh /></el-icon>
           刷新
+        </el-button>
+        <el-button
+          type="danger"
+          plain
+          :disabled="loading || selectedRows.length === 0"
+          :loading="batchDeleting"
+          @click="handleBatchDelete"
+        >
+          批量删除{{ selectedRows.length ? `（${selectedRows.length}）` : '' }}
         </el-button>
       </div>
     </div>
 
-    <el-table v-loading="loading" :data="tableData" stripe style="width: 100%">
+    <el-table
+      ref="tableRef"
+      v-loading="loading"
+      element-loading-text="更新列表中…"
+      :data="tableData"
+      row-key="id"
+      stripe
+      style="width: 100%"
+      @selection-change="onSelectionChange"
+    >
+      <el-table-column type="selection" width="48" align="center" />
       <el-table-column prop="id" label="ID" width="70" align="center" />
       <el-table-column prop="dictType" label="类型标识(key)" min-width="130" show-overflow-tooltip />
       <el-table-column prop="dictTypeValue" label="类型名称(value)" min-width="130" show-overflow-tooltip />
@@ -78,6 +98,7 @@
       v-model:page="page"
       v-model:page-size="pageSize"
       :total="total"
+      :disabled="loading"
       @change="loadEntries"
     />
 
@@ -152,7 +173,7 @@
 
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { fetchDictTypes, fetchDictEntries, getApiBase } from '../utils/sysDict.js'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
@@ -162,6 +183,9 @@ const API_BASE = getApiBase()
 
 const loading = ref(false)
 const submitting = ref(false)
+const batchDeleting = ref(false)
+const tableRef = ref(null)
+const selectedRows = ref([])
 const tableData = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -277,6 +301,10 @@ watch(
 )
 
 /** 仅拉取条目并写入表格（不含 loading，供并行请求复用） */
+const onSelectionChange = (rows) => {
+  selectedRows.value = rows || []
+}
+
 const loadEntriesCore = async () => {
   const { list, total: t } = await fetchDictEntries(filterDictType.value, {
     page: page.value,
@@ -284,6 +312,8 @@ const loadEntriesCore = async () => {
   })
   tableData.value = list
   total.value = t
+  tableRef.value?.clearSelection?.()
+  selectedRows.value = []
 }
 
 const loadEntries = async () => {
@@ -295,7 +325,12 @@ const loadEntries = async () => {
   }
 }
 
-/** 进入页 / 手动刷新：立即转圈，类型与条目并行请求 */
+/** 保存成功后刷新类型 + 列表（由调用方控制 table loading） */
+const reloadAfterMutation = async () => {
+  await Promise.all([loadTypes(), loadEntriesCore()])
+}
+
+/** 进入页 / 手动刷新：全页 loading + 类型与条目并行 */
 const refresh = async () => {
   loading.value = true
   try {
@@ -394,7 +429,13 @@ const handleSubmit = async () => {
       ElMessage.success('已创建')
     }
     dialogVisible.value = false
-    await refresh()
+    submitting.value = false
+    loading.value = true
+    try {
+      await reloadAfterMutation()
+    } finally {
+      loading.value = false
+    }
   } catch (e) {
     ElMessage.error('网络错误')
   } finally {
@@ -411,9 +452,51 @@ const handleDelete = async (id) => {
       return
     }
     ElMessage.success('已删除')
-    await reloadPagedListAfterRemoval({ page, list: tableData, loadData: loadEntries })
+    tableRef.value?.clearSelection?.()
+    selectedRows.value = []
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData: loadEntriesCore })
   } catch {
     ElMessage.error('网络错误')
+  }
+}
+
+const handleBatchDelete = async () => {
+  const rows = selectedRows.value
+  if (!rows.length) {
+    ElMessage.warning('请先勾选要删除的字典项')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${rows.length} 条字典项？删除后不可恢复。`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  const ids = rows.map((r) => r.id).filter((id) => id != null)
+  batchDeleting.value = true
+  try {
+    const res = await fetch(`${API_BASE}/api/sys-dict/entries/batch-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      ElMessage.error(data.error || '批量删除失败')
+      return
+    }
+    const n = Number(data.deletedCount) || 0
+    ElMessage.success(n > 0 ? `已删除 ${n} 条` : '没有可删除的记录')
+    tableRef.value?.clearSelection?.()
+    selectedRows.value = []
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData: loadEntriesCore })
+  } catch {
+    ElMessage.error('网络错误')
+  } finally {
+    batchDeleting.value = false
   }
 }
 

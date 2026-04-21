@@ -38,7 +38,9 @@ initDB()
     ensureSysDictAndMigrate().catch((e2) => console.error('sys_dict migrate:', e2))
   })
 
-/** 系统字典表 + 种子；keywords.type / questions.keyword_type 统一为数字 data_key（01–04） */
+/** 系统字典表 + 种子；keywords.type / questions.keyword_type 统一为数字 data_key（01–06，含对比/价格） */
+const SYS_DICT_RUNTIME_BOOTSTRAP_META = 'sys_dict_runtime_bootstrap_v1'
+
 async function ensureSysDictAndMigrate() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sys_dict (
@@ -53,6 +55,28 @@ async function ensureSysDictAndMigrate() {
       UNIQUE(dict_type, data_key)
     )
   `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sys_dict_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sys_dict_type (
+      dict_type_key VARCHAR(64) PRIMARY KEY,
+      dict_type_value VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `)
+  const bootDone = await pool.query(`SELECT 1 FROM sys_dict_meta WHERE key = $1`, [
+    SYS_DICT_RUNTIME_BOOTSTRAP_META,
+  ])
+  if (bootDone.rows.length > 0) {
+    return
+  }
+
   const dataMigrations = [
     [`UPDATE keywords SET type = '01' WHERE type IN ('品牌','brand')`, []],
     [`UPDATE keywords SET type = '02' WHERE type IN ('产品','product')`, []],
@@ -77,20 +101,51 @@ async function ensureSysDictAndMigrate() {
   } catch (e) {
     console.warn('sys_dict cleanup old keys:', e.message)
   }
+  /**
+   * keyword_type 四条默认种子：历史上每次 API 都执行 INSERT…ON CONFLICT，
+   * 用户删掉某条后下次请求会再 INSERT 缺失行 → SERIAL 拿到新 id，表现为「删一次 id 就变了」。
+   * 改为：仅在库中尚无迁移标记时跑一轮种子（升级/空库各一次），之后不再自动补插被删行，已存在行仍用 ON CONFLICT 只更新文案/排序。
+   */
+  const KEYWORD_TYPE_SEED_META = 'keyword_type_defaults_v1'
+  const seedApplied = await pool.query(`SELECT 1 FROM sys_dict_meta WHERE key = $1`, [
+    KEYWORD_TYPE_SEED_META,
+  ])
   const seeds = [
     ['keyword_type', '01', '品牌词', 10],
     ['keyword_type', '02', '产品词', 20],
     ['keyword_type', '03', '场景词', 30],
     ['keyword_type', '04', '企业词', 40],
   ]
-  for (const [dictType, dataKey, dataValue, sortOrder] of seeds) {
+  if (seedApplied.rows.length === 0) {
+    for (const [dictType, dataKey, dataValue, sortOrder] of seeds) {
+      await pool.query(
+        `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
+         VALUES ($1, $2, $3, $4, true)
+         ON CONFLICT (dict_type, data_key) DO UPDATE SET
+           data_value = EXCLUDED.data_value,
+           sort_order = EXCLUDED.sort_order,
+           enabled = EXCLUDED.enabled`,
+        [dictType, dataKey, dataValue, sortOrder]
+      )
+    }
+    await pool.query(
+      `INSERT INTO sys_dict_meta (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [KEYWORD_TYPE_SEED_META, '1']
+    )
+  }
+  /** 品牌体检抽题等：对比词/价格词（空库与已上线库均 upsert，不依赖 v1 种子是否已跑） */
+  for (const [dictType, dataKey, dataValue, sortOrder] of [
+    ['keyword_type', '05', '对比词', 50],
+    ['keyword_type', '06', '价格词', 60],
+  ]) {
     await pool.query(
       `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
        VALUES ($1, $2, $3, $4, true)
        ON CONFLICT (dict_type, data_key) DO UPDATE SET
          data_value = EXCLUDED.data_value,
          sort_order = EXCLUDED.sort_order,
-         enabled = true`,
+         enabled = EXCLUDED.enabled`,
       [dictType, dataKey, dataValue, sortOrder]
     )
   }
@@ -101,14 +156,6 @@ async function ensureSysDictAndMigrate() {
   }
 
   /** 字典类型元数据：key（英文标识）+ value（中文名），与 sys_dict.dict_type 对齐 */
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS sys_dict_type (
-      dict_type_key VARCHAR(64) PRIMARY KEY,
-      dict_type_value VARCHAR(255) NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `)
   await pool
     .query(
       `INSERT INTO sys_dict_type (dict_type_key, dict_type_value) VALUES ('keyword_type', '关键词类型')
@@ -128,6 +175,12 @@ async function ensureSysDictAndMigrate() {
   await pool
     .query(`UPDATE sys_dict_type SET dict_type_value = '关键词类型' WHERE dict_type_key = 'keyword_type'`)
     .catch(() => {})
+
+  await pool.query(
+    `INSERT INTO sys_dict_meta (key, value) VALUES ($1, $2)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [SYS_DICT_RUNTIME_BOOTSTRAP_META, '1']
+  )
 }
 
 /** 写入或更新字典类型中文名 */
@@ -327,7 +380,7 @@ async function handleCrudTableGet(req, res, table) {
   }
 }
 
-/** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–04） */
+/** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–06） */
 app.get('/api/sys-dict', async (req, res) => {
   try {
     const dictType = req.query.dictType || req.query.type
@@ -534,6 +587,40 @@ app.delete('/api/sys-dict/entries/:id', async (req, res) => {
     res.json({ ok: true, id })
   } catch (err) {
     console.error('sys-dict/entries DELETE:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/** 批量删除字典条目（POST 避免部分代理丢弃 DELETE body） */
+app.post('/api/sys-dict/entries/batch-delete', async (req, res) => {
+  try {
+    await ensureSysDictAndMigrate()
+    const raw = req.body?.ids
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: '请提供非空 ids 数组' })
+    }
+    const MAX_BATCH = 500
+    const ids = [
+      ...new Set(
+        raw
+          .map((x) => parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ]
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'ids 中无有效正整数 id' })
+    }
+    if (ids.length > MAX_BATCH) {
+      return res.status(400).json({ error: `单次最多删除 ${MAX_BATCH} 条` })
+    }
+    const r = await pool.query(`DELETE FROM sys_dict WHERE id = ANY($1::int[]) RETURNING id`, [ids])
+    res.json({
+      ok: true,
+      deletedIds: r.rows.map((row) => row.id),
+      deletedCount: r.rowCount,
+    })
+  } catch (err) {
+    console.error('sys-dict/entries batch-delete:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -1363,12 +1450,14 @@ import geoDetectionRouter from './routes/geoDetection.js';
 import websiteAnalyzerRouter from './routes/websiteAnalyzer.js';
 import aiProxyRouter from './routes/aiProxy.js';
 import fileUploadRouter from './routes/fileUpload.js';
+import geoBrandTaskRouter from './routes/geoBrandTask.js';
 
 app.use('/api', contentGeneratorRouter);
 app.use('/api/minio', fileUploadRouter);
 app.use('/api', geoDetectionRouter);
 app.use('/api', websiteAnalyzerRouter);
 app.use('/api/ai', aiProxyRouter);
+app.use('/api', geoBrandTaskRouter);
 
 // ========== Stub 接口（功能完善后替换为真实实现）==========
 
@@ -1541,43 +1630,77 @@ app.get('/api/geo-health-report', async (req, res) => {
       { key: 'tongyi',   name: '通义千问',   icon: '通', color: '#8B5CF6', simulated: true },
       { key: 'yiyan',    name: '文心一言',   icon: '文', color: '#EF4444', simulated: true },
       { key: 'deepseek', name: 'DeepSeek',  icon: 'D',  color: '#4F46E5', simulated: false },
-      { key: 'zhipu',    name: '智谱清言',   icon: '智', color: '#10B981', simulated: true },
-      { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
+      // { key: 'zhipu',    name: '智谱清言',   icon: '智', color: '#10B981', simulated: true },
+      // { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
     ];
 
+    /** 矩阵词条：核心词 4 档；其余路径 5 档。假数据阶段写死格子，避免每次请求变化。 */
+    const FIXED_MATRIX_DATA = {
+      core: {
+        kimi: 'second',
+        doubao: 'second',
+        yuanbao: 'not_priority',
+        tongyi: 'none',
+        yiyan: 'not_priority',
+        deepseek: 'precise',
+      },
+      scene: {
+        kimi: 'mid_tier',
+        doubao: 'head_tier',
+        yuanbao: 'mid_tier',
+        tongyi: 'rank_tail',
+        yiyan: 'mid_tier',
+        deepseek: 'industry_first',
+      },
+      compare: {
+        kimi: 'rank_tail',
+        doubao: 'head_tier',
+        yuanbao: 'mid_tier',
+        tongyi: 'none',
+        yiyan: 'rank_tail',
+        deepseek: 'industry_first',
+      },
+      feature: {
+        kimi: 'mid_tier',
+        doubao: 'head_tier',
+        yuanbao: 'rank_tail',
+        tongyi: 'mid_tier',
+        yiyan: 'head_tier',
+        deepseek: 'industry_first',
+      },
+      price: {
+        kimi: 'rank_tail',
+        doubao: 'mid_tier',
+        yuanbao: 'rank_tail',
+        tongyi: 'none',
+        yiyan: 'mid_tier',
+        deepseek: 'head_tier',
+      },
+    };
+
     const matrixData = {};
-    intentPaths.forEach((path, pi) => {
+    intentPaths.forEach((path) => {
       matrixData[path.key] = {};
+      const row = FIXED_MATRIX_DATA[path.key] || {};
       for (const plat of platforms) {
-        const platMatches = detections
-          .filter((d) => d.platform && String(d.platform).toLowerCase().includes(plat.key.toLowerCase()))
-          .sort((a, b) => new Date(b.checkedAt || b.checked_at || 0) - new Date(a.checkedAt || a.checked_at || 0));
-        const d = platMatches.length ? platMatches[pi % platMatches.length] : null;
-        if (!d) {
-          matrixData[path.key][plat.key] = 'none';
-          continue;
-        }
-        const score = d.score || 0;
-        const sum = String(d.summary || '');
-        const sumL = sum.toLowerCase();
-        const brandPiece = brandKwNorm.slice(0, Math.min(6, brandKwNorm.length));
-        const competitorHint = /竞品|平替|不如|相较|更推荐|建议选择|首选/i.test(sum)
-          && (!brandPiece || !sumL.includes(brandPiece));
-        let cell = 'none';
-        if (!d.visible || score === 0) cell = 'none';
-        else if (score >= 80) cell = 'top1';
-        else if (score >= 60) cell = 'top2';
-        else if (competitorHint && score >= 15 && score < 60) cell = 'competitor';
-        else if (score >= 30) cell = 'mention';
-        else cell = 'none';
-        matrixData[path.key][plat.key] = cell;
+        matrixData[path.key][plat.key] = row[plat.key] ?? 'none';
       }
     });
 
     const clamp100 = (n) => Math.min(100, Math.max(0, Math.round(n)));
 
+    /** 综合得分展示顺序：DeepSeek 第一、豆包第二，其余随意（前端按 score 降序） */
+    const MV_SCORE_FIXED = {
+      deepseek: 92,
+      doubao: 86,
+      kimi: 78,
+      yuanbao: 74,
+      tongyi: 70,
+      yiyan: 66,
+    };
+
     // 各平台大模型可见度卡片（矩阵列 + 该平台检测均分）
-    const modelVisibilityCards = platforms.map((plat) => {
+    let modelVisibilityCards = platforms.map((plat) => {
       const pk = plat.key;
       let top1 = 0;
       let top2 = 0;
@@ -1586,11 +1709,18 @@ app.get('/api/geo-health-report', async (req, res) => {
       let none = 0;
       for (const path of intentPaths) {
         const v = matrixData[path.key]?.[pk];
-        if (v === 'top1') top1++;
-        else if (v === 'top2') top2++;
-        else if (v === 'mention') mention++;
-        else if (v === 'competitor') comp++;
-        else none++;
+        if (path.key === 'core') {
+          if (v === 'precise') top1++;
+          else if (v === 'second') top2++;
+          else if (v === 'not_priority') comp++;
+          else none++;
+        } else {
+          if (v === 'industry_first') top1++;
+          else if (v === 'head_tier') top2++;
+          else if (v === 'mid_tier') mention++;
+          else if (v === 'rank_tail') comp++;
+          else none++;
+        }
       }
       const nPaths = intentPaths.length || 1;
       const platRows = detections.filter(
@@ -1652,6 +1782,20 @@ app.get('/api/geo-health-report', async (req, res) => {
       };
     });
 
+    modelVisibilityCards = modelVisibilityCards.map((c) => {
+      const score = MV_SCORE_FIXED[c.platformKey] ?? c.score;
+      let status = 'high';
+      let statusText = '高风险';
+      if (score >= 70) {
+        status = 'good';
+        statusText = '表现良好';
+      } else if (score >= 45) {
+        status = 'mid';
+        statusText = '待加强';
+      }
+      return { ...c, score, status, statusText };
+    });
+
     // 8. 兼容占位：六维情绪（无随机数，由 KPI 推导，前端词云为主）
     const emotionData = [
       clamp100(interceptRate + 8),
@@ -1662,33 +1806,29 @@ app.get('/api/geo-health-report', async (req, res) => {
       clamp100((interceptRate + (100 - blindIndex)) / 2),
     ];
 
-    // —— 模块 C：竞品提及、上下文标签、触发词 ——
-    const compPhraseRe = /(?:推荐|首选|建议选择|更推荐|建议使用|不妨尝试)[：:\s「『]*([^。，,\n；;\r]{2,16})/g;
-    const compCounts = new Map();
-    for (const d of detections) {
-      const text = String(d.summary || '');
-      let m;
-      const re = new RegExp(compPhraseRe.source, 'g');
-      while ((m = re.exec(text)) !== null) {
-        let phrase = (m[1] || '').trim().replace(/^["'「『]|["'」』]$/g, '');
-        if (phrase.length < 2 || phrase.length > 18) continue;
-        const pn = normKw(phrase);
-        if (brandKwNorm && (pn === brandKwNorm || pn.includes(brandKwNorm) || brandKwNorm.includes(pn))) continue;
-        compCounts.set(phrase, (compCounts.get(phrase) || 0) + 1);
-      }
-    }
-    const compTotal = [...compCounts.values()].reduce((a, b) => a + b, 0);
-    const sortedPhrases = [...compCounts.entries()].sort((a, b) => b[1] - a[1]);
-    const countA = sortedPhrases[0]?.[1] ?? 0;
-    const countB = sortedPhrases[1]?.[1] ?? 0;
-    const countOther = Math.max(0, compTotal - countA - countB);
-    const compPct = (n) => (compTotal > 0 ? Math.round((n / compTotal) * 100) : 0);
-
-    const competitorMentions = [
-      { name: '竞品A（ChatGPT等）', count: countA, pct: compPct(countA), barTone: 'primary' },
-      { name: '竞品B（Claude等）', count: countB, pct: compPct(countB), barTone: 'primary' },
-      { name: '其他平替', count: countOther, pct: compPct(countOther), barTone: 'muted' },
+    // —— 模块 C：竞品拦截诊断（三条横条：只改 count，占比由次数合计自动计算）——
+    const competitorMentionRows = [
+      { name: '竞品A', count: 12, barTone: 'primary' },
+      { name: '竞品B', count: 8, barTone: 'primary' },
+      { name: '竞品C', count: 7, barTone: 'primary' },
     ];
+    const compMentionTotal = competitorMentionRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+    let compMentionPcts =
+      compMentionTotal > 0
+        ? competitorMentionRows.map((r) =>
+            Math.round(((Number(r.count) || 0) / compMentionTotal) * 100)
+          )
+        : competitorMentionRows.map(() => 0);
+    const compPctDrift = 100 - compMentionPcts.reduce((a, b) => a + b, 0);
+    if (compMentionTotal > 0 && compPctDrift !== 0 && compMentionPcts.length) {
+      compMentionPcts[compMentionPcts.length - 1] += compPctDrift;
+    }
+    const competitorMentions = competitorMentionRows.map((r, i) => ({
+      name: r.name,
+      count: r.count,
+      barTone: r.barTone,
+      pct: compMentionPcts[i],
+    }));
 
     const ctxKeys = ['平替', '对比', '性价比', '口碑', '首选', '免费', '多模态', '代码能力'];
     const contextTags = ctxKeys
@@ -1763,26 +1903,105 @@ app.get('/api/geo-health-report', async (req, res) => {
       });
     const lossTriggerTags = [...curatedTriggers, ...fromBi].slice(0, 8);
 
-    // —— 模块 D：词云 ——
-    const posHints = ['强', '优', '好', '深', '佳', '高', '快', '省', '开源', '中文', '性价比', '推理', '优异', '理解', '便宜'];
-    const negHints = ['差', '弱', '缺', '慢', '贵', '限', '待', '问题', '排队', '暂缺', '不足', '危机', '漏洞', '投诉'];
-    const triCounts = new Map();
-    for (const d of detections) {
-      const s = String(d.summary || '').replace(/\s/g, '');
-      for (const segLen of [2, 3]) {
-        for (let i = 0; i <= s.length - segLen; i++) {
-          const w = s.slice(i, i + segLen);
-          if (!/^[\u4e00-\u9fff]+$/.test(w)) continue;
-          triCounts.set(w, (triCounts.get(w) || 0) + 1);
+    // —— 模块 D：词云（价值向短语 + 分句 + 每条摘要内去重 + 子串去冗，避免笼统二字词与重复片段）——
+    const posHints = ['强', '优', '好', '深', '佳', '高', '快', '省', '开源', '中文', '性价比', '推理', '优异', '理解', '便宜', '免费', '便捷', '稳定', '准确', '智能', '高效', '安全', '流畅', '专业'];
+    const negHints = ['差', '弱', '缺', '慢', '贵', '限', '待', '问题', '排队', '暂缺', '不足', '危机', '漏洞', '投诉', '失败', '风险', '延迟', '卡顿', '错误'];
+    const CLOUD_STOP_BIGRAM = new Set([
+      '可以', '能够', '进行', '使用', '用户', '产品', '这个', '一个', '没有', '但是', '如果', '或者', '以及', '目前', '方面', '相关', '需要', '可能', '非常', '比较', '同样', '主要', '作为', '由于', '为了', '所有', '而且', '所以', '只是', '这样', '这种', '那么', '虽然', '还是', '不是', '通过', '基于', '其中', '例如', '一般', '通常', '建议', '推荐', '选择', '因此', '同时', '此外', '另外', '具有', '拥有', '采用', '包括', '提供', '然后', '因为', '不会', '已经', '什么', '怎么', '如何', '哪些', '是否', '应当', '应该', '最好', '方便', '简单', '一些', '一种', '一次', '一样', '一直', '一点', '一定',
+    ]);
+    const CLOUD_STOP_PREFIX = new Set(['可以', '能够', '进行', '使用', '这个', '一个', '如果', '或者', '以及', '通过', '基于', '例如', '建议', '推荐', '选择', '什么', '怎么', '如何', '是否', '需要', '可能', '非常', '比较', '主要', '所有', '而且', '因此', '同时', '此外', '另外', '具有', '拥有', '采用', '包括', '提供', '然后', '因为', '所以', '不会', '已经', '同样', '作为', '由于', '为了', '只是', '这样', '这种', '那么', '虽然', '还是', '不是', '其中', '一般', '通常', '应当', '应该', '最好', '方便', '简单', '相关', '方面', '目前', '用户', '产品', '但是', '没有', '比较', '非常']);
+
+    const extractWordCloudPhrases = (summary) => {
+      const raw = String(summary || '').trim();
+      if (!raw) return [];
+      const out = new Set();
+      const clauses = raw
+        .split(/[。！？；;、\n\r]+/)
+        .map((x) => x.replace(/[\s\u3000]+/g, '').trim())
+        .filter((x) => x.length >= 4);
+
+      const pushPhrase = (t) => {
+        const w = String(t || '')
+          .replace(/[「」『』"“”'']/g, '')
+          .replace(/^的+|的$/g, '');
+        if (w.length < 3 || w.length > 16) return;
+        if (/^[\u4e00-\u9fff]+$/.test(w) && CLOUD_STOP_PREFIX.has(w.slice(0, 2))) return;
+        if (/^[\u4e00-\u9fff]+$/.test(w)) out.add(w);
+      };
+
+      const benefitRes = [
+        /(?:支持|内置|集成|搭载|具备|提供|实现|拥有)([^。，！？；、\s]{2,12})/g,
+        /(?:免费|免注册|无需|不限|一键|自动|实时|极速|超低|无损|离线|本地)([^。，！？；、\s]{0,10})/g,
+        /(?:省流|省内存|省时间|更省|更快|更准|更强|更稳|更易)([^。，！？；、\s]{0,6})?/g,
+        /([^。，！？；、\s]{2,8})(?:功能|体验|服务|模式|助手|模型|版本|套餐|权益|优惠|折扣|试用)/g,
+        /(?:性价比|准确率|响应速度|推理能力|上下文|多模态|开源|本地化|私有化)([^。，！？；、\s]{0,6})?/g,
+        /(?:优势在于|亮点是|特点是|特别适合|解决了|避免了)([^。，！？；、\s]{2,12})/g,
+        /(?:赠送|限时|折扣|试用|升级至|解锁)([^。，！？；、\s]{0,10})/g,
+      ];
+
+      for (const c of clauses) {
+        for (const re of benefitRes) {
+          re.lastIndex = 0;
+          let m;
+          while ((m = re.exec(c)) !== null) {
+            const g1 = (m[1] || '').trim();
+            if (g1.length >= 2) pushPhrase(g1);
+            const full = String(m[0] || '').replace(/[「」『』"“”]/g, '');
+            if (full.length >= 4 && full.length <= 16 && /^[\u4e00-\u9fff]+$/.test(full)) pushPhrase(full);
+          }
+        }
+        if (c.length >= 5 && c.length <= 14 && /^[\u4e00-\u9fff]+$/.test(c)) {
+          let bad = 0;
+          for (let i = 0; i + 2 <= c.length; i++) {
+            if (CLOUD_STOP_BIGRAM.has(c.slice(i, i + 2))) bad++;
+          }
+          if (bad < c.length * 0.55) pushPhrase(c);
         }
       }
+
+      const enRe = /\b[a-z][a-z0-9][a-z0-9+.-]{2,12}\b/gi;
+      let em;
+      while ((em = enRe.exec(raw)) !== null) {
+        const t = em[0];
+        if (/^(the|and|for|com|org|www|http|src)$/i.test(t)) continue;
+        out.add(t);
+      }
+      return [...out];
+    };
+
+    const phraseDocCount = new Map();
+    for (const d of detections) {
+      const phrases = extractWordCloudPhrases(d.summary);
+      const oncePerDoc = new Set(phrases);
+      for (const p of oncePerDoc) phraseDocCount.set(p, (phraseDocCount.get(p) || 0) + 1);
     }
-    const cloudTop = [...triCounts.entries()]
-      .filter(([, c]) => c >= 2)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 28);
-    const maxW = cloudTop.length ? cloudTop[0][1] : 1;
-    const sentimentWordCloud = cloudTop.map(([text, c]) => {
+
+    const rankedPhrases = [...phraseDocCount.entries()].filter(([t, c]) => {
+      if (c < 1) return false;
+      if (t.length < 3) return false;
+      if (t.length === 3 && c < 2) return false;
+      if (/^[\u4e00-\u9fff]+$/.test(t) && CLOUD_STOP_BIGRAM.has(t)) return false;
+      return true;
+    });
+
+    const pickDiversePhrases = (entries, limit) => {
+      const sorted = [...entries].sort((a, b) => b[1] - a[1] || b[0].length - a[0].length);
+      const picked = [];
+      for (const [w, c] of sorted) {
+        if (picked.some((x) => x.text === w)) continue;
+        if (picked.some((x) => x.text.includes(w) && x.text.length > w.length)) continue;
+        for (let i = picked.length - 1; i >= 0; i--) {
+          if (w.includes(picked[i].text) && w.length > picked[i].text.length) picked.splice(i, 1);
+        }
+        picked.push({ text: w, c });
+        if (picked.length >= limit) break;
+      }
+      return picked;
+    };
+
+    const cloudTop = pickDiversePhrases(rankedPhrases, 28);
+    const maxW = cloudTop.length ? Math.max(...cloudTop.map((x) => x.c), 1) : 1;
+    const sentimentWordCloud = cloudTop.map(({ text, c }) => {
       let polarity = 'neutral';
       if (negHints.some((h) => text.includes(h))) polarity = 'negative';
       else if (posHints.some((h) => text.includes(h))) polarity = 'positive';
@@ -1793,10 +2012,10 @@ app.get('/api/geo-health-report', async (req, res) => {
     let matrixCompetitorCells = 0;
     for (const pk of Object.keys(matrixData)) {
       for (const ck of Object.keys(matrixData[pk] || {})) {
-        if (matrixData[pk][ck] === 'competitor') matrixCompetitorCells++;
+        const cell = matrixData[pk][ck];
+        if (cell === 'rank_tail' || cell === 'not_priority') matrixCompetitorCells++;
       }
     }
-    const compTopHits = competitorMentions[0]?.count || 0;
     const diagnosticSuggestions = [];
     let seq = 1;
     if (blindIndex >= 50) {
@@ -1811,7 +2030,7 @@ app.get('/api/geo-health-report', async (req, res) => {
         ],
       });
     }
-    if (matrixCompetitorCells >= 4 || compTopHits >= 8) {
+    if (matrixCompetitorCells >= 4) {
       diagnosticSuggestions.push({
         id: String(seq++),
         accent: 'orange',

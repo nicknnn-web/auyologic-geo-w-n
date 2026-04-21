@@ -7,6 +7,7 @@
       :page-sizes="[10, 20, 50, 100]"
       layout="total, sizes, prev, pager, next, jumper"
       background
+      :disabled="disabled"
       @current-change="() => emit('change')"
       @size-change="onSizeChange"
     />
@@ -16,6 +17,8 @@
 <script setup>
 defineProps({
   total: { type: Number, default: 0 },
+  /** 列表同步等场景下禁止翻页 */
+  disabled: { type: Boolean, default: false },
 })
 
 const pageModel = defineModel('page', { type: Number, default: 1 })

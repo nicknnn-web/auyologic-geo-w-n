@@ -40,15 +40,23 @@
           清空全部
         </el-button>
         <el-button
-          type="success"
+          type="warning"
           class="ml-0"
-          @click="handleAIExpand"
-          :loading="isLoading"
-          :disabled="isLoading"
+          @click="openGeoDialog"
         >
-          <el-icon class="mr-1" v-if="!isLoading"><MagicStick /></el-icon>
-          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : (selectedRows.length === 1 ? 'AI改写问题' : 'AI拓展问题')) }}
+          <el-icon class="mr-1"><Promotion /></el-icon>
+          GEO问题生成
         </el-button>
+<!--        <el-button-->
+<!--          type="success"-->
+<!--          class="ml-0"-->
+<!--          @click="handleAIExpand"-->
+<!--          :loading="isLoading"-->
+<!--          :disabled="isLoading"-->
+<!--        >-->
+<!--          <el-icon class="mr-1" v-if="!isLoading"><MagicStick /></el-icon>-->
+<!--          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : (selectedRows.length === 1 ? 'AI改写问题' : 'AI拓展问题')) }}-->
+<!--        </el-button>-->
         <el-button type="primary" class="ml-0" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>
           手动添加
@@ -149,14 +157,117 @@
         <el-button type="primary" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="geoDialogVisible"
+      title="GEO问题生成"
+      width="520px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!geoGenerating"
+      :show-close="!geoGenerating"
+    >
+      <el-form v-loading="geoPrefillLoading" element-loading-text="正在从数据库读取企业信息…" :model="geoForm" label-width="110px">
+        <el-form-item label="品牌名称" required>
+          <el-input v-model="geoForm.brand" placeholder="请输入品牌名称" maxlength="50" show-word-limit />
+        </el-form-item>
+        <el-form-item label="销售产品" required>
+          <el-input
+            v-model="geoForm.product"
+            type="textarea"
+            :rows="3"
+            placeholder="默认从数据库读取「品牌简介」，可按需改写成具体产品/服务类型"
+            maxlength="300"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item label="客户群体描述" required>
+          <el-input
+            v-model="geoForm.targetCustomer"
+            type="textarea"
+            :rows="3"
+            placeholder="请描述目标客户群体（行业/规模/画像等）"
+            maxlength="300"
+            show-word-limit
+          />
+        </el-form-item>
+        <div v-if="geoGenerating" class="text-xs text-gray-500" style="margin-left:110px;">
+          正在调用 DeepSeek 生成 50 个 GEO 问题，预计 20-40 秒，请耐心等待...
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="geoDialogVisible = false" :disabled="geoGenerating">取消</el-button>
+        <el-button type="primary" :loading="geoGenerating" :disabled="geoPrefillLoading" @click="submitGeoGenerate">
+          {{ geoGenerating ? '生成中...' : '确定' }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="geoResultDialogVisible"
+      title="GEO问题生成结果"
+      width="880px"
+      :close-on-click-modal="false"
+      top="6vh"
+      @closed="onGeoResultDialogClosed"
+    >
+      <div class="flex items-center mb-2" style="gap:8px;flex-wrap:wrap;">
+        <span class="text-sm text-gray-500">
+          共 {{ generatedQuestions.length }} 条，按类型分组排序，勾选后点「确定入库」保存到问题库
+        </span>
+        <span class="ml-auto text-sm" style="color:#409eff;">
+          已选 {{ geoSelectedGenerated.length }} / {{ generatedQuestions.length }}
+        </span>
+      </div>
+      <div class="mb-2" style="display:flex;gap:8px;flex-wrap:wrap;">
+        <el-button size="small" @click="selectAllGenerated">全选</el-button>
+        <el-button size="small" @click="clearSelectedGenerated">清空选择</el-button>
+        <el-button
+          v-for="grp in generatedGroups"
+          :key="grp.typeKey"
+          size="small"
+          plain
+          @click="selectGeoGroup(grp.typeKey)"
+        >
+          勾选「{{ grp.label }}」（{{ grp.rows.length }}）
+        </el-button>
+      </div>
+      <el-table
+        ref="geoResultTableRef"
+        :data="generatedQuestions"
+        style="width: 100%"
+        height="480"
+        row-key="id"
+        @selection-change="onGeoSelectionChange"
+      >
+        <el-table-column type="selection" width="50" />
+        <el-table-column label="序号" width="70" align="center">
+          <template #default="{ $index }">{{ $index + 1 }}</template>
+        </el-table-column>
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">
+            <el-tag :type="getTypeColor(row.typeKey)">{{ keywordTypeLabel(row.typeKey) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="question" label="问题内容" />
+      </el-table>
+      <template #footer>
+        <el-button @click="geoResultDialogVisible = false" :disabled="geoSaving">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="geoSaving"
+          :disabled="geoSelectedGenerated.length === 0"
+          @click="saveGeoSelected"
+        >确定入库（{{ geoSelectedGenerated.length }}）</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, MagicStick, SortUp, SortDown, Rank, Delete } from '@element-plus/icons-vue'
+import { Plus, MagicStick, SortUp, SortDown, Rank, Delete, Promotion } from '@element-plus/icons-vue'
 import {
   fetchDictList,
   normalizeKeywordTypeKey,
@@ -452,7 +563,7 @@ const buildEnterpriseContext = (searchKeywords = []) => {
 // 根据关键词类型生成对应的 prompt（加入企业上下文 + 去重 + 真实搜索行为）
 const generatePrompt = (keyword, type, enterpriseContext, existingQuestions = []) => {
   // 构建已有问题约束
-  const existingConstraint = existingQuestions.length > 0 
+  const existingConstraint = existingQuestions.length > 0
     ? `\n已有类似问题（请生成不同角度的，不要重复）：
 ${existingQuestions.join('、')}`
     : ''
@@ -461,7 +572,7 @@ ${existingQuestions.join('、')}`
   const searchBehaviorConstraint = `
 \n\n真实用户搜索行为特点（必须遵守）：
 - 口语化、碎片化（如"xxx怎么样"、"xxx好用吗"）
-- 带情绪（如"xxx坑不坑"、"xxx值不值"）  
+- 带情绪（如"xxx坑不坑"、"xxx值不值"）
 - 决策导向（如"xxx和xxx哪个好"、"xxx推荐"）
 - 问题简短（不超过20字）
 - 禁止写成正式提问（如"请分析xxx的优缺点"）`
@@ -515,7 +626,7 @@ const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
   const existingQuestions = allForDedupe
     .filter((q) => q.sourceKeyword === keyword)
     .map((q) => q.question)
-  
+
   // 先读取企业信息，构建上下文
   const enterpriseContext = buildEnterpriseContext(searchKeywords)
   const prompt = generatePrompt(keyword, type, enterpriseContext, existingQuestions)
@@ -645,7 +756,7 @@ const handleAIExpand = async () => {
   let keywords
   if (route.query.keywordIds) {
     const ids = route.query.keywordIds.split(',').map(Number)
-    
+
     // 优先从 API 获取关键词
     try {
       const allKeywords = await fetchAllPages(
@@ -656,7 +767,7 @@ const handleAIExpand = async () => {
     } catch (e) {
       console.warn('从 API 获取关键词失败，尝试从 localStorage', e)
     }
-    
+
     // 如果 API 失败，报错提示
     if (!keywords || keywords.length === 0) {
       ElMessage.error('无法加载关键词，请检查网络')
@@ -686,11 +797,11 @@ const handleAIExpand = async () => {
   // ===== Step 1: AI分析企业画像 =====
   const enterprise = getEnterpriseSettings()
   let searchKeywords = []
-  
+
   isLoading.value = true
   isSearching.value = true
   searchStatusText.value = '🔍 正在分析企业属性（预计5-10秒）...'
-  
+
   try {
     searchKeywords = await Promise.race([
       analyzeEnterpriseProfileForQuestions(
@@ -711,7 +822,7 @@ const handleAIExpand = async () => {
     searchStatusText.value = '⚠️ AI分析失败，将基于表单描述生成问题'
     searchKeywords = []
   }
-  
+
   // 等待一下让用户看到分析状态
   await new Promise(r => setTimeout(r, 800))
   isSearching.value = false
@@ -745,7 +856,7 @@ const handleAIExpand = async () => {
             sourceKeyword: kw.keyword,
             status: '待审核'
           }
-          
+
           const userId = 'default_user'
           try {
             const res = await fetch(`${API_BASE_URL}/api/questions`, {
@@ -794,13 +905,13 @@ const cycleStatus = async (row) => {
   const currentIndex = statusOrder.indexOf(row.status)
   const nextIndex = (currentIndex + 1) % statusOrder.length
   const newStatus = statusOrder[nextIndex]
-  
+
   const userId = 'default_user'
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
       method: 'PUT',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'x-user-id': userId
       },
@@ -809,7 +920,7 @@ const cycleStatus = async (row) => {
   } catch (e) {
     console.warn('同步到后端失败:', e)
   }
-  
+
   row.status = newStatus
   await loadData()
   ElMessage.success('状态已更新')
@@ -823,13 +934,13 @@ const cycleKeywordType = async (row) => {
   if (currentIndex < 0) currentIndex = -1
   const nextIndex = (currentIndex + 1) % typeOrder.length
   const newType = typeOrder[nextIndex]
-  
+
   const userId = 'default_user'
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
       method: 'PUT',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'x-user-id': userId
       },
@@ -838,7 +949,7 @@ const cycleKeywordType = async (row) => {
   } catch (e) {
     console.warn('同步到后端失败:', e)
   }
-  
+
   row.keywordType = newType
   await loadData()
   ElMessage.success('关键词类型已更新')
@@ -851,7 +962,7 @@ const handleSelectionChange = (selection) => {
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   const userId = 'default_user'
-  
+
   // 同步删除后端
   const idsToDelete = selectedRows.value.map(r => r.id)
   for (const row of selectedRows.value) {
@@ -933,7 +1044,7 @@ const handleSubmit = async () => {
     ElMessage.warning('该问题已存在')
     return
   }
-  
+
   const userId = 'default_user'
   const newItem = {
     question: form.value.question,
@@ -941,7 +1052,7 @@ const handleSubmit = async () => {
     sourceKeyword: '-',
     status: '待审核'
   }
-  
+
   // 同步到后端
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions`, {
@@ -981,6 +1092,347 @@ const handleDelete = async (id) => {
   }
   await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   ElMessage.success('删除成功')
+}
+
+// ===================== GEO 问题生成 =====================
+const geoDialogVisible = ref(false)
+const geoGenerating = ref(false)
+const geoPrefillLoading = ref(false)
+const geoForm = ref({ brand: '', product: '', targetCustomer: '' })
+
+const geoResultDialogVisible = ref(false)
+const geoResultTableRef = ref(null)
+const generatedQuestions = ref([])
+const geoSelectedGenerated = ref([])
+const geoSaving = ref(false)
+
+// 生成问题按 typeKey 分组（用于「批量勾选某类型」按钮）
+const generatedGroups = computed(() => {
+  const map = new Map()
+  for (const row of generatedQuestions.value) {
+    if (!map.has(row.typeKey)) {
+      map.set(row.typeKey, { typeKey: row.typeKey, label: keywordTypeLabel(row.typeKey), rows: [] })
+    }
+    map.get(row.typeKey).rows.push(row)
+  }
+  return Array.from(map.values())
+})
+
+// deepseek 返回的 type 到字典 keyword_type 的映射
+const GEO_TYPE_TO_ZH = {
+  brand: '品牌',
+  product: '产品',
+  scenario: '场景',
+  enterprise: '企业',
+  price: '价格',
+}
+const GEO_TYPE_FALLBACK_KEY = {
+  brand: '01',
+  product: '02',
+  scenario: '03',
+  enterprise: '04',
+  price: '06',
+}
+
+const resolveGeoTypeToDictKey = (geoType) => {
+  const t = String(geoType || '').toLowerCase().trim()
+  const zh = GEO_TYPE_TO_ZH[t]
+  if (zh) {
+    const row = keywordTypeOptions.value.find((x) => String(x.dataValue || '').includes(zh))
+    if (row?.dataKey) return row.dataKey
+  }
+  return GEO_TYPE_FALLBACK_KEY[t] || '02'
+}
+
+/** 从数据库 users（default_user）读取企业信息，对应 GET /api/settings */
+const fetchEnterpriseSettingsFromDb = async () => {
+  const res = await fetch(`${API_BASE_URL}/api/settings`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+const openGeoDialog = async () => {
+  geoDialogVisible.value = true
+  geoPrefillLoading.value = true
+  geoForm.value = { brand: '', product: '', targetCustomer: '' }
+  const local = getEnterpriseSettings()
+  try {
+    const row = await fetchEnterpriseSettingsFromDb()
+    const brand =
+      String(row?.company_name ?? '').trim() ||
+      String(local.name ?? '').trim()
+    const product =
+      String(row?.description ?? '').trim() ||
+      String(local.description ?? '').trim()
+    const targetCustomer =
+      String(row?.target_audience ?? row?.targetAudience ?? '').trim() ||
+      String(local.targetAudience ?? '').trim()
+    geoForm.value = { brand, product, targetCustomer }
+    if (!row && !brand && !product && !targetCustomer) {
+      ElMessage.warning('未读取到企业信息：请检查网络，或先在「企业信息」页保存后再试')
+    } else if (row && !brand && !product && !targetCustomer) {
+      ElMessage.info('数据库中企业信息为空，请在「企业信息」保存后重试，或手动填写下方表单')
+    }
+  } catch (e) {
+    console.warn('[GEO] 读取 /api/settings 失败，回退本地缓存', e)
+    geoForm.value = {
+      brand: String(local.name || '').trim(),
+      product: String(local.description || '').trim(),
+      targetCustomer: String(local.targetAudience || '').trim(),
+    }
+    ElMessage.warning('无法连接服务端读取企业信息，已使用本机缓存（若有）')
+  } finally {
+    geoPrefillLoading.value = false
+  }
+}
+
+const buildGeoPrompt = ({ brand, product, targetCustomer }) => `【角色定义】
+你是一个"AI搜索行为建模专家 + 竞品分析专家 + GEO优化专家"。
+
+【任务说明】
+你的任务是：在接收到具体输入参数后，才开始生成用户问题。
+⚠️ 在未收到输入参数前，禁止进行任何推理、生成或示例输出。
+
+---
+
+【输入参数（必须提供后才执行）】
+- 我是谁：${brand}（品牌名称）
+- 我卖什么：${product}（产品类型）
+- 我卖给谁：${targetCustomer}（目标客户）
+
+---
+
+【执行流程】
+
+Step 1：竞品推断
+- 如果未提供竞品，请自动推断 3-5 个同赛道竞品
+
+Step 2：问题生成
+- 基于"品牌 + 产品 + 客户 + 竞品"生成 50 个问题
+
+---
+
+【问题分类要求（必须满足）】
+
+每类10个：
+
+1. price（价格类：针对性价比提问 影响决策）
+2. brand（品牌类：针对品牌提问，基本不会询问竞品）
+3. product（产品类：针对功能提问）
+4. scenario（场景类：针对需求提问）
+5. enterprise（企业类：针对竞品提问 对比提问）
+
+---
+
+【生成规则（严格执行）】
+
+- 必须是"真实用户问AI"的语气
+- 至少30%问题不能出现品牌名
+- 至少40%问题包含竞品对比
+- 对比问题必须出现2-3个竞品
+- 必须具备"引导AI推荐"的倾向
+- 包含口语化、长尾、决策型问题
+- 禁止重复或模板化
+- 禁止出现：你们{{品牌名}} 防止这种直接向品牌对话的问题
+- 禁止出现：AI能不能，AI帮我，AI你觉得
+- 除了品牌类和企业类问题可以出现品牌名称 其他类型应该是开放问题不出现具体品牌指向
+---
+
+【输出格式要求】
+
+⚠️ 以下仅为格式定义，不是示例数据
+⚠️ 禁止照抄或填充示例内容
+
+最终输出必须是 JSON，结构如下：
+
+{
+  "brand": "<string>",
+  "competitors": ["<string>"],
+  "questions": [
+    {
+      "type": "<price|brand|product|scenario|enterprise>",
+      "question": "<string>"
+    }
+  ]
+}
+
+---
+
+【强制约束】
+
+- 未提供输入参数时：只回复 "请提供输入参数"
+- 必须返回合法 JSON
+- 禁止输出解释、说明、示例
+- 问题数量必须 = 50
+- 每个问题必须包含 type 字段
+- 不允许输出任何占位符（如 {{brand}}）`
+
+const extractGeoJson = (text) => {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const candidate = fenceMatch ? fenceMatch[1].trim() : raw
+  try {
+    return JSON.parse(candidate)
+  } catch {
+    const s = candidate.indexOf('{')
+    const e = candidate.lastIndexOf('}')
+    if (s >= 0 && e > s) {
+      try { return JSON.parse(candidate.slice(s, e + 1)) } catch { return null }
+    }
+    return null
+  }
+}
+
+const submitGeoGenerate = async () => {
+  const brand = (geoForm.value.brand || '').trim()
+  const product = (geoForm.value.product || '').trim()
+  const targetCustomer = (geoForm.value.targetCustomer || '').trim()
+  if (!brand || !product || !targetCustomer) {
+    ElMessage.warning('请完整填写：品牌名称 / 销售产品 / 客户群体描述')
+    return
+  }
+
+  geoGenerating.value = true
+  // 开始新一轮生成前，先彻底清空上一次的内存数据与 el-table 选择集
+  generatedQuestions.value = []
+  geoSelectedGenerated.value = []
+  if (geoResultTableRef.value) {
+    try { geoResultTableRef.value.clearSelection() } catch {}
+  }
+  try {
+    const prompt = buildGeoPrompt({ brand, product, targetCustomer })
+    const res = await fetch(AI_PROXY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        prompt,
+        temperature: 0.7,
+        max_tokens: 6000,
+      }),
+    })
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '')
+      throw new Error(`AI请求失败（${res.status}）${txt.slice(0, 120)}`)
+    }
+    const data = await res.json()
+    const parsed = extractGeoJson(data?.content)
+    const list = Array.isArray(parsed?.questions) ? parsed.questions : []
+    if (list.length === 0) {
+      ElMessage.error('未能解析到问题，请检查模型返回或稍后重试')
+      return
+    }
+
+    const seen = new Set()
+    const rows = []
+    list.forEach((item, idx) => {
+      const q = String(item?.question || '').trim()
+      const t = String(item?.type || '').toLowerCase().trim()
+      if (!q || seen.has(q)) return
+      seen.add(q)
+      rows.push({
+        id: `geo-${Date.now()}-${idx}`,
+        geoType: t,
+        typeKey: resolveGeoTypeToDictKey(t),
+        question: q,
+      })
+    })
+    rows.sort((a, b) => {
+      if (a.typeKey !== b.typeKey) return String(a.typeKey).localeCompare(String(b.typeKey))
+      return String(a.question).localeCompare(String(b.question), 'zh-CN')
+    })
+
+    generatedQuestions.value = rows
+    geoSelectedGenerated.value = []
+    geoDialogVisible.value = false
+    geoResultDialogVisible.value = true
+    // 等 dialog + table 渲染完成后再默认全选，避免与上次选择集叠加
+    await nextTick()
+    if (geoResultTableRef.value) {
+      geoResultTableRef.value.clearSelection()
+      selectAllGenerated()
+    }
+    ElMessage.success(`已生成 ${rows.length} 条问题`)
+  } catch (e) {
+    console.error('GEO 问题生成失败:', e)
+    ElMessage.error(e?.message || '生成失败，请稍后重试')
+  } finally {
+    geoGenerating.value = false
+  }
+}
+
+const onGeoSelectionChange = (sel) => {
+  geoSelectedGenerated.value = sel
+}
+
+const onGeoResultDialogClosed = () => {
+  if (geoResultTableRef.value) {
+    try { geoResultTableRef.value.clearSelection() } catch {}
+  }
+  generatedQuestions.value = []
+  geoSelectedGenerated.value = []
+}
+
+const selectAllGenerated = () => {
+  const t = geoResultTableRef.value
+  if (!t) return
+  generatedQuestions.value.forEach((row) => t.toggleRowSelection(row, true))
+}
+
+const clearSelectedGenerated = () => {
+  const t = geoResultTableRef.value
+  if (!t) return
+  t.clearSelection()
+}
+
+const selectGeoGroup = (typeKey) => {
+  const t = geoResultTableRef.value
+  if (!t) return
+  generatedQuestions.value
+    .filter((row) => row.typeKey === typeKey)
+    .forEach((row) => t.toggleRowSelection(row, true))
+}
+
+const saveGeoSelected = async () => {
+  const list = geoSelectedGenerated.value
+  if (!list.length) return
+  geoSaving.value = true
+  const userId = 'default_user'
+  const sourceKeyword = (geoForm.value.brand || '').trim() || 'GEO生成'
+  let ok = 0
+  let fail = 0
+  try {
+    for (const item of list) {
+      const payload = {
+        question: item.question,
+        keywordType: item.typeKey,
+        sourceKeyword,
+        status: '待审核',
+      }
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/questions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+          body: JSON.stringify(payload),
+        })
+        if (res.ok) ok++
+        else fail++
+      } catch {
+        fail++
+      }
+    }
+    if (ok > 0) {
+      ElMessage.success(`已入库 ${ok} 条${fail > 0 ? `，失败 ${fail} 条` : ''}`)
+      page.value = 1
+      await loadData()
+      geoResultDialogVisible.value = false
+    } else {
+      ElMessage.error('入库失败，请检查网络')
+    }
+  } finally {
+    geoSaving.value = false
+  }
 }
 </script>
 

@@ -305,7 +305,7 @@ const RadarChart = {
     const center = size / 2
     const maxRadius = 70
     const levels = 4
-    
+
     // 计算点的位置
     const getPointPosition = (angle, value) => {
       const radian = (angle - 90) * Math.PI / 180
@@ -315,7 +315,7 @@ const RadarChart = {
         y: center + radius * Math.sin(radian)
       }
     }
-    
+
     // 获取多边形路径
     const getPolygonPath = (values) => {
       const angles = [0, 90, 180, 270]
@@ -325,7 +325,7 @@ const RadarChart = {
       })
       return `M ${points.join(' L ')} Z`
     }
-    
+
     // 标签位置
     const getLabelPosition = (angle) => {
       const radian = (angle - 90) * Math.PI / 180
@@ -335,10 +335,10 @@ const RadarChart = {
         y: center + labelRadius * Math.sin(radian)
       }
     }
-    
+
     const labels = ['提及率', '位置得分', '情感得分', '相关性']
     const angles = [0, 90, 180, 270]
-    
+
     return () => h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}` }, [
       // 背景网格
       h('g', { class: 'radar-grid' }, [
@@ -418,7 +418,7 @@ const AUTHORIZED_WEBSITES = {
   'oneplus.com': { name: 'OnePlus', brand: '一加', weight: 15 },
   'google.com': { name: 'Google', brand: '谷歌', weight: 25 },
   'microsoft.com': { name: 'Microsoft', brand: '微软', weight: 25 },
-  
+
   // 汽车行业
   'tesla.com': { name: 'Tesla', brand: '特斯拉', weight: 23 },
   'byd.com': { name: 'BYD', brand: '比亚迪', weight: 20 },
@@ -428,7 +428,7 @@ const AUTHORIZED_WEBSITES = {
   'bmw.com': { name: 'BMW', brand: '宝马', weight: 22 },
   'mercedes-benz.com': { name: 'Mercedes-Benz', brand: '奔驰', weight: 22 },
   'audi.com': { name: 'Audi', brand: '奥迪', weight: 21 },
-  
+
   // 电商/互联网
   'amazon.com': { name: 'Amazon', brand: '亚马逊', weight: 25 },
   'taobao.com': { name: 'Taobao', brand: '淘宝', weight: 22 },
@@ -436,7 +436,7 @@ const AUTHORIZED_WEBSITES = {
   'pinduoduo.com': { name: 'Pinduoduo', brand: '拼多多', weight: 18 },
   'alibaba.com': { name: 'Alibaba', brand: '阿里巴巴', weight: 23 },
   'tmall.com': { name: 'Tmall', brand: '天猫', weight: 22 },
-  
+
   // 社交/内容平台
   'facebook.com': { name: 'Facebook', brand: 'Facebook', weight: 24 },
   'twitter.com': { name: 'Twitter', brand: 'Twitter', weight: 22 },
@@ -446,14 +446,14 @@ const AUTHORIZED_WEBSITES = {
   'douyin.com': { name: 'Douyin', brand: '抖音', weight: 22 },
   'bilibili.com': { name: 'Bilibili', brand: 'B站', weight: 20 },
   'xiaohongshu.com': { name: 'Xiaohongshu', brand: '小红书', weight: 20 },
-  
+
   // 中国本土品牌
   'baidu.com': { name: 'Baidu', brand: '百度', weight: 23 },
   'tencent.com': { name: 'Tencent', brand: '腾讯', weight: 24 },
   'alipay.com': { name: 'Alipay', brand: '支付宝', weight: 22 },
   'weibo.com': { name: 'Weibo', brand: '微博', weight: 20 },
   'zhihu.com': { name: 'Zhihu', brand: '知乎', weight: 18 },
-  
+
   // 更多科技品牌
   'nvidia.com': { name: 'NVIDIA', brand: '英伟达', weight: 24 },
   'intel.com': { name: 'Intel', brand: '英特尔', weight: 22 },
@@ -461,12 +461,12 @@ const AUTHORIZED_WEBSITES = {
   'sony.com': { name: 'Sony', brand: '索尼', weight: 22 },
   'canon.com': { name: 'Canon', brand: '佳能', weight: 20 },
   'nikon.com': { name: 'Nikon', brand: '尼康', weight: 20 },
-  
+
   // 运动/时尚
   'nike.com': { name: 'Nike', brand: '耐克', weight: 22 },
   'adidas.com': { name: 'Adidas', brand: '阿迪达斯', weight: 21 },
   'lululemon.com': { name: 'Lululemon', brand: 'Lululemon', weight: 18 },
-  
+
   // 食品/饮料
   'coca-cola.com': { name: 'Coca-Cola', brand: '可口可乐', weight: 20 },
   'pepsi.com': { name: 'Pepsi', brand: '百事', weight: 18 },
@@ -505,18 +505,18 @@ const getWebsiteAuthority = (url) => {
 const calculateScoreWithAuthority = (baseScore, url, detection) => {
   // 如果基础得分已经很高，不需要额外加权
   if (baseScore >= 70) return baseScore
-  
+
   // 检查是否是权威网站
   const authority = getWebsiteAuthority(url)
   if (!authority) return baseScore
-  
+
   // 如果关键词未被提及，但网站是权威网站
   if (!detection.mentioned) {
     // 保底分数 = 基础权重 * 0.4（确保至少有保底分）
     const floorScore = Math.round(authority.weight * 0.4)
     return Math.max(baseScore, floorScore)
   }
-  
+
   // 如果关键词被提及，给予额外加权
   // 额外加分 = 权重 * 0.5，但最高不超过100
   const bonus = Math.round(authority.weight * 0.5)
@@ -538,25 +538,25 @@ const getCachedResult = (question, keyword, platformId) => {
   try {
     const cacheStr = localStorage.getItem(CACHE_KEY)
     if (!cacheStr) return null
-    
+
     const cache = JSON.parse(cacheStr)
     const cacheKey = `${question}_${keyword}_${platformId}`
     const cached = cache[cacheKey]
-    
+
     if (!cached) return null
-    
+
     // 检查是否过期
     const cachedTime = new Date(cached.timestamp)
     const now = new Date()
     const daysDiff = (now - cachedTime) / (1000 * 60 * 60 * 24)
-    
+
     if (daysDiff > CACHE_DAYS) {
       // 缓存过期，删除
       delete cache[cacheKey]
       localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
       return null
     }
-    
+
     return cached.result
   } catch (e) {
     console.error('读取缓存失败:', e)
@@ -578,13 +578,13 @@ const setCachedResult = (question, keyword, platformId, result) => {
     if (cacheStr) {
       cache = JSON.parse(cacheStr)
     }
-    
+
     const cacheKey = `${question}_${keyword}_${platformId}`
     cache[cacheKey] = {
       timestamp: new Date().toISOString(),
       result: result
     }
-    
+
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache))
   } catch (e) {
     console.error('保存缓存失败:', e)
@@ -795,18 +795,18 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
         max_tokens: 1000
       })
     })
-    
+
     if (!response.ok) {
       throw new Error(`API请求失败: ${response.status}`)
     }
-    
+
     const data = await response.json()
     const content = data.content || ''
-    
+
     if (!content) {
       throw new Error('API返回内容为空')
     }
-    
+
     // 解析JSON响应
     let result
     try {
@@ -831,11 +831,11 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
         competitorsMentioned: []
       }
     }
-    
+
     // 缓存结果
     setCachedResult(question, keyword, platformId, result)
     console.log(`[GEO检测] API调用成功: ${question.slice(0, 20)}... @ ${platformId}`)
-    
+
     return result
   } catch (error) {
     console.error('AI代理调用失败:', error)
@@ -860,34 +860,34 @@ const calculateScore = (detection, keywordType, keyword = '') => {
   }
 
   const w = weights[k] || weights['03']
-  
+
   // 提及得分
   const mentionScore = detection.mentioned ? 100 : 0
-  
+
   // 位置得分
   let positionScore = 0
   if (detection.positionRank === 'top') positionScore = 100
   else if (detection.positionRank === 'above_fold') positionScore = 70
   else if (detection.positionRank === 'below_fold') positionScore = 40
-  
+
   // 情感得分
   let sentimentScore = 50
   if (detection.sentiment === 'positive') sentimentScore = 100
   else if (detection.sentiment === 'neutral') sentimentScore = 50
   else if (detection.sentiment === 'negative') sentimentScore = 20
-  
+
   // 相关性得分
   const relevanceScore = detection.semanticRelevance * 100
-  
+
   // 计算加权总分
-  let totalScore = 
+  let totalScore =
     mentionScore * w.mention +
     positionScore * w.position +
     sentimentScore * w.sentiment +
     relevanceScore * w.relevance
-  
+
   totalScore = Math.round(totalScore)
-  
+
   // ==================== 知名网站加权 ====================
   // 如果检测到了权威网站，给予额外加权
   const authority = getWebsiteAuthority(keyword)
@@ -902,7 +902,7 @@ const calculateScore = (detection, keywordType, keyword = '') => {
       totalScore = Math.max(totalScore, floorScore)
     }
   }
-  
+
   return totalScore
 }
 
@@ -1066,10 +1066,10 @@ const categoryColors = {
 // 计算雷达图数据（按类型聚合）
 const radarChartData = computed(() => {
   if (detectionResults.value.length === 0) return { mention: 0, position: 0, sentiment: 0, relevance: 0 }
-  
+
   let totalMention = 0, totalPosition = 0, totalSentiment = 0, totalRelevance = 0
   let count = 0
-  
+
   detectionResults.value.forEach(item => {
     item.platforms.forEach(p => {
       if (p.mentioned) {
@@ -1086,9 +1086,9 @@ const radarChartData = computed(() => {
       }
     })
   })
-  
+
   if (count === 0) return { mention: 0, position: 0, sentiment: 0, relevance: 0 }
-  
+
   return {
     mention: Math.round(totalMention / count),
     position: Math.round(totalPosition / count),
@@ -1370,30 +1370,30 @@ const startDetection = async () => {
     ElMessage.warning('请先选择至少一个命中关键词')
     return
   }
-  
+
   totalCount.value = selectedQuestions.value.length * selectedPlatforms.value.length
   completedCount.value = 0
   loadingVisible.value = true
   currentTask.value = '初始化检测环境...'
-  
+
   // 存储所有检测结果
   const allDetectionResults = []
   let hasError = false
   let errorMessage = ''
-  
+
   // 遍历每个问题-平台组合
   for (let qIdx = 0; qIdx < selectedQuestions.value.length; qIdx++) {
     const q = selectedQuestions.value[qIdx]
-    
+
     for (let pIdx = 0; pIdx < selectedPlatforms.value.length; pIdx++) {
       const p = selectedPlatforms.value[pIdx]
       currentTask.value = '检测中：' + q.text.slice(0, 18) + '... 在 ' + p.name
-      
+
       try {
         // 调用 DeepSeek API 进行真实检测
         const keywords = selectedKeywords.value
         const detection = await detectWithDeepSeek(q.text, keywords, p.id)
-        
+
         allDetectionResults.push({
           questionId: qIdx + 1,
           question: q.text,
@@ -1428,11 +1428,11 @@ const startDetection = async () => {
         hasError = true
         errorMessage = `部分检测失败: ${error.message}`
       }
-      
+
       completedCount.value++
     }
   }
-  
+
   // 处理完成
   loadingVisible.value = false
   if (hasError) {
@@ -1440,7 +1440,7 @@ const startDetection = async () => {
   } else {
     ElMessage.success({ message: '检测完成', offset: 80 })
   }
-  
+
   // 构建结果
   buildResultsFromAPI(allDetectionResults)
   currentStep.value = 3
@@ -1453,7 +1453,7 @@ const startDetection = async () => {
 const buildResultsFromAPI = (apiResults) => {
   // 按问题分组
   const groupedByQuestion = {}
-  
+
   apiResults.forEach(result => {
     const qKey = result.question
     if (!groupedByQuestion[qKey]) {
@@ -1466,7 +1466,7 @@ const buildResultsFromAPI = (apiResults) => {
         scores: []
       }
     }
-    
+
     // 添加平台检测结果
     groupedByQuestion[qKey].platforms.push({
       name: result.platform.name,
@@ -1480,34 +1480,34 @@ const buildResultsFromAPI = (apiResults) => {
       rawAnswer: result.detection.rawAnswer || null,
       error: result.error || false
     })
-    
+
     // 记录得分
     if (!result.error) {
       groupedByQuestion[qKey].scores.push(result.score)
     }
   })
-  
+
   // 转换为数组
   const results = Object.values(groupedByQuestion).map(gq => ({
     ...gq,
-    avgScore: gq.scores.length > 0 
+    avgScore: gq.scores.length > 0
       ? Math.round(gq.scores.reduce((a, b) => a + b, 0) / gq.scores.length)
       : 0
   }))
-  
+
   detectionResults.value = results
-  
+
   // 计算整体得分
   const allScores = results.flatMap(r => r.platforms.map(p => {
     // 根据是否提及计算基础得分
     if (p.mentioned) return 70  // 提及但没有详细分数时给70分
     return 0
   }))
-  
+
   const totalMentions = results.reduce((sum, r) => sum + r.platforms.filter(p => p.mentioned).length, 0)
   const totalSlots = results.length * selectedPlatforms.value.length
   overallScore.value = totalSlots > 0 ? Math.round((totalMentions / totalSlots) * 100) : 0
-  
+
   if (overallScore.value >= 80) overallGrade.value = 'A'
   else if (overallScore.value >= 60) overallGrade.value = 'B'
   else if (overallScore.value >= 40) overallGrade.value = 'C'

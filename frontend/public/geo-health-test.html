@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>品牌体检 API 测试</title>
+  <style>
+    :root { --border: #e5e7eb; --muted: #6b7280; --ok: #059669; --err: #dc2626; }
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 24px auto; padding: 0 16px 48px; }
+    h1 { font-size: 1.35rem; }
+    label { display: block; margin-top: 12px; font-weight: 600; font-size: 13px; }
+    input[type="text"] { width: 100%; box-sizing: border-box; padding: 8px; margin-top: 4px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+    button { padding: 10px 16px; cursor: pointer; border-radius: 8px; border: 1px solid var(--border); background: #fff; }
+    button.primary { background: #111827; color: #fff; border-color: #111827; font-weight: 600; }
+    button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.ghost { background: #f9fafb; }
+    pre { background: #f9fafb; padding: 12px; overflow: auto; font-size: 12px; border-radius: 8px; border: 1px solid var(--border); max-height: 420px; }
+    .hint { color: var(--muted); font-size: 13px; margin-top: 8px; line-height: 1.5; }
+    #status { margin-top: 16px; padding: 12px 14px; border-radius: 8px; background: #f3f4f6; font-size: 14px; min-height: 1.25em; }
+    #status.running { background: #eff6ff; color: #1e40af; }
+    #status.done { background: #ecfdf5; color: var(--ok); }
+    #status.fail { background: #fef2f2; color: var(--err); }
+    .card { margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
+    .card h4 { margin: 0 0 8px; font-size: 14px; color: #374151; }
+    .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: #e5e7eb; margin-right: 8px; }
+    .qtext { margin: 8px 0; font-size: 15px; }
+    table.arts { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    table.arts th, table.arts td { border: 1px solid var(--border); padding: 8px; text-align: left; vertical-align: top; }
+    table.arts th { background: #f9fafb; }
+    .muted { color: var(--muted); font-size: 12px; }
+    #rawToggle { margin-top: 8px; font-size: 12px; color: #2563eb; cursor: pointer; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>品牌体检（geo-brand）测试</h1>
+  <p class="hint">
+    本页在 Vite 开发服（例如 <code>http://localhost:3003</code>）打开时，请求 <code>/api</code> 会代理到后端（默认 <code>localhost:3001</code>）。请先启动后端，并保证问题库有足够「已审核」题目。
+    抽题条数见 <code>backend/src/config/geoBrandTaskConfig.js</code>。
+  </p>
+
+  <label>API 前缀</label>
+  <input id="apiBase" type="text" placeholder="/api" value="/api" />
+
+  <div class="row">
+    <button type="button" class="primary" id="btnRun">开始检测（抽题并调用模型）</button>
+    <button type="button" class="ghost" id="btnStop" disabled>停止</button>
+    <button type="button" class="ghost" id="btnConfig">读取配置</button>
+  </div>
+
+  <p class="hint">说明：点击主按钮会 <strong>创建任务 → 后台依次调用 DeepSeek</strong>，并自动轮询直到完成，最后拉取入库的问答与文章。</p>
+
+  <p class="muted" style="margin-top:12px;">当前 taskId：<span id="taskIdLabel">—</span></p>
+
+  <div id="status">就绪。点击「开始检测」。</div>
+
+  <h3 style="margin-top:24px;">进度 / 原始 JSON（调试用）</h3>
+  <pre id="out">（空）</pre>
+
+  <h3 style="margin-top:24px;">入库结果（题目 + 模型回答 + 解析文章）</h3>
+  <div id="results"></div>
+  <p class="muted" id="resultsHint" style="margin-top:8px;"></p>
+
+  <script>
+    const $ = (id) => document.getElementById(id)
+    const out = $('out')
+    const statusEl = $('status')
+    const resultsEl = $('results')
+    const log = (obj) => {
+      out.textContent = typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2)
+    }
+
+    const USER_ID = 'default_user'
+    const HEADERS = { 'Content-Type': 'application/json', 'x-user-id': USER_ID }
+    const POLL_MS = 1800
+
+    let pollTimer = null
+
+    function api(path) {
+      const base = $('apiBase').value.replace(/\/$/, '') || '/api'
+      return base + path
+    }
+
+    function setStatus(kind, text) {
+      statusEl.className = kind || ''
+      statusEl.textContent = text
+    }
+
+    function stopPoll() {
+      if (pollTimer) clearInterval(pollTimer)
+      pollTimer = null
+      $('btnRun').disabled = false
+      $('btnStop').disabled = true
+    }
+
+    async function fetchResults(taskId) {
+      const r = await fetch(api('/geo-brand/tasks/' + taskId + '/results'), { headers: { 'x-user-id': USER_ID } })
+      const data = await r.json()
+      if (!r.ok || !data.success) {
+        resultsEl.innerHTML = '<p class="muted">拉取入库结果失败：' + (data.error || r.status) + '</p>'
+        return
+      }
+      $('resultsHint').textContent = '共 ' + (data.items?.length || 0) + ' 题，解析文章 ' + (data.articleTotal || 0) + ' 条。task.status=' + (data.task?.status || '') + '。'
+      const items = data.items || []
+      resultsEl.innerHTML = items
+        .map((it, idx) => {
+          const ans = it.answer
+          const arts = it.articles || []
+          const rawJsonStr = ans && ans.rawJson != null ? JSON.stringify(ans.rawJson, null, 2) : ''
+          const errLine = ans && ans.errorText ? '<p class="muted" style="color:var(--err)">error_text: ' + escapeHtml(ans.errorText) + '</p>' : ''
+          const artsTable =
+            arts.length === 0
+              ? '<p class="muted">（无解析文章入库）</p>'
+              : '<table class="arts"><thead><tr><th>平台</th><th>标题</th><th>摘要</th><th>链接</th></tr></thead><tbody>' +
+                arts
+                  .map(
+                    (a) =>
+                      '<tr><td>' +
+                      escapeHtml(a.platform || '') +
+                      '</td><td>' +
+                      escapeHtml(a.title || '') +
+                      '</td><td>' +
+                      escapeHtml((a.summary || '').slice(0, 200)) +
+                      '</td><td style="word-break:break-all">' +
+                      escapeHtml(a.url || '') +
+                      '</td></tr>'
+                  )
+                  .join('') +
+                '</tbody></table>'
+          return (
+            '<div class="card">' +
+            '<h4>#' +
+            (idx + 1) +
+            ' <span class="tag">' +
+            escapeHtml(it.questionType || '') +
+            '</span> questionId=' +
+            it.questionId +
+            '</h4>' +
+            '<div class="qtext">' +
+            escapeHtml(it.question || '') +
+            '</div>' +
+            (ans
+              ? '<p class="muted">model=' +
+                escapeHtml(ans.modelName || '') +
+                ' · valid_count=' +
+                (ans.validCount ?? '') +
+                '</p>' +
+                errLine +
+                '<details><summary style="cursor:pointer">查看 raw_json（入库）</summary><pre style="margin-top:8px;max-height:280px">' +
+                escapeHtml(rawJsonStr) +
+                '</pre></details>'
+              : '<p class="muted">（尚无答案入库，可能仍排队或失败）</p>') +
+            '<h4 style="margin-top:12px">解析文章</h4>' +
+            artsTable +
+            '</div>'
+          )
+        })
+        .join('')
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div')
+      d.textContent = s
+      return d.innerHTML
+    }
+
+    $('btnConfig').onclick = async () => {
+      const r = await fetch(api('/geo-brand/config'))
+      log(await r.json())
+    }
+
+    $('btnStop').onclick = () => {
+      stopPoll()
+      setStatus('', '已停止轮询（后台探针可能仍在跑，可刷新本页稍后查看 taskId）。')
+    }
+
+    $('btnRun').onclick = async () => {
+      stopPoll()
+      resultsEl.innerHTML = ''
+      $('resultsHint').textContent = ''
+      $('taskIdLabel').textContent = '—'
+      log('（创建任务中…）')
+      setStatus('running', '正在创建任务并抽样…')
+
+      let taskId
+      try {
+        const r = await fetch(api('/geo-brand/tasks'), { method: 'POST', headers: HEADERS, body: JSON.stringify({}) })
+        const data = await r.json()
+        log(data)
+        if (!r.ok || !data.success || !data.taskId) {
+          setStatus('fail', '创建失败：' + (data.error || r.status))
+          return
+        }
+        taskId = data.taskId
+        $('taskIdLabel').textContent = String(taskId)
+        setStatus('running', 'taskId=' + taskId + '，后台正在调用模型，轮询进度中…')
+      } catch (e) {
+        setStatus('fail', '请求失败：' + (e.message || String(e)))
+        log(String(e))
+        return
+      }
+
+      $('btnRun').disabled = true
+      $('btnStop').disabled = false
+
+      const tick = async () => {
+        try {
+          const r = await fetch(api('/geo-brand/tasks/' + taskId + '/progress'), { headers: { 'x-user-id': USER_ID } })
+          const data = await r.json()
+          log(data)
+          const line =
+            'status=' +
+            data.status +
+            ' · 总题=' +
+            (data.totalQuestions ?? '?') +
+            ' · 已答=' +
+            (data.answeredCount ?? '?') +
+            ' · 成功=' +
+            (data.successCount ?? '?') +
+            ' · 失败=' +
+            (data.failedCount ?? '?') +
+            ' · 待处理=' +
+            (data.pendingCount ?? '?')
+          setStatus('running', line)
+
+          if (data.status === 'completed' || data.status === 'failed') {
+            stopPoll()
+            if (data.status === 'completed') {
+              setStatus('done', '已完成。正在拉取入库结果…')
+              await fetchResults(taskId)
+              setStatus('done', '已完成。下方为入库的题目、答案与文章。')
+            } else {
+              setStatus('fail', '任务状态为 failed，仍尝试拉取已入库部分。')
+              await fetchResults(taskId)
+            }
+          }
+        } catch (e) {
+          log(String(e))
+        }
+      }
+
+      await tick()
+      pollTimer = setInterval(tick, POLL_MS)
+    }
+  </script>
+</body>
+</html>
