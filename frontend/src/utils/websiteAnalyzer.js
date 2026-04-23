@@ -2,6 +2,7 @@
  * 网站技术检测服务 - P0/P1/P2 级别检测
  * 使用 fetch + 正则解析 HTML
  */
+import { getAIFriendlinessPromptSet, buildAIFriendlinessPrompt } from '../prompts/index.js'
 
 // 浏览器 User-Agent 池，用于绕过反爬虫
 const USER_AGENTS = [
@@ -724,50 +725,16 @@ const checkAIFriendlinessDeep = async (html, url) => {
     const truncatedText = textContent.slice(0, 4000) // 限制内容长度
     const pageType = detectPageType(html, url)
     
-    // 根据页面类型设置不同的评分标准
-    let scoringRules, systemPrompt
-    
-    if (pageType === 'portal') {
-      // 门户首页/列表页评分标准（更宽松）
-      scoringRules = `页面类型：门户网站首页/列表页
-评分标准（总分25分）：
-1. 导航结构（是否有清晰的导航、分类）0-8分
-2. 内容丰富度（首页内容多样性、板块划分）0-7分
-3. 链接结构（内链丰富度、分类链接）0-5分
-4. SEO基础（title、meta、h1）0-5分`
-      systemPrompt = '你是一个专业的门户网站SEO分析专家。请严格按JSON格式返回分析结果。'
-    } else {
-      // 文章页/详情页评分标准（更严格）
-      scoringRules = `页面类型：文章/详情页
-评分标准（总分25分）：
-1. 内容质量（是否专业、有深度、原创）0-8分
-2. 结构化程度（是否有清晰的标题层级、数据表格、列表）0-7分
-3. 实体提及（是否提及具体品牌、产品、地点、人物等）0-5分
-4. GEO要素（是否包含FAQ问答、引用来源、数据支撑、术语解释）0-5分`
-      systemPrompt = '你是一个专业的SEO和AI亲和性分析专家。请严格按JSON格式返回分析结果。'
-    }
-    
+    // 根据页面类型选择 prompt 组合（已抽到 frontend/src/prompts/websiteAnalyzer.js）
+    const { systemPrompt, scoringRules } = getAIFriendlinessPromptSet(pageType)
+
     const response = await fetch(getAIBaseURL(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat',
         systemPrompt,
-        prompt: `请分析以下网页内容，${scoringRules}
-
-网址：${url}
-内容摘要：${truncatedText}
-
-请返回严格的JSON格式（不要有其他文字）：
-{
-  "score": 数字,
-  "quality": 数字,
-  "structure": 数字,
-  "entity": 数字,
-  "geo": 数字,
-  "issues": ["问题1", "问题2"],
-  "suggestions": ["建议1", "建议2"]
-}`,
+        prompt: buildAIFriendlinessPrompt({ scoringRules, url, truncatedText }),
         temperature: 0.3,
         max_tokens: 1000
       })

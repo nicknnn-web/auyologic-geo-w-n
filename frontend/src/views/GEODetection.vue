@@ -287,6 +287,7 @@ import {
   KEYWORD_TYPE_DEFAULT_OPTIONS
 } from '../utils/sysDict.js'
 import { fetchAllPages } from '../utils/pagedApi.js'
+import { GEO_DETECTION_SYSTEM_PROMPT, buildGeoDetectionPrompt } from '../prompts/index.js'
 
 /**
  * 雷达图组件 - 用SVG实现
@@ -762,26 +763,7 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
   }
 
   // ===== 模拟检测：其他平台暂无API，使用分析prompt（模拟逻辑）=====
-  // 构建提示词
-  const prompt = `你是一个AI平台内容分析专家。请分析以下问题在AI平台回答中的品牌可见度。
-
-问题: "${question}"
-检测的品牌关键词: "${keyword}"
-目标AI平台: "${platformId}"
-
-请分析AI平台的回答中是否提到了该品牌，并返回JSON格式的分析结果。
-
-分析维度:
-1. mentioned: 是否被提及 (true/false)
-2. mentionType: 提及类型 ("explicit"=明确提及, "implicit"=隐含提及, "related"=相关但未直接提及, "none"=未提及)
-3. firstMentionPosition: 首次提及位置 (0.0-1.0, 0=开头, 1=结尾)
-4. positionRank: 位置等级 ("top"=前10%, "above_fold"=可视区域, "below_fold"=需要滚动)
-5. sentiment: 情感倾向 ("positive"=正面, "neutral"=中性, "negative"=负面)
-6. semanticRelevance: 语义相关性 (0.0-1.0)
-7. competitivePosition: 竞品位置 ("winner"=优于竞品, "loser"=劣于竞品, "mentioned"=与竞品并列, null=未提竞品)
-8. competitorsMentioned: 被提及的竞品列表 (数组)
-
-请返回一个JSON对象，包含以上所有字段。不要添加任何解释或markdown格式。`
+  const prompt = buildGeoDetectionPrompt({ question, keyword, platformId })
 
   try {
     const response = await fetch(AI_PROXY_URL, {
@@ -789,7 +771,7 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'deepseek-chat',
-        systemPrompt: '你是一个专业的AI内容分析助手，擅长分析品牌在AI平台回答中的可见度。',
+        systemPrompt: GEO_DETECTION_SYSTEM_PROMPT,
         prompt,
         temperature: 0.3,
         max_tokens: 1000

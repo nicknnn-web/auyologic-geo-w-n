@@ -280,6 +280,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
+import { buildCoreKeywordsPrompt } from '../prompts/index.js'
 
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
@@ -704,27 +705,7 @@ const extractCoreBusinessWords = (description) => {
 const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
 
 const analyzeEnterpriseProfile = async (name, industry, description) => {
-  const prompt = `你是一个企业业务关键词分析师。请根据以下企业信息，提取出10-15个核心业务关键词。
-
-【重要】如果企业描述中提到了以下任何术语，必须包含在关键词列表中：
-- GEO、SEO、搜索优化、搜索引擎优化、谷歌优化
-- 数字化营销、海外营销、跨境营销
-- SaaS、软件开发、小程序
-- 独立站、跨境电商、亚马逊
-
-企业名称：${name}
-所属行业：${industry}
-企业描述：${description || '无'}
-
-要求：
-- 只输出关键词，每行一个
-- 必须是该企业实际从事的业务领域的专业词汇
-- 必须包含企业描述中提到的所有专业术语（如GEO、SEO等）
-- SEO、GEO、S包含中英文（如aaS、Google优化等）
-- 不要输出企业名称本身
-- 不要输出"公司"、"服务"等泛泛的词
-
-直接输出关键词列表，不要解释。如果描述中提到了GEO或SEO，相关词汇必须出现在列表中！`
+  const prompt = buildCoreKeywordsPrompt({ name, industry, description })
 
   try {
     const response = await fetch(AI_PROXY_URL, {

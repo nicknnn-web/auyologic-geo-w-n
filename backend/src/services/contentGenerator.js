@@ -1,4 +1,5 @@
 // AI内容生成服务
+import { buildContentGeneratorSystemPrompt } from '../prompts/contentGenerator.js'
 
 /**
  * 根据内容类型返回对应的文章结构模板
@@ -208,32 +209,12 @@ export async function generateContent(prompt, apiKey, options = {}) {
   const platforms = options.platforms || []
   const audience = options.audience || ''
 
-  // 构建系统提示词
-  const systemPrompt = `你是一个顶级的GEO智能营销内容创作专家，擅长创作能够被AI搜索引擎（如ChatGPT、Perplexity、Google AI Overviews）引用的高质量内容。
-
-【核心写作原则】
-1. 内容真实、有用、有深度，避免空洞的套话
-2. 每个观点都要有具体的论据或数据支撑
-3. 语言自然流畅，符合目标平台调性
-4. 结构清晰，层次分明，方便读者快速获取信息
-
-【风格要求】
-${getToneDescription(tone)}
-
-【长度要求】
-${getLengthRequirement(length)}
-
-【格式要求】
-${getFormatRequirement(format)}
-
-【重要格式规范】
-- 严格使用 Markdown 格式
-- 一级标题用 # ，二级标题用 ## ，三级标题用 ###
-- 段落之间必须有空行
-- 列表用 - 开头，每项后有内容说明
-- 重要词汇用 **粗体** 标注
-- 引用或金句用 > 开头
-- 不要输出多余的前缀说明，直接输出文章内容`
+  // 构建系统提示词（prompt 已抽到 backend/src/prompts/contentGenerator.js）
+  const systemPrompt = buildContentGeneratorSystemPrompt({
+    toneDesc: getToneDescription(tone),
+    lengthReq: getLengthRequirement(length),
+    formatReq: getFormatRequirement(format),
+  })
 
   // 构建用户提示词（结合文章模板）
   const articleTemplate = getArticleTemplate(contentType)

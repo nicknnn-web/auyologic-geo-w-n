@@ -191,7 +191,7 @@
           />
         </el-form-item>
         <div v-if="geoGenerating" class="text-xs text-gray-500" style="margin-left:110px;">
-          正在调用 DeepSeek 生成 50 个 GEO 问题，预计 20-40 秒，请耐心等待...
+          正在调用大模型生成 50 个 GEO 问题，预计 20-40 秒，请耐心等待...
         </div>
       </el-form>
       <template #footer>
@@ -281,6 +281,7 @@ import {
   reloadPagedListAfterRemoval,
 } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
+import { buildBusinessTermsPrompt, buildGeoQuestionPrompt } from '../prompts/index.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -427,20 +428,7 @@ const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/ge
 
 const analyzeEnterpriseProfileForQuestions = async (name, industry, description) => {
   try {
-    const prompt = `你是一个企业业务分析师。请根据以下企业信息，提取出该企业核心从事的业务领域的专业词汇。
-
-企业名称：${name}
-所属行业：${industry}
-企业描述：${description || '无'}
-
-要求：
-- 只输出业务关键词，每行一个
-- 必须是该企业实际从事的业务领域的专业词汇
-- 包含中英文（如SEO、GEO、SaaS、跨境电商等）
-- 不要输出"公司"、"服务"等泛泛的词
-- 如果企业描述中提到了具体业务词，必须包含进去
-
-直接输出关键词列表，不要解释。`
+    const prompt = buildBusinessTermsPrompt({ name, industry, description })
 
     const response = await fetch(AI_PROXY_URL, {
       method: 'POST',
@@ -1186,86 +1174,8 @@ const openGeoDialog = async () => {
   }
 }
 
-const buildGeoPrompt = ({ brand, product, targetCustomer }) => `【角色定义】
-你是一个"AI搜索行为建模专家 + 竞品分析专家 + GEO优化专家"。
-
-【任务说明】
-你的任务是：在接收到具体输入参数后，才开始生成用户问题。
-⚠️ 在未收到输入参数前，禁止进行任何推理、生成或示例输出。
-
----
-
-【输入参数（必须提供后才执行）】
-- 我是谁：${brand}（品牌名称）
-- 我卖什么：${product}（产品类型）
-- 我卖给谁：${targetCustomer}（目标客户）
-
----
-
-【执行流程】
-
-Step 1：竞品推断
-- 如果未提供竞品，请自动推断 3-5 个同赛道竞品
-
-Step 2：问题生成
-- 基于"品牌 + 产品 + 客户 + 竞品"生成 50 个问题
-
----
-
-【问题分类要求（必须满足）】
-
-每类10个：
-
-1. price（价格类：针对性价比提问 影响决策）
-2. brand（品牌类：针对品牌提问，基本不会询问竞品）
-3. product（产品类：针对功能提问）
-4. scenario（场景类：针对需求提问）
-5. enterprise（企业类：针对竞品提问 对比提问）
-
----
-
-【生成规则（严格执行）】
-
-- 必须是"真实用户问AI"的语气
-- 至少30%问题不能出现品牌名
-- 至少40%问题包含竞品对比
-- 对比问题必须出现2-3个竞品
-- 必须具备"引导AI推荐"的倾向
-- 包含口语化、长尾、决策型问题
-- 禁止重复或模板化
-- 禁止出现：你们{{品牌名}} 防止这种直接向品牌对话的问题
-- 禁止出现：AI能不能，AI帮我，AI你觉得
-- 除了品牌类和企业类问题可以出现品牌名称 其他类型应该是开放问题不出现具体品牌指向
----
-
-【输出格式要求】
-
-⚠️ 以下仅为格式定义，不是示例数据
-⚠️ 禁止照抄或填充示例内容
-
-最终输出必须是 JSON，结构如下：
-
-{
-  "brand": "<string>",
-  "competitors": ["<string>"],
-  "questions": [
-    {
-      "type": "<price|brand|product|scenario|enterprise>",
-      "question": "<string>"
-    }
-  ]
-}
-
----
-
-【强制约束】
-
-- 未提供输入参数时：只回复 "请提供输入参数"
-- 必须返回合法 JSON
-- 禁止输出解释、说明、示例
-- 问题数量必须 = 50
-- 每个问题必须包含 type 字段
-- 不允许输出任何占位符（如 {{brand}}）`
+// buildGeoPrompt 已迁至 frontend/src/prompts/geoQuestionGenerate.js（buildGeoQuestionPrompt）
+const buildGeoPrompt = buildGeoQuestionPrompt
 
 const extractGeoJson = (text) => {
   const raw = String(text || '').trim()

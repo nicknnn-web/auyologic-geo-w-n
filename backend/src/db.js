@@ -275,9 +275,13 @@ export async function initDB() {
         user_id VARCHAR(255) NOT NULL DEFAULT 'default_user',
         keyword VARCHAR(500) NOT NULL,
         status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        error_text TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS error_text TEXT`
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_health_question (
         id SERIAL PRIMARY KEY,
@@ -330,6 +334,38 @@ export async function initDB() {
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_health_article_task_dedupe ON geo_health_article(task_id, dedupe_key)`
     );
     await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_article_task ON geo_health_article(task_id)`);
+
+    // —— 品牌体检分析结果（每条 geo_health_answer 对应一条分析）——
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_analysis (
+        id                  SERIAL PRIMARY KEY,
+        task_id             INTEGER NOT NULL REFERENCES geo_health_task(id) ON DELETE CASCADE,
+        question_id         INTEGER NOT NULL REFERENCES geo_health_question(id) ON DELETE CASCADE,
+        answer_id           INTEGER NOT NULL REFERENCES geo_health_answer(id) ON DELETE CASCADE,
+        source_question_id  INTEGER,
+        question_type       VARCHAR(32),
+        category            VARCHAR(16),
+        model_name          VARCHAR(64),
+        analysis_provider   VARCHAR(32),
+        visibility          VARCHAR(16),
+        position            VARCHAR(4),
+        brand_status        VARCHAR(32),
+        compare_status      VARCHAR(32),
+        brand_mentioned     BOOLEAN,
+        brand_rank          INTEGER,
+        top_brand           VARCHAR(256),
+        competitors_mentioned JSONB DEFAULT '[]',
+        has_negative        BOOLEAN,
+        source_type         VARCHAR(256),
+        sentiment_keywords  JSONB DEFAULT '[]',
+        raw_analysis_json   JSONB,
+        error_text          TEXT,
+        created_at          TIMESTAMP DEFAULT NOW(),
+        UNIQUE(answer_id)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_analysis_task ON geo_health_analysis(task_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_analysis_question ON geo_health_analysis(question_id)`);
 
     console.log('✅ 数据库表初始化完成');
   } finally {

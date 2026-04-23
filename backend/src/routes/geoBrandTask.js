@@ -15,6 +15,8 @@ import {
   GEO_HEALTH_PROBE_BATCH_DELAY_MS,
   GEO_HEALTH_PROBE_CONCURRENCY,
   GEO_HEALTH_QUESTIONS_PER_TYPE,
+  PROBE_MODELS,
+  ANALYSIS_MODEL,
 } from '../config/geoBrandTaskConfig.js';
 import {
   createGeoTaskAndQuestions,
@@ -22,6 +24,7 @@ import {
   probeWithDeepseekAndStore,
   runAllProbesForTask,
 } from '../services/geoBrandTaskService.js';
+import { runAllAnalysisForTask } from '../services/geoBrandAnalysisService.js';
 
 const router = Router();
 
@@ -47,6 +50,8 @@ router.get('/geo-brand/config', (req, res) => {
     questionsPerType: GEO_HEALTH_QUESTIONS_PER_TYPE,
     probeConcurrency: GEO_HEALTH_PROBE_CONCURRENCY,
     probeBatchDelayMs: GEO_HEALTH_PROBE_BATCH_DELAY_MS,
+    probeModels: PROBE_MODELS,
+    analysisModel: ANALYSIS_MODEL,
     hint: '改 backend/src/config/geoBrandTaskConfig.js 或对应环境变量后重启服务',
   });
 });
@@ -55,18 +60,48 @@ router.get('/geo-brand/config', (req, res) => {
 router.post('/geo-brand/tasks', async (req, res) => {
   try {
     const userId = getUserId(req);
+
+    // 互斥：同一用户如已有未结束任务，直接返回已有 taskId，不创建新任务
+    // 未结束 = status NOT IN ('completed','failed')
+    const runningRes = await pool.query(
+      `SELECT id, status
+       FROM geo_health_task
+       WHERE user_id = $1 AND status NOT IN ('completed', 'failed')
+       ORDER BY id DESC
+       LIMIT 1`,
+      [userId]
+    );
+    if (runningRes.rows.length > 0) {
+      const running = runningRes.rows[0];
+      return res.status(409).json({
+        success: false,
+        code: 'TASK_ALREADY_RUNNING',
+        taskId: running.id,
+        status: running.status,
+        error: `已有任务正在执行（#${running.id}，status=${running.status}），请等待其结束或取消后再试`,
+      });
+    }
+
     const result = await createGeoTaskAndQuestions(pool, { userId });
     const taskId = result.taskId;
-    setImmediate(() => {
-      runAllProbesForTask(pool, taskId).catch((err) => {
-        console.error('[geo-brand] 后台探针未正常结束 taskId=', taskId, err);
-      });
+    // 后台：探针 → 分析，全自动串联
+    setImmediate(async () => {
+      try {
+        await runAllProbesForTask(pool, taskId);
+        console.log(`[geo-brand] taskId=${taskId} 探针完成，开始分析阶段`);
+        await runAllAnalysisForTask(pool, taskId);
+        console.log(`[geo-brand] taskId=${taskId} 分析完成`);
+      } catch (err) {
+        console.error('[geo-brand] 后台任务异常 taskId=', taskId, err?.message || err);
+      }
     });
     res.json({
       success: true,
       ...result,
       backgroundProbe: true,
-      message: '任务已创建，DeepSeek 探针在后台分批执行，请轮询 GET .../tasks/:id/progress',
+      probeModels: PROBE_MODELS,
+      analysisModel: ANALYSIS_MODEL,
+      message: '任务已创建，探针+分析在后台执行，请轮询 GET .../tasks/:id/progress',
     });
   } catch (e) {
     console.error('geo-brand POST /tasks:', e);

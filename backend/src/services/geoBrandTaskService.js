@@ -1,20 +1,25 @@
 /**
- * 品牌体检任务：从 questions 抽样 → 调 DeepSeek → 存 geo_health_answer / geo_health_article
+ * 品牌体检任务：从 questions 抽样 → 调 AI（多模型支持）→ 存 geo_health_answer / geo_health_article
  *
  * 维护说明：
  * - 抽题数量：改 config/geoBrandTaskConfig.js 里的 GEO_HEALTH_QUESTIONS_PER_TYPE
  * - 抽样类型：resolveGeoHealthKeywordBuckets 读 sys_dict keyword_type 全部 data_key，与 questions.keyword_type 匹配
+ * - 探针模型列表：config/geoBrandTaskConfig.js 的 PROBE_MODELS（或环境变量 PROBE_MODELS=deepseek,qwen）
  * - Prompt 默认文案改 DEFAULT_SYSTEM_PROMPT / buildDefaultUserPrompt；也可在接口里传自定义覆盖
- * - 解析 JSON、入库文章的逻辑在 probeWithDeepseekAndStore，与 DeepSeek 调用分离
+ * - 解析 JSON、入库文章的逻辑在 probeOneQuestionWithModel，与 AI 调用分离
  */
 import crypto from 'crypto';
-import { chatDeepseek, createDeepseekClient, DEEPSEEK_DEFAULT_MODEL } from './deepseekClient.js';
+import { createAiClient, PROVIDERS } from './aiClientFactory.js';
 import {
   GEO_HEALTH_QUESTIONS_PER_TYPE,
   GEO_HEALTH_PROBE_BATCH_DELAY_MS,
   GEO_HEALTH_PROBE_CONCURRENCY,
   GEO_HEALTH_KEYWORD_TYPE_DICT_TYPE,
+  PROBE_MODELS,
 } from '../config/geoBrandTaskConfig.js';
+
+/** 当前启用的第一个探针 provider 的默认模型名（向后兼容用） */
+export const DEEPSEEK_DEFAULT_MODEL = PROVIDERS[PROBE_MODELS[0] || 'deepseek']?.defaultModel || 'deepseek-chat';
 
 /**
  * 从 sys_dict 读取 dict_type=keyword_type 的全部启用项，用 data_key 与 questions.keyword_type 一致匹配抽题。
@@ -42,9 +47,10 @@ export async function resolveGeoHealthKeywordBuckets(pool) {
   return { buckets, allowedKeys };
 }
 
-export const DEFAULT_SYSTEM_PROMPT = `你是一个严格按 JSON 输出的助手。用户会给出一条需要分析的问题。
-你必须只输出一个 JSON 对象，且包含键 "articles"：数组；每项为对象，字段 title、url、platform、publish_time、summary（均为字符串）。
-不要输出 markdown 代码围栏以外的多余说明文字。url 尽量为真实可访问的 http/https 链接；若无法提供可省略该字段或留空字符串。`;
+// Prompt 已迁至 backend/src/prompts/geoHealthProbe.js
+// 保留同名 export (DEFAULT_SYSTEM_PROMPT) 做向后兼容
+import { PROBE_SYSTEM_PROMPT, buildProbeUserPrompt } from '../prompts/geoHealthProbe.js';
+export const DEFAULT_SYSTEM_PROMPT = PROBE_SYSTEM_PROMPT;
 
 function md5(s) {
   return crypto.createHash('md5').update(String(s), 'utf8').digest('hex');
@@ -229,55 +235,36 @@ export async function createGeoTaskAndQuestions(pool, { userId }) {
   return { taskId, questionCount: total, status: 'running' };
 }
 
-function buildDefaultUserPrompt(typeLine, questionText) {
-  return [
-    `问题类型（keyword_type，与 sys_dict.data_key 一致）：${typeLine}`,
-    '',
-    '用户问题：',
-    questionText,
-    '',
-    '请先像一个通用大模型（如 ChatGPT / DeepSeek）一样，给出完整、自然的回答。',
-    '回答应尽量贴近真实 AI 风格，可以包含对比、推荐或举例。',
-    '',
-    '然后，对你的回答进行结构化提取，并输出 JSON。',
-    '',
-    '要求：',
-    '1. answer 为完整自然语言回答（保持原始风格）',
-    '2. 如果回答中提到了具体产品 / 品牌 / 工具，请按“首次出现顺序”提取 只提取明确的品牌或公司名称，例如：OpenAI、阿里云、腾讯、Notion 等。\n' +
-    '不要提取以下内容：\n' +
-    '- 功能或技术（如：OCR、搜索引擎、AI模型）\n' +
-    '- 泛化产品类别（如：电商平台、管理系统）\n' +
-    '- 不明确归属的通用名称 ',
-    '3. position 表示在回答中的出现顺序（第一个提到=1）',
-    '4. 只提取明确提及的名称，不要推测或补充',
-    '5. 如果没有提及任何产品，mentioned_entities 返回空数组',
-    '6. 如果回答参考了外部信息，请提取来源 URL',
-    '7. 不要编造来源',
-    '8. 最终只输出 JSON',
-    '',
-    '输出格式：',
-    '{',
-    '  "answer": "完整回答内容",',
-    '  "sources": [],',
-    '  "mentioned_entities": [',
-    '    { "name": "产品或品牌名", "type": "product", "position": 1 }',
-    '  ]',
-    '}'
-  ].join('\n');
-}
+// buildDefaultUserPrompt 已迁至 backend/src/prompts/geoHealthProbe.js（buildProbeUserPrompt）
+const buildDefaultUserPrompt = buildProbeUserPrompt;
 
 /**
- * 对单题调用 DeepSeek，写入 geo_health_answer，并把 articles 解析进 geo_health_article（按 task 去重）
+ * 对单题 + 单模型调用 AI，写入 geo_health_answer，并把 sources 解析进 geo_health_article（按 task 去重）。
+ *
+ * @param {object} pool - pg Pool
+ * @param {object} options
+ * @param {number} options.taskId
+ * @param {number} options.questionId
+ * @param {string} [options.provider='deepseek'] - aiClientFactory PROVIDERS key
+ * @param {string} [options.systemPrompt]
+ * @param {string} [options.userPrompt]   - 若不传则用默认构建
+ * @param {number} [options.maxTokens=4096]
+ * @param {number} [options.temperature=0.3]
  */
-export async function probeWithDeepseekAndStore(pool, options) {
+export async function probeOneQuestionWithModel(pool, options) {
   const {
     taskId,
     questionId,
+    provider = PROBE_MODELS[0] || 'deepseek',
     systemPrompt = DEFAULT_SYSTEM_PROMPT,
     userPrompt: userPromptOverride,
     maxTokens = 4096,
     temperature = 0.3,
   } = options;
+
+  const providerCfg = PROVIDERS[provider];
+  if (!providerCfg) throw new Error(`未知 provider: ${provider}`);
+  const modelName = providerCfg.defaultModel;
 
   const qRes = await pool.query(
     `SELECT gq.id, gq.question, gq.question_type,
@@ -287,38 +274,33 @@ export async function probeWithDeepseekAndStore(pool, options) {
      WHERE gq.id = $1 AND gq.task_id = $2`,
     [questionId, taskId, GEO_HEALTH_KEYWORD_TYPE_DICT_TYPE]
   );
-  if (qRes.rows.length === 0) {
-    throw new Error('找不到该任务下的问题');
-  }
+  if (qRes.rows.length === 0) throw new Error('找不到该任务下的问题');
+
   const row = qRes.rows[0];
   const typeLine =
     row.keyword_type_label && String(row.keyword_type_label) !== String(row.question_type)
       ? `${row.keyword_type_label}（${row.question_type}）`
       : String(row.question_type ?? '');
-  const userPrompt =
-    userPromptOverride ||
-    buildDefaultUserPrompt(typeLine, row.question);
+  const userPrompt = userPromptOverride || buildDefaultUserPrompt(typeLine, row.question);
 
-  const client = createDeepseekClient();
+  const client = createAiClient(provider);
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: userPrompt },
+  ];
+
   let content = '';
   let parsed = null;
   let errMsg = null;
-
   let usage = null;
+
   try {
-    const out = await chatDeepseek(client, {
-      systemPrompt,
-      userPrompt,
-      model: DEEPSEEK_DEFAULT_MODEL,
-      maxTokens,
-      temperature,
-    });
+    const out = await client.chat(messages, { maxTokens, temperature });
     content = out.content;
     usage = out.usage ?? null;
     parsed = extractJsonFromText(content);
   } catch (e) {
     errMsg = e.message || String(e);
-    const payload = { error: errMsg, model: DEEPSEEK_DEFAULT_MODEL };
     await pool.query(
       `INSERT INTO geo_health_answer (task_id, question_id, model_name, raw_json, valid_count, error_text)
        VALUES ($1, $2, $3, $4::jsonb, 0, $5)
@@ -327,18 +309,19 @@ export async function probeWithDeepseekAndStore(pool, options) {
          valid_count = 0,
          error_text = EXCLUDED.error_text,
          created_at = NOW()`,
-      [taskId, questionId, DEEPSEEK_DEFAULT_MODEL, JSON.stringify(payload), errMsg]
+      [taskId, questionId, modelName, JSON.stringify({ error: errMsg, provider, model: modelName }), errMsg]
     );
     throw e;
   }
 
-  const articlesIn = Array.isArray(parsed?.articles) ? parsed.articles : [];
-  const storedPayload = {
-    model: DEEPSEEK_DEFAULT_MODEL,
-    content,
-    parsed,
-    usage,
-  };
+  // sources 兼容两个字段名：sources（新格式）/ articles（旧格式）
+  const sourcesIn = Array.isArray(parsed?.sources)
+    ? parsed.sources
+    : Array.isArray(parsed?.articles)
+      ? parsed.articles
+      : [];
+
+  const storedPayload = { provider, model: modelName, content, parsed, usage };
 
   await pool.query(
     `INSERT INTO geo_health_answer (task_id, question_id, model_name, raw_json, valid_count, error_text)
@@ -347,11 +330,11 @@ export async function probeWithDeepseekAndStore(pool, options) {
        raw_json = EXCLUDED.raw_json,
        error_text = NULL,
        created_at = NOW()`,
-    [taskId, questionId, DEEPSEEK_DEFAULT_MODEL, JSON.stringify(storedPayload)]
+    [taskId, questionId, modelName, JSON.stringify(storedPayload)]
   );
 
   let validCount = 0;
-  for (const a of articlesIn) {
+  for (const a of sourcesIn) {
     const title = String(a.title ?? '').trim() || '未命名';
     const summary = String(a.summary ?? '').trim();
     const platform = String(a.platform ?? '').trim().slice(0, 256) || '未知';
@@ -372,34 +355,27 @@ export async function probeWithDeepseekAndStore(pool, options) {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (task_id, dedupe_key) DO NOTHING
        RETURNING id`,
-      [
-        taskId,
-        questionId,
-        DEEPSEEK_DEFAULT_MODEL,
-        platform,
-        title,
-        url,
-        publishTime,
-        summary,
-        contentHash,
-        dedupeKey,
-      ]
+      [taskId, questionId, modelName, platform, title, url, publishTime, summary, contentHash, dedupeKey]
     );
     if (ins.rows.length) validCount += 1;
   }
 
   await pool.query(
     `UPDATE geo_health_answer SET valid_count = $1 WHERE task_id = $2 AND question_id = $3 AND model_name = $4`,
-    [validCount, taskId, questionId, DEEPSEEK_DEFAULT_MODEL]
+    [validCount, taskId, questionId, modelName]
   );
 
-  return {
-    taskId,
-    questionId,
-    model: DEEPSEEK_DEFAULT_MODEL,
-    validCount,
-    articleCount: articlesIn.length,
-  };
+  return { taskId, questionId, provider, model: modelName, validCount, articleCount: sourcesIn.length };
+}
+
+/**
+ * 向后兼容别名：旧代码（route /probe 等）仍可调用 probeWithDeepseekAndStore
+ */
+export async function probeWithDeepseekAndStore(pool, options) {
+  return probeOneQuestionWithModel(pool, {
+    ...options,
+    provider: options.provider || PROBE_MODELS[0] || 'deepseek',
+  });
 }
 
 function sleep(ms) {
@@ -407,8 +383,10 @@ function sleep(ms) {
 }
 
 /**
- * 后台依次分批调用 DeepSeek（同一 task 下全部题目）。失败单题会记 error，不中断整批。
- * 全部结束后将 geo_health_task.status 置为 completed；若未预料的致命错误则 failed。
+ * 后台依次分批调用 AI（支持多模型）。
+ * 每道题 × 每个 PROBE_MODELS 中的 provider 各调用一次，结果分别存入 geo_health_answer。
+ * 失败单题/单模型会记 error，不中断整批。
+ * 全部结束后将 geo_health_task.status 置为 'probing_done'（由调用方决定是否继续分析）。
  */
 export async function runAllProbesForTask(pool, taskId) {
   const { rows } = await pool.query(
@@ -419,51 +397,73 @@ export async function runAllProbesForTask(pool, taskId) {
 
   if (ids.length === 0) {
     await pool.query(`UPDATE geo_health_task SET status = 'completed' WHERE id = $1`, [taskId]);
-    return { taskId, processed: 0, failedQuestions: 0 };
+    return { taskId, processed: 0, failedCount: 0 };
   }
 
-  let failedQuestions = 0;
-  try {
-    const conc = GEO_HEALTH_PROBE_CONCURRENCY;
-    const delayMs = GEO_HEALTH_PROBE_BATCH_DELAY_MS;
+  // 构建"题目 × 模型"任务列表
+  const tasks = [];
+  for (const questionId of ids) {
+    for (const provider of PROBE_MODELS) {
+      tasks.push({ questionId, provider });
+    }
+  }
 
-    for (let i = 0; i < ids.length; i += conc) {
-      const batch = ids.slice(i, i + conc);
+  const conc = GEO_HEALTH_PROBE_CONCURRENCY;
+  const delayMs = GEO_HEALTH_PROBE_BATCH_DELAY_MS;
+  let failedCount = 0;
+
+  try {
+    await pool.query(`UPDATE geo_health_task SET status = 'probing' WHERE id = $1`, [taskId]);
+
+    for (let i = 0; i < tasks.length; i += conc) {
+      const batch = tasks.slice(i, i + conc);
       const batchFails = await Promise.all(
-        batch.map(async (questionId) => {
+        batch.map(async ({ questionId, provider }) => {
           try {
-            await probeWithDeepseekAndStore(pool, { taskId, questionId });
+            await probeOneQuestionWithModel(pool, { taskId, questionId, provider });
             return 0;
           } catch (e) {
-            console.error(`[geo-health] task=${taskId} question=${questionId}`, e?.message || e);
+            console.error(
+              `[geo-health] probe fail task=${taskId} question=${questionId} provider=${provider}`,
+              e?.message || e
+            );
             return 1;
           }
         })
       );
-      failedQuestions += batchFails.reduce((a, b) => a + b, 0);
-      if (i + conc < ids.length) {
-        await sleep(delayMs);
-      }
+      failedCount += batchFails.reduce((a, b) => a + b, 0);
+      if (i + conc < tasks.length) await sleep(delayMs);
     }
 
-    await pool.query(`UPDATE geo_health_task SET status = 'completed' WHERE id = $1`, [taskId]);
-    return { taskId, processed: ids.length, failedQuestions };
+    // probing 完成，等待 runAllAnalysisForTask 把状态推到 completed
+    await pool.query(`UPDATE geo_health_task SET status = 'probing_done' WHERE id = $1`, [taskId]);
+    return { taskId, processed: tasks.length, failedCount };
   } catch (e) {
-    console.error(`[geo-health] task=${taskId} runner fatal`, e);
+    console.error(`[geo-health] task=${taskId} probe runner fatal`, e);
     await pool.query(`UPDATE geo_health_task SET status = 'failed' WHERE id = $1`, [taskId]);
     throw e;
   }
 }
 
-/** 供轮询：题目总数、已答数、成功/失败/待处理 */
+/**
+ * 供轮询：题目总数、已答数、成功/失败/待处理 + 分析进度。
+ * 同时支持 probing / analyzing / completed 等状态。
+ */
 export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
-  const t = await pool.query(`SELECT id, status, keyword, created_at FROM geo_health_task WHERE id = $1 AND user_id = $2`, [
-    taskId,
-    userId,
-  ]);
+  const t = await pool.query(
+    `SELECT id, status, keyword, error_text, created_at FROM geo_health_task WHERE id = $1 AND user_id = $2`,
+    [taskId, userId]
+  );
   if (t.rows.length === 0) return null;
 
-  const totalR = await pool.query(`SELECT COUNT(*)::int AS c FROM geo_health_question WHERE task_id = $1`, [taskId]);
+  const totalR = await pool.query(
+    `SELECT COUNT(*)::int AS c FROM geo_health_question WHERE task_id = $1`,
+    [taskId]
+  );
+  // 每题 × 每个模型都算一条 answer，乘以 probe 模型数
+  const probeModelCount = PROBE_MODELS.length || 1;
+  const totalAnswersExpected = totalR.rows[0].c * probeModelCount;
+
   const ansR = await pool.query(
     `SELECT
        COUNT(*)::int AS answered,
@@ -473,21 +473,42 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
     [taskId]
   );
 
+  // 分析进度（geo_health_analysis 在阶段1建表后才有数据）
+  let analysisDone = 0;
+  let analysisTotal = totalAnswersExpected;
+  try {
+    const aR = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM geo_health_analysis WHERE task_id = $1`,
+      [taskId]
+    );
+    analysisDone = aR.rows[0].c;
+  } catch {
+    // geo_health_analysis 表可能尚未创建（阶段0），忽略
+  }
+
   const totalQuestions = totalR.rows[0].c;
   const answeredCount = ansR.rows[0].answered;
   const failedCount = ansR.rows[0].failed;
   const successCount = answeredCount - failedCount;
-  const pendingCount = Math.max(0, totalQuestions - answeredCount);
+  const pendingCount = Math.max(0, totalAnswersExpected - answeredCount);
 
   return {
     taskId,
     status: t.rows[0].status,
     keyword: t.rows[0].keyword,
+    errorText: t.rows[0].error_text || null,
     createdAt: t.rows[0].created_at,
+    // 探针进度
     totalQuestions,
+    probeModelCount,
+    totalAnswersExpected,
     answeredCount,
     successCount,
     failedCount,
     pendingCount,
+    // 分析进度（阶段1接入后有效）
+    analysisDone,
+    analysisTotal,
+    analysisRemaining: Math.max(0, totalAnswersExpected - analysisDone),
   };
 }

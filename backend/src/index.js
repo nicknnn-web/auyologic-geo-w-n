@@ -1451,6 +1451,7 @@ import websiteAnalyzerRouter from './routes/websiteAnalyzer.js';
 import aiProxyRouter from './routes/aiProxy.js';
 import fileUploadRouter from './routes/fileUpload.js';
 import geoBrandTaskRouter from './routes/geoBrandTask.js';
+import geoHealthReportRouter from './routes/geoHealthReport.js';
 
 app.use('/api', contentGeneratorRouter);
 app.use('/api/minio', fileUploadRouter);
@@ -1458,6 +1459,7 @@ app.use('/api', geoDetectionRouter);
 app.use('/api', websiteAnalyzerRouter);
 app.use('/api/ai', aiProxyRouter);
 app.use('/api', geoBrandTaskRouter);
+app.use('/api', geoHealthReportRouter);
 
 // ========== Stub 接口（功能完善后替换为真实实现）==========
 
@@ -1555,7 +1557,9 @@ app.delete('/api/website-reports/:id', async (req, res) => {
 });
 
 // ========== GEO 健康体检报告 API ==========
-app.get('/api/geo-health-report', async (req, res) => {
+// ⚠️ 以下旧实现已被 routes/geoHealthReport.js 取代，保留仅供参考
+// app.get('/api/geo-health-report', async (req, res) => {
+const _LEGACY_geo_health_report_DISABLED = async (req, res) => {
   try {
     const userId = req.headers['x-user-id'] || 'default_user';
 
@@ -2123,7 +2127,7 @@ app.get('/api/geo-health-report', async (req, res) => {
     console.error('geo-health-report error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
-});
+}; // _LEGACY_geo_health_report_DISABLED
 
 // 启动
 const PORT = process.env.PORT || 3001;

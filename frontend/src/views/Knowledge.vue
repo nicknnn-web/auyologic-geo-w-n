@@ -207,6 +207,7 @@ import { UploadFilled, Document, InfoFilled } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import { knowledgeAPI } from '../utils/api'
 import { uploadFile, downloadFromMinIO, deleteFromMinIO } from '../services/uploadService'
+import { buildKnowledgeAnalyzePrompt } from '../prompts/index.js'
 
 const fileInput = ref(null)
 const isDragging = ref(false)
@@ -505,22 +506,7 @@ const batchAnalyzing = ref(false) // 批量分析中
  * @returns {Promise<{keywords: string[], summary: string, keyPoints: string[]}>}
  */
 const analyzeWithDeepSeek = async (content) => {
-  const prompt = `你是一个内容分析专家。请分析以下文档，提取用于AI创作的知识素材。
-
-文档内容：
-${content}
-
-请以JSON格式返回：
-{
-  "keywords": ["关键词1", "关键词2", ...],  // 5-10个可用于GEO创作的关键词
-  "summary": "100字内的摘要",  // 文档核心内容概述
-  "keyPoints": ["要点1", "要点2", ...]  // 3-5个核心观点
-}
-
-要求：
-- keywords 要能直接用于prompt匹配，覆盖品牌词、产品词、场景词、问题词
-- summary 要包含品牌/产品的核心卖点
-- keyPoints 是用户真正关心的价值点`
+  const prompt = buildKnowledgeAnalyzePrompt(content)
 
   const response = await fetch(AI_PROXY_URL, {
     method: 'POST',

@@ -1,24 +1,30 @@
 /**
- * 仅对接 DeepSeek 兼容接口（OpenAI SDK + baseURL）。
- * 以后若增加豆包 / Kimi，请新建 doubaoClient.js 等，再在业务里按模型名分发，勿在此文件堆逻辑。
+ * DeepSeek 客户端（向后兼容层）
+ *
+ * 新代码请直接使用 aiClientFactory.js：
+ *   import { createAiClient } from './aiClientFactory.js'
+ *   const client = createAiClient('deepseek')
+ *   const { content } = await client.chat(messages, { maxTokens: 2048 })
+ *
+ * 此文件保留是为了兼容已有调用（aiProxy.js 等），不建议在新业务里引用。
  */
-import OpenAI from 'openai';
 
-export const DEEPSEEK_DEFAULT_MODEL = 'deepseek-chat';
+import { createAiClient, PROVIDERS } from './aiClientFactory.js';
 
+export const DEEPSEEK_DEFAULT_MODEL = PROVIDERS.deepseek.defaultModel;
+
+/** 兼容旧调用：返回一个带 chat.completions.create 方法的对象（供旧版 chatDeepseek 使用） */
 export function createDeepseekClient() {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  const baseURL = process.env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1';
-  if (!apiKey) {
-    throw new Error('未配置环境变量 DEEPSEEK_API_KEY');
-  }
-  return new OpenAI({ apiKey, baseURL });
+  // 直接返回 aiClientFactory 创建的统一客户端
+  // 旧代码调用 createDeepseekClient() 后再调 chatDeepseek(client, opts)，仍然有效
+  return createAiClient('deepseek');
 }
 
 /**
- * 单次对话。维护时只需关心 system + user 文案与模型名。
+ * 单次对话（兼容旧签名）。
+ * client 参数已被忽略（工厂内部自行创建），保留参数是为了不破坏现有调用。
  */
-export async function chatDeepseek(client, options) {
+export async function chatDeepseek(_clientIgnored, options) {
   const {
     systemPrompt,
     userPrompt,
@@ -27,19 +33,10 @@ export async function chatDeepseek(client, options) {
     temperature = 0.3,
   } = options;
 
-  const response = await client.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    max_tokens: maxTokens,
-    temperature,
-  });
+  const client = createAiClient('deepseek');
+  const messages = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: userPrompt });
 
-  const content = response.choices?.[0]?.message?.content ?? '';
-  return {
-    content,
-    usage: response.usage ?? null,
-  };
+  return client.chat(messages, { model, maxTokens, temperature });
 }
