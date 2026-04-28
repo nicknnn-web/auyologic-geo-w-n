@@ -250,6 +250,7 @@ import api, { publishTasksAPI } from '../utils/api'
 import { fetchAllPages, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
+import { formatZhCnMdHm } from '../utils/dateTime.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -550,9 +551,5 @@ const getStatusLabel = (status) => {
   return map[status] || status
 }
 
-const formatTime = (ts) => {
-  if (!ts) return '-'
-  const d = new Date(ts)
-  return `${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`
-}
+const formatTime = (ts) => (!ts ? '-' : formatZhCnMdHm(ts))
 </script>

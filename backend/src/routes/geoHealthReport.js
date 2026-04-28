@@ -1,16 +1,20 @@
 /**
  * GET /api/geo-health-report
+ * GET /api/geo-health-report/competitor?taskId=&name=
  *
  * 从 geo_health_analysis 聚合品牌体检报告所需全部指标。
  * 若当前用户尚无分析数据，返回 success:true 但各指标为零（前端走"暂无数据"分支）。
  *
+ * 竞品：主接口的 competitorMentions 仅含帕累托摘要；点击柱后由前端请求
+ * `/geo-health-report/competitor` 拉取该竞品完整详情（含情感桶与源问题题干）。
+ *
  * 响应字段与前端 GEOHealthReport.vue 的 loadHealthReport 完全对应：
- *   brandName / brandDomain / checkTime / healthScore
+ *   brandName / brandDomain / checkTime（该用户最近完成任务的 last_analysis_at）/ healthScore
  *   kpiDenominator / interceptRate / blindIndex / negativeRate / authorityScore
  *   modelVisibilityCards[]
  *   intentPaths[] / platforms[] / matrixData{}
  *   competitorMentions[]
- *   sentimentWordCloud[]
+ *   sentimentWordCloud[]（仅含词库词在分词统计中的实际命中次数>0；count=次数，weight=count/hitMax 供着色）
  *   sourceData[]
  *   diagnosticSuggestions[]
  *   rawData{}
@@ -18,6 +22,11 @@
 
 import { Router } from 'express';
 import pool from '../db.js';
+import { SOURCE_CATEGORY, SOURCE_CATEGORY_LABEL } from '../services/sourceClassifier.js';
+import {
+  loadSentimentLexiconPolarityRules,
+  sentimentPolarityFromLexicon,
+} from '../services/sentimentLexiconService.js';
 
 const router = Router();
 
@@ -211,6 +220,110 @@ function buildDiagnostics({
 }
 
 // ─────────────────────────────────────────────
+// 竞品：明细 SQL 与聚合（主报告只返回列表；点击柱再请求详情接口）
+// ─────────────────────────────────────────────
+
+const COMP_DETAIL_SELECT = `SELECT cc AS name,
+              a.question_id,
+              a.question_type,
+              a.model_name,
+              a.compare_status,
+              a.has_negative,
+              NULLIF(
+                trim(
+                  COALESCE(
+                    NULLIF(trim(COALESCE(q.question, '')), ''),
+                    NULLIF(trim(COALESCE(sq.question, '')), '')
+                  )
+                ),
+                ''
+              ) AS question_text`;
+
+const COMP_DETAIL_FROM = `
+       FROM geo_health_analysis a
+       CROSS JOIN LATERAL jsonb_array_elements_text(a.competitors_mentioned) AS cc
+       LEFT JOIN geo_health_question q
+         ON q.id = a.question_id AND q.task_id = a.task_id
+       LEFT JOIN questions sq
+         ON sq.id = COALESCE(NULLIF(a.source_question_id, 0), q.source_question_id)
+       WHERE a.task_id = $1 AND a.error_text IS NULL
+         AND a.competitors_mentioned IS NOT NULL
+         AND jsonb_array_length(a.competitors_mentioned) > 0`;
+
+/** 拉取竞品展开明细行（可选仅某一竞品名） */
+async function loadCompetitorDetailRows(pool, taskId, competitorName = null) {
+  if (competitorName != null && String(competitorName).trim() !== '') {
+    return pool.query(
+      `${COMP_DETAIL_SELECT} ${COMP_DETAIL_FROM} AND trim(cc) = trim($2)`,
+      [taskId, competitorName]
+    );
+  }
+  return pool.query(`${COMP_DETAIL_SELECT} ${COMP_DETAIL_FROM}`, [taskId]);
+}
+
+/** 将明细行聚合成前端「竞品详情面板」单条对象 */
+function buildCompetitorDetailPayload(name, count, pct, detailRows) {
+  const pushQuestion = (bucket, r) => {
+    const key = String(r.question_id ?? '');
+    if (!key) return;
+    if (!bucket._keys) bucket._keys = new Set();
+    if (bucket._keys.has(key)) return;
+    bucket._keys.add(key);
+    const text = String(r.question_text ?? '').trim();
+    bucket.list.push({ questionId: r.question_id, question: text });
+  };
+
+  const d = {
+    questionTypes: new Set(),
+    models: new Set(),
+    win: 0,
+    lose: 0,
+    neutral: 0,
+    negCount: 0,
+    winQuestions: { list: [] },
+    loseQuestions: { list: [] },
+    neutralQuestions: { list: [] },
+    negQuestions: { list: [] },
+  };
+
+  for (const r of detailRows) {
+    if (r.question_type) d.questionTypes.add(r.question_type);
+    if (r.model_name) d.models.add(r.model_name);
+    if (r.compare_status === 'win') {
+      d.win++;
+      pushQuestion(d.winQuestions, r);
+    } else if (r.compare_status === 'lose') {
+      d.lose++;
+      pushQuestion(d.loseQuestions, r);
+    } else if (r.compare_status === 'neutral') {
+      d.neutral++;
+      pushQuestion(d.neutralQuestions, r);
+    }
+    if (r.has_negative) {
+      d.negCount++;
+      pushQuestion(d.negQuestions, r);
+    }
+  }
+
+  return {
+    name,
+    count,
+    pct,
+    barTone: 'primary',
+    questionTypes: [...d.questionTypes],
+    models: [...d.models],
+    win: d.win,
+    lose: d.lose,
+    neutral: d.neutral,
+    negCount: d.negCount,
+    winQuestions: d.winQuestions.list,
+    loseQuestions: d.loseQuestions.list,
+    neutralQuestions: d.neutralQuestions.list,
+    negQuestions: d.negQuestions.list,
+  };
+}
+
+// ─────────────────────────────────────────────
 // 主路由
 // ─────────────────────────────────────────────
 router.get('/geo-health-report', async (req, res) => {
@@ -226,13 +339,17 @@ router.get('/geo-health-report', async (req, res) => {
     const brandName = String(enterprise.company_name || '品牌').trim();
     const brandDomain = String(enterprise.website || '').trim();
 
-    // 最新完成的 task（含 analysis 数据的）
+    // 取「分析流水线最后写入时间」最晚的已完成任务；检测时间用该任务的完成时刻（非任务创建时间）
     const taskRes = await pool.query(
-      `SELECT t.id AS task_id, t.created_at
+      `SELECT t.id AS task_id, finished.last_analysis_at AS check_time
        FROM geo_health_task t
+       INNER JOIN (
+         SELECT task_id, MAX(created_at) AS last_analysis_at
+         FROM geo_health_analysis
+         GROUP BY task_id
+       ) finished ON finished.task_id = t.id
        WHERE t.user_id = $1 AND t.status = 'completed'
-         AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)
-       ORDER BY t.created_at DESC
+       ORDER BY finished.last_analysis_at DESC NULLS LAST, t.id DESC
        LIMIT 1`,
       [userId]
     );
@@ -243,7 +360,7 @@ router.get('/geo-health-report', async (req, res) => {
     }
 
     const taskId = taskRes.rows[0].task_id;
-    const checkTime = taskRes.rows[0].created_at;
+    const checkTime = taskRes.rows[0].check_time;
 
     // ── 1. 各模型可见度得分 ──
     const mvRes = await pool.query(
@@ -447,11 +564,11 @@ router.get('/geo-health-report', async (req, res) => {
     // ── 4. 竞品拦截（展开 competitors_mentioned 数组）──
     const compRes = await pool.query(
       `SELECT cc AS name, COUNT(*)::int AS count
-       FROM geo_health_analysis,
-            jsonb_array_elements_text(competitors_mentioned) AS cc
-       WHERE task_id = $1 AND error_text IS NULL
-         AND competitors_mentioned IS NOT NULL
-         AND jsonb_array_length(competitors_mentioned) > 0
+       FROM geo_health_analysis a
+       CROSS JOIN LATERAL jsonb_array_elements_text(a.competitors_mentioned) AS cc
+       WHERE a.task_id = $1 AND a.error_text IS NULL
+         AND a.competitors_mentioned IS NOT NULL
+         AND jsonb_array_length(a.competitors_mentioned) > 0
        GROUP BY cc
        ORDER BY count DESC
        LIMIT 100`,
@@ -459,122 +576,114 @@ router.get('/geo-health-report', async (req, res) => {
     );
 
     const competitorLoseCount = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM geo_health_analysis
-       WHERE task_id = $1 AND compare_status = 'lose' AND error_text IS NULL`,
+      `SELECT COUNT(*)::int AS c FROM geo_health_analysis a
+       WHERE a.task_id = $1 AND a.compare_status = 'lose' AND a.error_text IS NULL`,
       [taskId]
     ).then((r) => r.rows[0].c);
 
-    // 竞品详情：每个竞品出现的问题类型、模型、情感倾向
-    const compDetailRes = await pool.query(
-      `SELECT cc AS name, question_type, model_name, compare_status, has_negative
-       FROM geo_health_analysis,
-            jsonb_array_elements_text(competitors_mentioned) AS cc
-       WHERE task_id = $1 AND error_text IS NULL
-         AND competitors_mentioned IS NOT NULL
-         AND jsonb_array_length(competitors_mentioned) > 0`,
-      [taskId]
-    );
-
-    // 聚合每个竞品的详情
-    const compDetailMap = {};
-    for (const r of compDetailRes.rows) {
-      if (!compDetailMap[r.name]) {
-        compDetailMap[r.name] = {
-          questionTypes: new Set(),
-          models: new Set(),
-          win: 0, lose: 0, neutral: 0, negCount: 0,
-        };
-      }
-      const d = compDetailMap[r.name];
-      if (r.question_type) d.questionTypes.add(r.question_type);
-      if (r.model_name) d.models.add(r.model_name);
-      if (r.compare_status === 'win') d.win++;
-      else if (r.compare_status === 'lose') d.lose++;
-      else if (r.compare_status === 'neutral') d.neutral++;
-      if (r.has_negative) d.negCount++;
-    }
-
+    // 竞品：主报告仅返回帕累托图所需摘要；详情见 GET /geo-health-report/competitor
     const compTotal = compRes.rows.reduce((s, r) => s + r.count, 0) || 1;
-    const competitorMentions = compRes.rows.map((r) => {
-      const d = compDetailMap[r.name] || {};
-      return {
-        name: r.name,
-        count: r.count,
-        pct: Math.round((r.count / compTotal) * 100),
-        barTone: 'primary',
-        // 帕累托详情
-        questionTypes: d.questionTypes ? [...d.questionTypes] : [],
-        models: d.models ? [...d.models] : [],
-        win: d.win || 0,
-        lose: d.lose || 0,
-        neutral: d.neutral || 0,
-        negCount: d.negCount || 0,
-      };
-    });
+    const competitorMentions = compRes.rows.map((r) => ({
+      name: r.name,
+      count: r.count,
+      pct: Math.round((r.count / compTotal) * 100),
+      barTone: 'primary',
+    }));
 
-    // ── 5. 词云（sentiment_keywords 聚合）──
+    // ── 5. 词云：优先 answer_tokens（回答正文服务端分词），旧数据回退 sentiment_keywords ──
     const kwRes = await pool.query(
       `SELECT kw AS name, COUNT(*)::int AS value
        FROM geo_health_analysis,
-            jsonb_array_elements_text(sentiment_keywords) AS kw
+            jsonb_array_elements_text(
+              CASE
+                WHEN answer_tokens IS NOT NULL
+                  AND jsonb_typeof(answer_tokens) = 'array'
+                  AND jsonb_array_length(answer_tokens) > 0
+                THEN answer_tokens
+                ELSE COALESCE(sentiment_keywords, '[]'::jsonb)
+              END
+            ) AS kw
        WHERE task_id = $1 AND error_text IS NULL
-         AND sentiment_keywords IS NOT NULL
-         AND jsonb_array_length(sentiment_keywords) > 0
+         AND jsonb_array_length(
+           CASE
+             WHEN answer_tokens IS NOT NULL
+               AND jsonb_typeof(answer_tokens) = 'array'
+               AND jsonb_array_length(answer_tokens) > 0
+             THEN answer_tokens
+             ELSE COALESCE(sentiment_keywords, '[]'::jsonb)
+           END
+         ) > 0
        GROUP BY kw
        ORDER BY value DESC
        LIMIT 80`,
       [taskId]
     );
 
-    const maxKw = kwRes.rows.length ? Math.max(...kwRes.rows.map((r) => r.value), 1) : 1;
-    // 负面词关联：has_negative=true 的题里出现的词标负面色
-    const negKwRes = await pool.query(
-      `SELECT kw AS name
-       FROM geo_health_analysis,
-            jsonb_array_elements_text(sentiment_keywords) AS kw
-       WHERE task_id = $1 AND has_negative = true AND error_text IS NULL
-       GROUP BY kw`,
+    // 词云：仅返回在分词/旧摘要聚合中实际命中次数>0的词库词；不出现无数据词，避免误导。
+    const lexPolarityRules = await loadSentimentLexiconPolarityRules(pool, userId);
+    const lexEntries = [
+      ...lexPolarityRules.negative.map((k) => ({ keyword: k, polarity: 'negative' })),
+      ...lexPolarityRules.positive.map((k) => ({ keyword: k, polarity: 'positive' })),
+      ...lexPolarityRules.neutral.map((k) => ({ keyword: k, polarity: 'neutral' })),
+    ];
+
+    const lexHitCount = new Map();
+    for (const r of kwRes.rows) {
+      for (const e of lexEntries) {
+        if (sentimentPolarityFromLexicon(r.name, {
+          negative: e.polarity === 'negative' ? [e.keyword] : [],
+          positive: e.polarity === 'positive' ? [e.keyword] : [],
+          neutral: e.polarity === 'neutral' ? [e.keyword] : [],
+        }) === e.polarity) {
+          lexHitCount.set(e.keyword, (lexHitCount.get(e.keyword) || 0) + (r.value || 0));
+          break; // 一个分词只计入第一个命中的词库词，避免重复加权
+        }
+      }
+    }
+
+    const hitPositive = [...lexHitCount.values()].filter((v) => v > 0);
+    const hitMax = hitPositive.length ? Math.max(...hitPositive, 1) : 1;
+    const sentimentWordCloud = lexEntries
+      .map((e) => {
+        const count = lexHitCount.get(e.keyword) || 0;
+        if (count <= 0) return null;
+        return {
+          text: e.keyword,
+          count,
+          polarity: e.polarity,
+          weight: count / hitMax,
+        };
+      })
+      .filter(Boolean);
+
+    // ── 6. 信源（geo_health_article.source_category 四分类聚合，与探针 Prompt 枚举一致）──
+    const srcArtRes = await pool.query(
+      `SELECT COALESCE(source_category, 'industry_vertical') AS k, COUNT(*)::int AS count
+       FROM geo_health_article
+       WHERE task_id = $1
+       GROUP BY 1`,
       [taskId]
     );
-    const negKwSet = new Set(negKwRes.rows.map((r) => r.name));
-
-    // 正面词关联：visibility=visible 且 position IN (T0,T1) 的题里出现的词
-    const posKwRes = await pool.query(
-      `SELECT kw AS name
-       FROM geo_health_analysis,
-            jsonb_array_elements_text(sentiment_keywords) AS kw
-       WHERE task_id = $1 AND visibility = 'visible'
-         AND position IN ('T0','T1') AND error_text IS NULL
-       GROUP BY kw`,
-      [taskId]
-    );
-    const posKwSet = new Set(posKwRes.rows.map((r) => r.name));
-
-    const sentimentWordCloud = kwRes.rows.map((r) => ({
-      text: r.name,
-      weight: r.value / maxKw,
-      polarity: negKwSet.has(r.name) ? 'negative' : posKwSet.has(r.name) ? 'positive' : 'neutral',
-    }));
-
-    // ── 6. 信源（source_type 聚合）──
-    const srcAllRes = await pool.query(
-      `SELECT source_type AS type, COUNT(*)::int AS count
-       FROM geo_health_analysis
-       WHERE task_id = $1 AND error_text IS NULL
-         AND source_type IS NOT NULL AND source_type != '无'
-       GROUP BY source_type
-       ORDER BY count DESC
-       LIMIT 8`,
-      [taskId]
-    );
-
-    const srcSumAll = srcAllRes.rows.reduce((s, r) => s + r.count, 0) || 1;
-    const SOURCE_COLORS = ['#67c23a', '#409eff', '#e6a23c', '#f56c6c', '#909399', '#8B5CF6', '#06B6D4', '#EC4899'];
-    const sourceData = srcAllRes.rows.map((r, i) => ({
-      type: r.type,
-      count: r.count,
-      pct: Math.round((r.count / srcSumAll) * 100),
-      color: SOURCE_COLORS[i % SOURCE_COLORS.length],
+    const byCat = {};
+    for (const r of srcArtRes.rows) byCat[r.k] = r.count;
+    const SOURCE_PIE_ORDER = [
+      SOURCE_CATEGORY.AUTHORITY_MEDIA,
+      SOURCE_CATEGORY.INDUSTRY_VERTICAL,
+      SOURCE_CATEGORY.OFFICIAL_MEDIA,
+      SOURCE_CATEGORY.UGC_COMMUNITY,
+    ];
+    const SOURCE_PIE_COLORS = {
+      [SOURCE_CATEGORY.AUTHORITY_MEDIA]: '#67c23a',
+      [SOURCE_CATEGORY.INDUSTRY_VERTICAL]: '#409eff',
+      [SOURCE_CATEGORY.OFFICIAL_MEDIA]: '#e6a23c',
+      [SOURCE_CATEGORY.UGC_COMMUNITY]: '#909399',
+    };
+    const srcSumArt = SOURCE_PIE_ORDER.reduce((s, k) => s + (byCat[k] || 0), 0) || 1;
+    const sourceData = SOURCE_PIE_ORDER.map((k) => ({
+      type: SOURCE_CATEGORY_LABEL[k],
+      count: byCat[k] || 0,
+      pct: Math.round(((byCat[k] || 0) / srcSumArt) * 100),
+      color: SOURCE_PIE_COLORS[k],
     }));
 
     // ── 7. 综合健康分 ──
@@ -633,6 +742,55 @@ router.get('/geo-health-report', async (req, res) => {
   } catch (err) {
     console.error('[geo-health-report]', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 单个竞品详情（问题类型、模型、情感分布、各桶源问题列表）
+ */
+router.get('/geo-health-report/competitor', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.query.taskId ?? ''), 10);
+    const name = String(req.query.name ?? '').trim();
+    if (!Number.isFinite(taskId) || taskId <= 0 || !name) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId 与 name 查询参数' });
+    }
+
+    const own = await pool.query(
+      `SELECT 1 FROM geo_health_task t
+       WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
+         AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)`,
+      [taskId, userId]
+    );
+    if (!own.rows.length) {
+      return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
+    }
+
+    const compRes = await pool.query(
+      `SELECT cc AS name, COUNT(*)::int AS count
+       FROM geo_health_analysis a
+       CROSS JOIN LATERAL jsonb_array_elements_text(a.competitors_mentioned) AS cc
+       WHERE a.task_id = $1 AND a.error_text IS NULL
+         AND a.competitors_mentioned IS NOT NULL
+         AND jsonb_array_length(a.competitors_mentioned) > 0
+       GROUP BY cc`,
+      [taskId]
+    );
+    const row = compRes.rows.find((r) => String(r.name ?? '').trim() === name);
+    if (!row) {
+      return res.status(404).json({ success: false, error: '未找到该竞品提及记录' });
+    }
+
+    const compTotal = compRes.rows.reduce((s, r) => s + r.count, 0) || 1;
+    const pct = Math.round((row.count / compTotal) * 100);
+    const detailRes = await loadCompetitorDetailRows(pool, taskId, name);
+    const competitor = buildCompetitorDetailPayload(row.name, row.count, pct, detailRes.rows);
+
+    return res.json({ success: true, competitor });
+  } catch (err) {
+    console.error('[geo-health-report/competitor]', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

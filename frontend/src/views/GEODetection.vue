@@ -288,6 +288,7 @@ import {
 } from '../utils/sysDict.js'
 import { fetchAllPages } from '../utils/pagedApi.js'
 import { GEO_DETECTION_SYSTEM_PROMPT, buildGeoDetectionPrompt } from '../prompts/index.js'
+import { formatZhCnMdHm, formatZhCnYmd } from '../utils/dateTime.js'
 
 /**
  * 雷达图组件 - 用SVG实现
@@ -997,14 +998,7 @@ const getHistoryGradeClass = (grade) => {
   return 'grade-red'
 }
 
-const formatHistoryDate = (isoString) => {
-  const d = new Date(isoString)
-  const month = d.getMonth() + 1
-  const day = d.getDate()
-  const hour = d.getHours().toString().padStart(2, '0')
-  const minute = d.getMinutes().toString().padStart(2, '0')
-  return `${month}/${day} ${hour}:${minute}`
-}
+const formatHistoryDate = formatZhCnMdHm
 
 const handleHistoryCardClick = async (id) => {
   router.replace({ path: '/geo-detection', query: { historyId: id } })
@@ -1578,7 +1572,7 @@ const handleExportResult = () => {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = 'GEO检测报告_' + new Date().toISOString().slice(0, 10) + '.json'
+  a.download = 'GEO检测报告_' + formatZhCnYmd() + '.json'
   a.click()
   URL.revokeObjectURL(url)
   ElMessage.success({ message: '报告已导出', offset: 80 })

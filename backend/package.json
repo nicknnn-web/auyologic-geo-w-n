@@ -11,6 +11,7 @@
     "postinstall": "node scripts/playwright-install.mjs"
   },
   "dependencies": {
+    "@node-rs/jieba": "^2.0.1",
     "archiver": "^7.0.1",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",

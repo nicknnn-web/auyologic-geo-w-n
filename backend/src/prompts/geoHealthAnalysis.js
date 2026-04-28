@@ -26,8 +26,24 @@ export const ANALYSIS_SYSTEM_PROMPT = `你是品牌AI可见度多维分析引擎
  * @param {string} params.question      用户问题
  * @param {string} params.answer        AI 回答全文
  * @param {'brand'|'compare'|'open'} params.category  问题意图类型
+ * @param {{ positive?: string[]; neutral?: string[]; negative?: string[] }} [params.sentimentLexicon] 情感词三档（库表注入）
  */
-export function buildAnalysisPrompt({ brand, question, answer, category }) {
+export function buildAnalysisPrompt({ brand, question, answer, category, sentimentLexicon }) {
+  const lex = sentimentLexicon || {};
+  const pos = Array.isArray(lex.positive) ? lex.positive.filter(Boolean) : [];
+  const neu = Array.isArray(lex.neutral) ? lex.neutral.filter(Boolean) : [];
+  const neg = Array.isArray(lex.negative) ? lex.negative.filter(Boolean) : [];
+  const quoteJoin = (arr) => arr.map((x) => `「${String(x).replace(/「|」/g, '')}」`).join('、');
+  const lexiconBlock =
+    pos.length + neu.length + neg.length === 0
+      ? ''
+      : `
+【语义情绪词表】（运营在「情感词管理」中配置；用于统一 hasNegative、sentimentKeywords、position(T3) 等与情绪相关的判定；语义相近或同义表达也应考虑）
+- 正面优势（整体语义偏积极时可参考，但不单凭此类词否定负面）：${pos.length ? quoteJoin(pos) : '（暂无）'}
+- 中性描述（客观描述向，不单独作为正面或负面依据）：${neu.length ? quoteJoin(neu) : '（暂无）'}
+- 负面警示（出现或语境接近时，hasNegative 应为 true，且 sentimentKeywords 应优先覆盖相关词或其同义说法）：${neg.length ? quoteJoin(neg) : '（暂无）'}
+`;
+
   return `【品牌分析任务】
 
 输入：
@@ -35,7 +51,7 @@ export function buildAnalysisPrompt({ brand, question, answer, category }) {
 - category（问题意图）: ${category}
 - question: ${question}
 - answer: ${answer}
-
+${lexiconBlock}
 请对上述 AI 回答做以下多维判定，并严格只输出 JSON：
 
 字段说明：
@@ -72,13 +88,15 @@ export function buildAnalysisPrompt({ brand, question, answer, category }) {
 8. competitorsMentioned：回答中出现的竞品名列表（string[]；若无填 []）
 
 9. hasNegative：回答是否包含对目标品牌的负面描述（差评、风险、投诉等）（true/false）
+    若上文提供了「语义情绪词表」，须与词表中负面警示、正面优势的语义关系结合判断，不得忽略词表口径。
 
 10. sourceType：回答引用的主要信源类型
     根据回答中出现的平台名/域名/机构名动态判断，如："官网"、"媒体"、"知乎"、"小红书"、
     "百科"、"论坛"、"微博"、"抖音"、"GitHub"等。
     若回答未引用任何外部信源，填"无"。
 
-11. sentimentKeywords：从回答中提取3-8个关键词，反映 AI 对品牌的语义情绪倾向（string[]）
+11. sentimentKeywords：可选精炼摘要，0-8 个短词，概括回答中与品牌情绪相关的焦点（string[]；报告词云以服务端对回答正文的分词统计为准，本字段供矩阵与其它判定参考）
+    若上文提供了「语义情绪词表」，可优先纳入与回答语义相关的词表词或其同义表达。
 
 输出（严格 JSON，不含任何其他内容）：
 {

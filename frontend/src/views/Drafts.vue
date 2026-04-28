@@ -41,7 +41,9 @@
           <el-tag :type="row.status === '已发布' ? 'success' : 'warning'">{{ row.status }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatCreatedAt(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="250" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handlePreview(row)">查看</el-button>
@@ -87,6 +89,7 @@ import { ElMessage } from 'element-plus'
 import { draftsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
+import { formatZhCnDateTime } from '../utils/dateTime.js'
 
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -115,6 +118,8 @@ const renderedContent = computed(() => {
   const html = marked(currentDraft.value.content)
   return DOMPurify.sanitize(html)
 })
+
+const formatCreatedAt = (v) => (v ? formatZhCnDateTime(v) : '-')
 
 const handleSelectionChange = (rows) => {
   selectedRows.value = rows

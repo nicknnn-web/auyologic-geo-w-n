@@ -209,6 +209,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, Histogram, Monitor, RefreshRight, Document, WarningFilled, Flag, TrendCharts, View, Cpu, DataLine, List, DocumentCopy, Download, ArrowLeft } from '@element-plus/icons-vue'
 import { GEO_REPORT_SYSTEM_PROMPT, buildGeoReportPrompt } from '../prompts/index.js'
+import { formatZhCnDateTime, formatZhCnYmd } from '../utils/dateTime.js'
 
 
 // API配置
@@ -441,7 +442,7 @@ const copyToClipboard = async () => {
 const formatReportAsText = () => {
   const data = reportData.value
   return `# GEO 改进方案报告
-生成时间: ${new Date().toLocaleString('zh-CN')}
+生成时间: ${formatZhCnDateTime(new Date())}
 
 ## 综合健康度
 - 综合得分: ${combinedScore.value}分 (${healthGrade.value})
@@ -482,7 +483,7 @@ const downloadReport = () => {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `GEO改进方案报告_${new Date().toISOString().slice(0, 10)}.md`
+  a.download = `GEO改进方案报告_${formatZhCnYmd()}.md`
   a.click()
   URL.revokeObjectURL(url)
   ElMessage.success('报告已下载')

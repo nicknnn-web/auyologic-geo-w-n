@@ -48,7 +48,9 @@
           </el-tooltip>
         </template>
       </el-table-column>
-      <el-table-column prop="createdAt" label="创建时间" width="180" />
+      <el-table-column label="创建时间" width="180">
+        <template #default="{ row }">{{ formatCreatedAt(row.createdAt) }}</template>
+      </el-table-column>
       <el-table-column label="操作" width="150" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
@@ -108,6 +110,7 @@ import { ElMessage } from 'element-plus'
 import { commandsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
+import { formatZhCnDateTime } from '../utils/dateTime.js'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
@@ -131,6 +134,8 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref(null)
 const form = ref({ name: '', type: '', prompt: '' })
+
+const formatCreatedAt = (v) => (v ? formatZhCnDateTime(v) : '-')
 
 // P2: 表单校验规则
 const formRules = {

@@ -292,7 +292,7 @@ import {
   Monitor, Check, Loading, Link, Clock, RefreshRight, Download,
   WarnTriangleFilled, CircleCheckFilled, Key, CircleCheck, FolderOpened, ArrowLeft, InfoFilled, Document
 } from '@element-plus/icons-vue'
-
+import { formatZhCnYmdHm, formatZhCnYmd } from '../utils/dateTime.js'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const WEBSITE_REPORTS_API = `${API_BASE_URL}/api/website-reports`
@@ -604,7 +604,7 @@ const handleExportReport = () => {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `网站优化检测_${report.value.url}_${new Date().toISOString().slice(0, 10)}.json`
+  a.download = `网站优化检测_${report.value.url}_${formatZhCnYmd()}.json`
   a.click()
   URL.revokeObjectURL(url)
   ElMessage.success({ message: '报告已导出', offset: 80 })
@@ -772,10 +772,7 @@ const syncToDashboard = () => {
   localStorage.setItem('auyologic_data', JSON.stringify(allData))
 }
 
-const formatTime = (isoString) => {
-  const d = new Date(isoString)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+const formatTime = (isoString) => formatZhCnYmdHm(isoString)
 
 // ===== 初始化 =====
 onMounted(() => {

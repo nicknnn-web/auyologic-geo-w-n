@@ -208,6 +208,7 @@ import { marked } from 'marked'
 import { knowledgeAPI } from '../utils/api'
 import { uploadFile, downloadFromMinIO, deleteFromMinIO } from '../services/uploadService'
 import { buildKnowledgeAnalyzePrompt } from '../prompts/index.js'
+import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 
 const fileInput = ref(null)
 const isDragging = ref(false)
@@ -261,7 +262,7 @@ const loadKnowledgeDocs = async () => {
         summary: doc.summary || '',
         keyPoints: doc.keyPoints || [],
         analyzedAt: doc.analyzedAt || null,
-        createdAt: doc.createdAt ? new Date(doc.createdAt).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN')
+        createdAt: doc.createdAt ? formatZhCnDateTime(doc.createdAt) : nowZhCnDateTime()
       }))
       // 同步到 localStorage 作为备份
       saveToStorage()
@@ -354,7 +355,7 @@ const uploadFileToMinIO = (file) => {
             objectName: uploadResult.objectName,
             words: content.toString().length,
             status: '已处理',
-            createdAt: new Date().toLocaleString('zh-CN')
+            createdAt: nowZhCnDateTime()
           }
           tableData.value.unshift(fileData)
           
@@ -419,7 +420,7 @@ const uploadFileToMinIO = (file) => {
             objectName: uploadResult.objectName,
             words: 0,
             status: '已上传',
-            createdAt: new Date().toLocaleString('zh-CN')
+            createdAt: nowZhCnDateTime()
           }
           tableData.value.unshift(fileData)
           

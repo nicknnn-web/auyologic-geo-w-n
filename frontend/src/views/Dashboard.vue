@@ -242,7 +242,7 @@ import {
   Monitor, Search, EditPen, Promotion, ArrowRight,
   ChatDotRound, Document, Histogram, Link
 } from '@element-plus/icons-vue'
-
+import { formatZhCnMdHm } from '../utils/dateTime.js'
 
 const router = useRouter()
 
@@ -316,13 +316,7 @@ const contentStats = ref({
 // ===== GEO可见度检测历史 =====
 const geoHistory = ref([])
 
-const formatHistoryDate = (dateStr) => {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  // 转换为北京时间 (UTC+8)
-  const beijingTime = new Date(d.getTime() + (8 * 60 * 60 * 1000))
-  return `${beijingTime.getMonth() + 1}/${beijingTime.getDate()} ${beijingTime.getHours().toString().padStart(2, '0')}:${beijingTime.getMinutes().toString().padStart(2, '0')}`
-}
+const formatHistoryDate = (dateStr) => (!dateStr ? '' : formatZhCnMdHm(dateStr))
 
 // ===== 初始化 =====
 onMounted(async () => {

@@ -55,6 +55,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { publishRecordsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE } from '../utils/pagedApi.js'
+import { formatZhCnSlashYmdHm } from '../utils/dateTime.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const tableData = ref([])
@@ -68,11 +69,7 @@ const getPlatformColor = (platform) => {
   return map[platform] || 'info'
 }
 
-const formatTime = (ts) => {
-  if (!ts) return '-'
-  const d = new Date(ts)
-  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}`
-}
+const formatTime = (ts) => (!ts ? '-' : formatZhCnSlashYmdHm(ts))
 
 const loadData = async () => {
   loading.value = true

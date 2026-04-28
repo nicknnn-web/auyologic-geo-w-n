@@ -234,6 +234,7 @@ import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { PictureFilled, Delete, Grid, List } from '@element-plus/icons-vue'
 import { imagesAPI } from '../utils/api'
+import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 import { uploadFile, deleteFromMinIO, downloadFromMinIO } from '../services/uploadService'
 
 const fileInput = ref(null)
@@ -281,7 +282,11 @@ const loadImagesFromAPI = async () => {
         name: img.title || img.name || '',
         preview: img.imagePath || img.image_path || img.preview || '',
         size: img.size || 0,
-        createdAt: img.createdAt ? new Date(img.createdAt).toLocaleString('zh-CN') : (img.created_at ? new Date(img.created_at).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN'))
+        createdAt: img.createdAt
+          ? formatZhCnDateTime(img.createdAt)
+          : img.created_at
+            ? formatZhCnDateTime(img.created_at)
+            : nowZhCnDateTime()
       }))
       // 同步到 localStorage
       saveToStorage()
@@ -360,7 +365,7 @@ const uploadFileToMinIO = (file) => {
         preview: uploadResult.url,
         url: uploadResult.url,
         objectName: uploadResult.objectName,
-        createdAt: new Date().toLocaleString('zh-CN')
+        createdAt: nowZhCnDateTime()
       }
       tableData.value.unshift(imageData)
       

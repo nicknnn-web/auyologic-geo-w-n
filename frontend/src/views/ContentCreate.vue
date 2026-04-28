@@ -299,6 +299,7 @@ import { ElMessage } from 'element-plus'
 import { knowledgeAPI, historyAPI } from '../utils/api'
 import { fetchAllPages } from '../utils/pagedApi.js'
 import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
+import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 
 // ========== API 配置 ==========
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
@@ -464,7 +465,7 @@ const loadHistory = async () => {
         audience: item.audience || '',
         platforms: item.platforms || [],
         commandId: item.commandId || item.command_id || '',
-        createdAt: item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN')
+        createdAt: item.createdAt ? formatZhCnDateTime(item.createdAt) : nowZhCnDateTime()
       }))
       // 同步到 localStorage 作为备份
       saveHistory()
@@ -505,7 +506,7 @@ const addToHistory = async (title, content, keyword, audience, platforms, comman
     audience: audience,
     platforms: platforms ? [...platforms] : [],
     commandId: commandId,
-    createdAt: new Date().toLocaleString('zh-CN')
+    createdAt: nowZhCnDateTime()
   }
   
   // 添加到列表顶部

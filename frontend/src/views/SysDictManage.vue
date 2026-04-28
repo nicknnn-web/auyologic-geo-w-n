@@ -176,6 +176,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { fetchDictTypes, fetchDictEntries, getApiBase } from '../utils/sysDict.js'
+import { formatZhCnDateTime } from '../utils/dateTime.js'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 
@@ -267,19 +268,7 @@ const rules = {
 
 const formatDate = (dateStr) => {
   if (!dateStr) return '-'
-  try {
-    const d = new Date(dateStr)
-    if (Number.isNaN(d.getTime())) return '-'
-    return d.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
-  } catch {
-    return '-'
-  }
+  return formatZhCnDateTime(dateStr)
 }
 
 const loadTypes = async () => {

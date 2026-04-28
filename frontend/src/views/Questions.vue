@@ -281,6 +281,7 @@ import {
   reloadPagedListAfterRemoval,
 } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
+import { formatZhCnDateTime } from '../utils/dateTime.js'
 import { buildBusinessTermsPrompt, buildGeoQuestionPrompt } from '../prompts/index.js'
 
 const route = useRoute()
@@ -291,11 +292,7 @@ const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 const formatDate = (dateStr) => {
   if (!dateStr || dateStr === '{}') return '-'
-  try {
-    const d = new Date(dateStr)
-    if (isNaN(d.getTime())) return '-'
-    return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-  } catch { return '-' }
+  return formatZhCnDateTime(dateStr)
 }
 
 const tableData = ref([])

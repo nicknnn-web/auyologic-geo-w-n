@@ -17,6 +17,7 @@ import {
   GEO_HEALTH_KEYWORD_TYPE_DICT_TYPE,
   PROBE_MODELS,
 } from '../config/geoBrandTaskConfig.js';
+import { mergeAiAndDomainSourceCategory } from './sourceClassifier.js';
 
 /** 当前启用的第一个探针 provider 的默认模型名（向后兼容用） */
 export const DEEPSEEK_DEFAULT_MODEL = PROVIDERS[PROBE_MODELS[0] || 'deepseek']?.defaultModel || 'deepseek-chat';
@@ -283,6 +284,12 @@ export async function probeOneQuestionWithModel(pool, options) {
       : String(row.question_type ?? '');
   const userPrompt = userPromptOverride || buildDefaultUserPrompt(typeLine, row.question);
 
+  const taskUserRes = await pool.query(
+    `SELECT u.website FROM geo_health_task t LEFT JOIN users u ON u.user_id = t.user_id WHERE t.id = $1`,
+    [taskId]
+  );
+  const brandWebsite = taskUserRes.rows[0]?.website || '';
+
   const client = createAiClient(provider);
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -349,13 +356,16 @@ export async function probeOneQuestionWithModel(pool, options) {
 
     const dedupeKey = buildDedupeKey(title, summary, url.startsWith('hash:') ? '' : url).slice(0, 256);
     const contentHash = md5(`${title}\n${summary}`);
+    const sourceCategory = mergeAiAndDomainSourceCategory(url, a.category ?? a.source_category, {
+      brandWebsite,
+    });
 
     const ins = await pool.query(
-      `INSERT INTO geo_health_article (task_id, question_id, model_name, platform, title, url, publish_time, summary, content_hash, dedupe_key)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO geo_health_article (task_id, question_id, model_name, platform, title, url, publish_time, summary, content_hash, dedupe_key, source_category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (task_id, dedupe_key) DO NOTHING
        RETURNING id`,
-      [taskId, questionId, modelName, platform, title, url, publishTime, summary, contentHash, dedupeKey]
+      [taskId, questionId, modelName, platform, title, url, publishTime, summary, contentHash, dedupeKey, sourceCategory]
     );
     if (ins.rows.length) validCount += 1;
   }

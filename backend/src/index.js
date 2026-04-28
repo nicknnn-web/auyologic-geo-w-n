@@ -9,7 +9,7 @@ import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { initDB } from './db.js';
+import { initDB, PG_CONNECTION_OPTIONS } from './db.js';
 import {
   verifySession,
   closeSession,
@@ -23,10 +23,14 @@ import { parsePagination, pagedResponse } from './pagination.js';
 
 const { Pool } = pg;
 const app = express();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// 设置默认时区为中国时区
-process.env.TZ = 'Asia/Shanghai';
+// Node 侧日期解析默认东八区（须早于本文件内 Pool 创建）
+if (!process.env.TZ) process.env.TZ = 'Asia/Shanghai';
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  options: PG_CONNECTION_OPTIONS,
+});
 
 const BUILD_VERSION = 'v2026032901';
 
@@ -1452,6 +1456,7 @@ import aiProxyRouter from './routes/aiProxy.js';
 import fileUploadRouter from './routes/fileUpload.js';
 import geoBrandTaskRouter from './routes/geoBrandTask.js';
 import geoHealthReportRouter from './routes/geoHealthReport.js';
+import sentimentLexiconRouter from './routes/sentimentLexicon.js';
 
 app.use('/api', contentGeneratorRouter);
 app.use('/api/minio', fileUploadRouter);
@@ -1460,6 +1465,7 @@ app.use('/api', websiteAnalyzerRouter);
 app.use('/api/ai', aiProxyRouter);
 app.use('/api', geoBrandTaskRouter);
 app.use('/api', geoHealthReportRouter);
+app.use('/api', sentimentLexiconRouter);
 
 // ========== Stub 接口（功能完善后替换为真实实现）==========
 

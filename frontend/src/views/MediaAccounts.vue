@@ -293,6 +293,7 @@ import api, { mediaAccountsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
+import { formatZhCnMdHm } from '../utils/dateTime.js'
 
 const API = '/api/platform-accounts'
 
@@ -582,9 +583,5 @@ const maskPhone = (phone) => {
   return phone.slice(0, 3) + '****' + phone.slice(-4)
 }
 
-const formatTime = (ts) => {
-  if (!ts) return ''
-  const d = new Date(ts)
-  return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
-}
+const formatTime = (ts) => (!ts ? '' : formatZhCnMdHm(ts))
 </script>

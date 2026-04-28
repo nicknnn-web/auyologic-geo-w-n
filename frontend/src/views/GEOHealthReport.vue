@@ -44,7 +44,18 @@
         </div>
       </div>
       <div class="nav-right">
-        <div class="nav-time">检测时间：{{ checkTime }}</div>
+        <div class="nav-time">
+          <template v-if="loading">
+            <span class="nav-time-label">检测时间：</span>
+            <el-skeleton :loading="true" animated class="nav-time-skel">
+              <template #template>
+                <el-skeleton-item variant="text" style="width: 168px; height: 14px" />
+              </template>
+              <template #default><span class="nav-time-skel-ph"></span></template>
+            </el-skeleton>
+          </template>
+          <template v-else>检测时间：{{ checkTime }}</template>
+        </div>
         <el-button
           size="small"
           type="primary"
@@ -63,6 +74,29 @@
 
       <!-- ===== 区块1：大模型可见度综合得分（全部模型柱状图）===== -->
       <div class="section-model-visibility">
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block" aria-hidden="true">
+              <div class="section-title-row health-sk-title-row">
+                <el-skeleton-item variant="h3" style="width: 220px; height: 22px" />
+                <el-skeleton-item variant="text" style="width: 160px; height: 14px; margin-left: 10px" />
+              </div>
+              <div class="health-sk-mv-cards">
+                <div v-for="si in 3" :key="'sk-mv-' + si" class="health-sk-mv-card">
+                  <el-skeleton-item variant="circle" style="width: 40px; height: 40px; flex-shrink: 0" />
+                  <div class="health-sk-mv-mid">
+                    <el-skeleton-item variant="text" style="width: 45%; height: 14px" />
+                    <el-skeleton-item variant="text" style="width: 92%; height: 12px; margin-top: 10px" />
+                    <el-skeleton-item variant="text" style="width: 88%; height: 12px; margin-top: 8px" />
+                    <el-skeleton-item variant="text" style="width: 70%; height: 12px; margin-top: 8px" />
+                  </div>
+                  <el-skeleton-item variant="circle" style="width: 72px; height: 72px; flex-shrink: 0" />
+                </div>
+              </div>
+              <el-skeleton-item variant="rect" class="health-sk-mv-chart" />
+            </div>
+          </template>
+          <template #default>
         <div v-if="modelVisibilitySorted.length" class="mv-rest-chart-block" role="region" aria-label="各模型可见度得分">
           <div class="mv-rest-chart-head">
             <div class="section-title-row">
@@ -70,8 +104,81 @@
               <span class="section-tag">AI VISIBILITY SCORE</span>
             </div>
           </div>
+          <div
+              ref="mvScrollRef"
+              class="mv-scroll"
+              role="region"
+              aria-label="各模型可见度得分"
+              @pointerdown="onMvScrollPointerDown"
+              @pointermove="onMvScrollPointerMove"
+              @pointerup="onMvScrollPointerUp"
+              @pointercancel="onMvScrollPointerUp"
+              @lostpointercapture="onMvScrollLostPointerCapture"
+          >
+            <div
+                v-for="m in modelVisibilityCards.slice(0, 3)"
+                :key="m.platformKey"
+                class="mv-card"
+            >
+              <div class="mv-card-inner">
+                <div class="mv-card-left">
+                  <div class="mv-plat-head">
+                    <div class="mv-plat-icon" :style="{ background: m.brandColor }">{{ m.icon }}</div>
+                    <div class="mv-plat-titles">
+                      <div class="mv-plat-name">{{ m.name }}</div>
+                      <span v-if="m.simulated" class="mv-plat-badge">AI 推断</span>
+                    </div>
+                  </div>
+                  <ul class="mv-bullets">
+                    <li
+                        v-for="(b, bi) in m.bullets"
+                        :key="'b'+m.platformKey+bi"
+                        class="mv-bullet"
+                        :class="'mv-bullet--' + (b.tone || 'neutral')"
+                    >
+                      <span class="mv-bullet-dot" aria-hidden="true" />
+                      <span class="mv-bullet-text">{{ b.text }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div class="mv-card-right">
+                  <div class="mv-score-widget">
+                    <div class="mv-donut-wrap">
+                      <svg viewBox="0 0 120 120" class="mv-donut-svg">
+                        <circle cx="60" cy="60" r="44" class="mv-donut-bg" fill="none" stroke-width="10" />
+                        <circle
+                            cx="60" cy="60"
+                            r="44"
+                            class="mv-donut-fill"
+                            :class="modelDonutStrokeClass(m.score)"
+                            fill="none"
+                            stroke-width="10"
+                            stroke-linecap="round"
+                            :stroke-dasharray="modelDonutDash(m.score)"
+                            transform="rotate(-90 60 60)"
+                        />
+                      </svg>
+                      <div class="mv-donut-center">
+                        <span class="mv-donut-score">{{ m.score }}</span>
+                        <span class="mv-donut-total">/ 100</span>
+                      </div>
+                    </div>
+                    <div class="mv-score-side">
+                      <div class="mv-status-pill" :class="'mv-pill--' + m.status">
+                        <span v-if="m.status === 'good'" class="mv-pill-dot" />
+                        {{ m.statusText }}
+                      </div>
+                      <div class="mv-score-caption">可见度得分</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
           <div ref="mvRestChartDom" class="mv-rest-chart-echarts" />
         </div>
+          </template>
+        </el-skeleton>
       </div>
 
       <!-- ===== 区块2：四大核心指标 ===== -->
@@ -80,6 +187,22 @@
           <h2 class="section-title">核心指标</h2>
           <span class="section-tag">KEY METRICS</span>
         </div>
+
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block health-sk-kpi-wrap" aria-hidden="true">
+              <div class="health-sk-kpi-grid">
+                <el-skeleton-item
+                  v-for="ki in 4"
+                  :key="'sk-kpi-' + ki"
+                  variant="rect"
+                  class="health-sk-kpi-card"
+                />
+              </div>
+              <el-skeleton-item variant="rect" class="health-sk-mention-card" />
+            </div>
+          </template>
+          <template #default>
 
         <el-alert
           v-if="kpiDenominator === 'all_fallback' && hasData"
@@ -91,22 +214,41 @@
         />
 
         <div class="kpi-grid">
-          <div v-for="kpi in kpiCards" :key="kpi.key" class="kpi-card" :class="kpi.status">
-            <div class="kpi-header">
-              <div class="kpi-icon-wrap" :style="{ background: kpi.iconBg }">
+          <div
+            v-for="kpi in kpiCards"
+            :key="kpi.key"
+            class="kpi-card kpi-card--metrics-layout"
+            :class="kpi.status"
+          >
+            <div class="kpi-m-head">
+              <span class="kpi-m-title">{{ kpi.label }}</span>
+              <div class="kpi-m-icon-wrap" :style="{ background: kpi.iconBg }">
                 <el-icon :size="18"><component :is="kpi.icon"/></el-icon>
               </div>
-              <div class="kpi-trend" v-if="kpi.trend">
-                <el-icon><Top /></el-icon>
-                {{ kpi.trend }}
-              </div>
             </div>
-            <div class="kpi-value">{{ kpi.value }}</div>
-            <div class="kpi-label">{{ kpi.label }}</div>
-            <div class="kpi-bar">
-              <div class="kpi-bar-fill" :style="{ width: kpi.pct + '%', background: kpi.color }"></div>
+
+            <div
+              v-if="kpi.key === 'negative'"
+              class="kpi-m-metric kpi-m-metric--dual"
+              :class="{ 'kpi-m-metric--high-risk': kpi.highRisk }"
+            >
+              <span class="kpi-m-tier">{{ kpi.riskTierEn }}</span>
+              <span class="kpi-m-ratio">{{ kpi.ratioDisplay }}</span>
             </div>
-            <div class="kpi-sub">{{ kpi.sub }}</div>
+            <div v-else class="kpi-m-metric kpi-m-metric--single">
+              <span class="kpi-m-value">{{ kpi.value }}</span>
+              <span v-if="kpi.trend" class="kpi-m-trend">
+                <el-icon><Top /></el-icon>{{ kpi.trend }}
+              </span>
+            </div>
+
+            <div class="kpi-m-pill" :class="'kpi-m-pill--' + kpi.pillTone">{{ kpi.pillText }}</div>
+            <div v-if="kpi.footerLine" class="kpi-m-foot">{{ kpi.footerLine }}</div>
+
+            <div class="kpi-m-bar">
+              <div class="kpi-m-bar-fill" :style="{ width: kpi.pct + '%', background: kpi.color }"></div>
+            </div>
+            <div class="kpi-m-detail">{{ kpi.sub }}</div>
           </div>
         </div>
 
@@ -176,6 +318,8 @@
             </template>
           </div>
         </div>
+          </template>
+        </el-skeleton>
       </div>
 
       <!-- ===== 区块3：全域可见度矩阵 ===== -->
@@ -185,6 +329,16 @@
           <span class="section-tag">AI PLATFORM VISIBILITY</span>
         </div>
 
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block health-sk-matrix-skel" aria-hidden="true">
+              <el-skeleton-item variant="rect" class="health-sk-matrix-table" />
+              <div class="health-sk-matrix-sum">
+                <el-skeleton-item v-for="mi in 3" :key="'sk-ms-' + mi" variant="text" style="flex: 1; height: 36px" />
+              </div>
+            </div>
+          </template>
+          <template #default>
         <div class="matrix-container">
           <div class="matrix-table-wrap">
             <table class="matrix-table">
@@ -241,6 +395,8 @@
             </div>
           </div>
         </div>
+          </template>
+        </el-skeleton>
       </div>
 
       <!-- ===== 区块3b：竞品拦截诊断（帕累托图）===== -->
@@ -252,6 +408,14 @@
 
         <p class="competitor-section-sub">帕累托分析 · X轴：竞品 · 左Y：提及次数 · 右Y：累计占比 — 红虚线为80%阈值</p>
 
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block health-sk-competitor-skel" aria-hidden="true">
+              <el-skeleton-item variant="rect" class="health-sk-competitor-chart" />
+              <el-skeleton-item variant="text" style="width: 260px; height: 14px; margin-top: 14px" />
+            </div>
+          </template>
+          <template #default>
         <div class="competitor-card">
           <div v-if="competitorMentions.length">
             <!-- 帕累托图 -->
@@ -265,38 +429,114 @@
                     <span class="competitor-detail-name">{{ selectedCompetitor.name }}</span>
                     <span class="competitor-detail-badge">{{ selectedCompetitor.count }} 次提及 · {{ selectedCompetitor.pct }}%</span>
                   </div>
-                  <button class="competitor-detail-close" title="关闭" @click="selectedCompetitor = null">×</button>
+                  <button class="competitor-detail-close" title="关闭" @click="closeCompetitorDetail">×</button>
                 </div>
-                <div class="competitor-detail-body">
+                <p v-if="competitorDetailLoading" class="competitor-detail-loading-hint">正在加载详情…</p>
+                <div class="competitor-detail-body" :class="{ 'competitor-detail-body--dim': competitorDetailLoading }">
                   <div class="competitor-detail-row">
-                    <span class="competitor-detail-label">出现在哪些问题</span>
+                    <span class="competitor-detail-label">对比触发场景</span>
                     <div class="competitor-detail-tags">
                       <span
-                        v-for="qt in selectedCompetitor.questionTypes"
+                        v-for="qt in (selectedCompetitor.questionTypes || [])"
                         :key="qt"
                         class="competitor-detail-tag tag-question"
                       >{{ QUESTION_TYPE_LABEL[qt] || qt }}</span>
-                      <span v-if="!selectedCompetitor.questionTypes.length" class="comp-no-data">—</span>
+                      <span v-if="!(selectedCompetitor.questionTypes || []).length" class="comp-no-data">—</span>
                     </div>
                   </div>
                   <div class="competitor-detail-row">
-                    <span class="competitor-detail-label">被哪些模型提及</span>
+                    <span class="competitor-detail-label">心智渗透平台</span>
                     <div class="competitor-detail-tags">
                       <span
-                        v-for="m in selectedCompetitor.models"
+                        v-for="m in (selectedCompetitor.models || [])"
                         :key="m"
                         class="competitor-detail-tag tag-model"
                       >{{ MODEL_NAME_LABEL[m] || m }}</span>
-                      <span v-if="!selectedCompetitor.models.length" class="comp-no-data">—</span>
+                      <span v-if="!(selectedCompetitor.models || []).length" class="comp-no-data">—</span>
                     </div>
                   </div>
                   <div class="competitor-detail-row">
                     <span class="competitor-detail-label">情感倾向分布</span>
                     <div class="competitor-detail-sentiment">
-                      <span class="sent-pill sent-win">品牌占优 {{ selectedCompetitor.win }}</span>
-                      <span class="sent-pill sent-neutral">势均力敌 {{ selectedCompetitor.neutral }}</span>
-                      <span class="sent-pill sent-lose">竞品占优 {{ selectedCompetitor.lose }}</span>
-                      <span v-if="selectedCompetitor.negCount" class="sent-pill sent-neg">负面 {{ selectedCompetitor.negCount }}</span>
+                      <el-tooltip
+                        placement="top"
+                        :show-after="150"
+                        popper-class="sent-pill-tip-popper"
+                        :disabled="!selectedCompetitor.win"
+                      >
+                        <span class="sent-pill sent-win">品牌占优 {{ selectedCompetitor.win }}</span>
+                        <template #content>
+                          <div class="sent-pill-tip">
+                            <div class="sent-pill-tip-head">品牌占优对应的源问题</div>
+                            <ul class="sent-pill-tip-list">
+                              <li v-for="q in (selectedCompetitor.winQuestions || [])" :key="'w' + (q.questionId ?? q.question)">
+                                <span class="sent-pill-tip-text">{{ q.question || '—' }}</span>
+                              </li>
+                              <li v-if="!(selectedCompetitor.winQuestions || []).length" class="sent-pill-tip-empty">暂无</li>
+                            </ul>
+                          </div>
+                        </template>
+                      </el-tooltip>
+
+                      <el-tooltip
+                        placement="top"
+                        :show-after="150"
+                        popper-class="sent-pill-tip-popper"
+                        :disabled="!selectedCompetitor.neutral"
+                      >
+                        <span class="sent-pill sent-neutral">势均力敌 {{ selectedCompetitor.neutral }}</span>
+                        <template #content>
+                          <div class="sent-pill-tip">
+                            <div class="sent-pill-tip-head">势均力敌对应的源问题</div>
+                            <ul class="sent-pill-tip-list">
+                              <li v-for="q in (selectedCompetitor.neutralQuestions || [])" :key="'n' + (q.questionId ?? q.question)">
+                                <span class="sent-pill-tip-text">{{ q.question || '—' }}</span>
+                              </li>
+                              <li v-if="!(selectedCompetitor.neutralQuestions || []).length" class="sent-pill-tip-empty">暂无</li>
+                            </ul>
+                          </div>
+                        </template>
+                      </el-tooltip>
+
+                      <el-tooltip
+                        placement="top"
+                        :show-after="150"
+                        popper-class="sent-pill-tip-popper"
+                        :disabled="!selectedCompetitor.lose"
+                      >
+                        <span class="sent-pill sent-lose">竞品占优 {{ selectedCompetitor.lose }}</span>
+                        <template #content>
+                          <div class="sent-pill-tip">
+                            <div class="sent-pill-tip-head">竞品占优对应的源问题</div>
+                            <ul class="sent-pill-tip-list">
+                              <li v-for="q in (selectedCompetitor.loseQuestions || [])" :key="'l' + (q.questionId ?? q.question)">
+                                <span class="sent-pill-tip-text">{{ q.question || '—' }}</span>
+                              </li>
+                              <li v-if="!(selectedCompetitor.loseQuestions || []).length" class="sent-pill-tip-empty">暂无</li>
+                            </ul>
+                          </div>
+                        </template>
+                      </el-tooltip>
+
+                      <el-tooltip
+                        v-if="selectedCompetitor.negCount"
+                        placement="top"
+                        :show-after="150"
+                        popper-class="sent-pill-tip-popper"
+                      >
+                        <span class="sent-pill sent-neg">负面 {{ selectedCompetitor.negCount }}</span>
+                        <template #content>
+                          <div class="sent-pill-tip">
+                            <div class="sent-pill-tip-head">出现负面对应的源问题</div>
+                            <ul class="sent-pill-tip-list">
+                              <li v-for="q in (selectedCompetitor.negQuestions || [])" :key="'g' + (q.questionId ?? q.question)">
+                                <span class="sent-pill-tip-text">{{ q.question || '—' }}</span>
+                              </li>
+                              <li v-if="!(selectedCompetitor.negQuestions || []).length" class="sent-pill-tip-empty">暂无</li>
+                            </ul>
+                          </div>
+                        </template>
+                      </el-tooltip>
                     </div>
                   </div>
                 </div>
@@ -306,6 +546,8 @@
           </div>
           <div v-else class="competitor-empty">暂无竞品提及样本，完成更多场景检测后自动汇总。</div>
         </div>
+          </template>
+        </el-skeleton>
       </div>
 
       <!-- ===== 区块4：AI 语义情绪（词云）===== -->
@@ -323,8 +565,16 @@
           </div>
         </div>
 
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block health-sk-emotion-skel" aria-hidden="true">
+              <el-skeleton-item variant="rect" class="health-sk-emotion-cloud" />
+            </div>
+          </template>
+          <template #default>
+
         <div v-if="!sentimentWordCloud.length" class="sentiment-cloud-empty sentiment-cloud-empty-standalone">
-          暂无足够摘要词频，完成检测后将基于 AI 回复摘要生成词云。
+          本任务分词结果中尚未命中任何情感词库词。完成检测与答案分析后自动统计；仅展示有出现次数的词；可在「情感词管理」中调整词表后重新跑分析。
         </div>
         <div v-else class="sentiment-cloud-card">
           <div
@@ -334,6 +584,8 @@
             aria-label="语义情绪词云"
           />
         </div>
+          </template>
+        </el-skeleton>
 
 <!--        <div class="emotion-summary sentiment-summary-below">-->
 <!--          <div class="emo-tag" :class="sentimentTag.type">{{ sentimentTag.text }}</div>-->
@@ -347,6 +599,20 @@
           <span class="section-tag">SOURCE TRACEABILITY</span>
         </div>
 
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block health-sk-authority-skel" aria-hidden="true">
+              <div class="health-sk-authority-bars">
+                <div v-for="ai in 4" :key="'sk-ab-' + ai" class="health-sk-source-row">
+                  <el-skeleton-item variant="text" style="width: 100px; height: 12px" />
+                  <el-skeleton-item variant="rect" style="flex: 1; height: 10px; margin: 0 12px" />
+                  <el-skeleton-item variant="text" style="width: 36px; height: 12px" />
+                </div>
+              </div>
+              <el-skeleton-item variant="rect" class="health-sk-authority-pie" />
+            </div>
+          </template>
+          <template #default>
         <div class="authority-layout">
           <div class="authority-chart">
             <div class="source-bars">
@@ -388,59 +654,84 @@
             </div>
           </div>
         </div>
+          </template>
+        </el-skeleton>
       </div>
 
       <!-- ===== 区块5：智能诊断与优化建议 ===== -->
-      <div v-if="diagnosticSuggestions.length" class="section-diagnosis">
-        <div class="diagnosis-header-bar">
-          <svg class="diagnosis-bolt" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" fill="blue" opacity="0.95"/>
-          </svg>
-          <h2 class="section-title">智能诊断总结与优化建议</h2>
-        </div>
-        <div class="diagnosis-card-list">
-          <div
-            v-for="(item, idx) in diagnosticSuggestions"
-            :key="item.id"
-            class="diagnosis-item"
-          >
-            <div class="diagnosis-num" :class="'num-' + (item.accent || 'rose')">{{ idx + 1 }}</div>
-            <div class="diagnosis-body">
-              <div class="diagnosis-title">{{ item.title }}</div>
-              <p class="diagnosis-p">{{ item.diagnosis }}</p>
-              <div class="diagnosis-suggest-head">💡 优化建议：</div>
-              <ul class="diagnosis-ul">
-                <li
-                  v-for="(line, li) in item.suggestions"
-                  :key="'sg' + item.id + '-' + li"
-                  class="diagnosis-suggest-li"
-                >
-                  <textarea
-                    v-if="suggestionEditingKey === suggestionKey(item.id, li)"
-                    ref="suggestionEditInputRef"
-                    v-model="suggestionEditDraft"
-                    class="diagnosis-suggest-input"
-                    rows="2"
-                    @blur="commitSuggestionEdit"
-                    @keydown.escape.prevent="cancelSuggestionEdit"
-                  />
-                  <span
-                    v-else
-                    class="diagnosis-suggest-text"
-                    role="button"
-                    tabindex="0"
-                    title="点击编辑"
-                    @click="startSuggestionEdit(item, li)"
-                    @keydown.enter.prevent="startSuggestionEdit(item, li)"
-                  >{{ suggestionDisplayText(item, li) }}</span>
-                </li>
-              </ul>
+      <div v-if="loading || diagnosticSuggestions.length" class="section-diagnosis">
+        <el-skeleton :loading="loading" animated class="health-sk-diagnosis-skel">
+          <template #template>
+            <div class="health-sk-block" aria-hidden="true">
+              <div class="diagnosis-header-bar health-sk-diagnosis-head">
+                <el-skeleton-item variant="circle" style="width: 20px; height: 20px" />
+                <el-skeleton-item variant="h3" style="width: 260px; height: 20px; margin-left: 8px" />
+              </div>
+              <div
+                v-for="di in 3"
+                :key="'sk-dg-' + di"
+                class="health-sk-diagnosis-card"
+              >
+                <el-skeleton-item variant="circle" style="width: 32px; height: 32px; flex-shrink: 0" />
+                <div class="health-sk-diagnosis-body">
+                  <el-skeleton-item variant="text" style="width: 70%; height: 16px" />
+                  <el-skeleton-item variant="text" style="width: 100%; height: 12px; margin-top: 10px" />
+                  <el-skeleton-item variant="text" style="width: 95%; height: 12px; margin-top: 8px" />
+                  <el-skeleton-item variant="text" style="width: 55%; height: 12px; margin-top: 12px" />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </template>
+          <template #default>
+            <div class="diagnosis-header-bar">
+              <svg class="diagnosis-bolt" width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" fill="blue" opacity="0.95"/>
+              </svg>
+              <h2 class="section-title">智能诊断总结与优化建议</h2>
+            </div>
+            <div class="diagnosis-card-list">
+              <div
+                v-for="(item, idx) in diagnosticSuggestions"
+                :key="item.id"
+                class="diagnosis-item"
+              >
+                <div class="diagnosis-num" :class="'num-' + (item.accent || 'rose')">{{ idx + 1 }}</div>
+                <div class="diagnosis-body">
+                  <div class="diagnosis-title">{{ item.title }}</div>
+                  <p class="diagnosis-p">{{ item.diagnosis }}</p>
+                  <div class="diagnosis-suggest-head">💡 优化建议：</div>
+                  <ul class="diagnosis-ul">
+                    <li
+                      v-for="(line, li) in item.suggestions"
+                      :key="'sg' + item.id + '-' + li"
+                      class="diagnosis-suggest-li"
+                    >
+                      <textarea
+                        v-if="suggestionEditingKey === suggestionKey(item.id, li)"
+                        ref="suggestionEditInputRef"
+                        v-model="suggestionEditDraft"
+                        class="diagnosis-suggest-input"
+                        rows="2"
+                        @blur="commitSuggestionEdit"
+                        @keydown.escape.prevent="cancelSuggestionEdit"
+                      />
+                      <span
+                        v-else
+                        class="diagnosis-suggest-text"
+                        role="button"
+                        tabindex="0"
+                        title="点击编辑"
+                        @click="startSuggestionEdit(item, li)"
+                        @keydown.enter.prevent="startSuggestionEdit(item, li)"
+                      >{{ suggestionDisplayText(item, li) }}</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </template>
+        </el-skeleton>
       </div>
-
-
 
       <!-- ===== 区块6：商业流失漏斗 ===== -->
 <!--      <div class="section-funnel">-->
@@ -511,7 +802,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import 'echarts-wordcloud'
 import { useRouter, useRoute } from 'vue-router'
@@ -521,6 +812,7 @@ import {
   Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram,
   MagicStick
 } from '@element-plus/icons-vue'
+import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -578,7 +870,7 @@ const applyEnterpriseContextToReport = () => {
 
 const brandName = ref('请先进行可见度检测')
 const brandDomain = ref('')
-const checkTime = ref(new Date().toLocaleString('zh-CN'))
+const checkTime = ref(nowZhCnDateTime())
 const healthScore = ref(0)
 
 const modelVisibilityCards = ref([])
@@ -820,6 +1112,47 @@ const kpiCards = computed(() => {
   const negLevel = negativeRiskLevel.value
   const negColor = NEGATIVE_RISK_COLOR[negLevel] || '#e6a23c'
   const negStatus = NEGATIVE_RISK_STATUS[negLevel] || 'warn'
+  const highRisk = negLevel === '高风险' || negLevel === '超高风险'
+  const ratioDisplay = negativeTotal.value > 0 ? negRatio.toFixed(2) : '0.00'
+  const NEG_TIER_EN = {
+    健康: 'Low',
+    亚健康: 'Medium',
+    低风险: 'Medium',
+    高风险: 'High',
+    超高风险: 'High',
+  }
+  const riskTierEn = NEG_TIER_EN[negLevel] || 'Medium'
+  const NEG_PILL = {
+    健康: { text: '当前负面关联可控', tone: 'low' },
+    亚健康: { text: '需关注负面表述关联', tone: 'mid' },
+    低风险: { text: '需关注负面表述关联', tone: 'mid' },
+    高风险: { text: '存在低质词汇强绑定风险', tone: 'high' },
+    超高风险: { text: '存在低质词汇强绑定风险', tone: 'high' },
+  }
+  const pill = NEG_PILL[negLevel] || NEG_PILL['亚健康']
+
+  const interceptSt = interceptRate.value >= 60 ? 'good' : interceptRate.value >= 30 ? 'warn' : 'danger'
+  const INTERCEPT_PILL = {
+    good: { text: '心智拦截表现达标', tone: 'low' },
+    warn: { text: '仍有首屏露出提升空间', tone: 'mid' },
+    danger: { text: '首屏品牌露出不足需加强', tone: 'high' },
+  }
+  const interceptPill = INTERCEPT_PILL[interceptSt]
+
+  const BLIND_PILL = {
+    good: { text: '各模型触达较为充分', tone: 'low' },
+    warn: { text: '部分模型存在盲区', tone: 'mid' },
+    danger: { text: '盲区模型占比偏高', tone: 'high' },
+  }
+  const blindPill = BLIND_PILL[blindStatus]
+
+  const decaySt = authorityScoreVal.value >= 60 ? 'good' : authorityScoreVal.value >= 30 ? 'warn' : 'danger'
+  const DECAY_PILL = {
+    good: { text: '权威信源引用健康', tone: 'low' },
+    warn: { text: '信源结构仍可加强', tone: 'mid' },
+    danger: { text: '可信信源引用偏低', tone: 'high' },
+  }
+  const decayPill = DECAY_PILL[decaySt]
 
   return [
     {
@@ -831,8 +1164,11 @@ const kpiCards = computed(() => {
       sub: `品牌在 AI 回答中有效露出的比例${denomHint}`,
       pct: interceptRate.value,
       color: '#67c23a',
-      status: interceptRate.value >= 60 ? 'good' : interceptRate.value >= 30 ? 'warn' : 'danger',
-      trend: null
+      status: interceptSt,
+      trend: null,
+      pillText: interceptPill.text,
+      pillTone: interceptPill.tone,
+      footerLine: 'Intercept rate ∈ [0, 100]%',
     },
     {
       key: 'blind',
@@ -844,7 +1180,10 @@ const kpiCards = computed(() => {
       pct: blindIndex.value,
       color: '#f56c6c',
       status: blindStatus,
-      trend: null
+      trend: null,
+      pillText: blindPill.text,
+      pillTone: blindPill.tone,
+      footerLine: 'Blind = 0-mention models / total',
     },
     {
       key: 'negative',
@@ -856,7 +1195,13 @@ const kpiCards = computed(() => {
       pct: negativeRate.value,
       color: negColor,
       status: negStatus,
-      trend: null
+      trend: null,
+      highRisk,
+      ratioDisplay,
+      riskTierEn,
+      pillText: pill.text,
+      pillTone: pill.tone,
+      footerLine: 'Sentiment S ∈ [-1, 1]',
     },
     {
       key: 'decay',
@@ -867,8 +1212,11 @@ const kpiCards = computed(() => {
       sub: '引用了官网/媒体/百科等可信信源的回答占比',
       pct: authorityScoreVal.value,
       color: '#409eff',
-      status: authorityScoreVal.value >= 60 ? 'good' : authorityScoreVal.value >= 30 ? 'warn' : 'danger',
-      trend: null
+      status: decaySt,
+      trend: null,
+      pillText: decayPill.text,
+      pillTone: decayPill.tone,
+      footerLine: 'Authority cite rate ∈ [0, 100]%',
     }
   ]
 })
@@ -1231,7 +1579,7 @@ const syncCompetitorParetoChart = () => {
     // 绑定点击事件
     competitorParetoChart.on('click', (params) => {
       if (params.componentType === 'series' && params.seriesIndex === 0) {
-        selectedCompetitor.value = competitorMentions.value[params.dataIndex] || null
+        fetchCompetitorDetailByIndex(params.dataIndex)
       }
     })
   }
@@ -1247,9 +1595,72 @@ const syncCompetitorParetoChart = () => {
 
 // ===== 竞品 / 词云 / 诊断（API）=====
 const competitorMentions = ref([])
+/** 当前报告对应的 geo_health_task.id（用于按需拉竞品详情） */
+const reportTaskId = ref(null)
+const competitorDetailLoading = ref(false)
+let competitorDetailAbortController = null
+
+const closeCompetitorDetail = () => {
+  competitorDetailAbortController?.abort()
+  competitorDetailAbortController = null
+  selectedCompetitor.value = null
+  competitorDetailLoading.value = false
+}
+
+/** 点击帕累托柱：请求后端加载该竞品完整详情 */
+async function fetchCompetitorDetailByIndex(dataIndex) {
+  const row = competitorMentions.value[dataIndex]
+  if (!row?.name) return
+  const tid = reportTaskId.value
+  if (tid == null) {
+    ElMessage.warning('缺少任务 ID，无法加载竞品详情')
+    return
+  }
+  competitorDetailAbortController?.abort()
+  competitorDetailAbortController = new AbortController()
+  const { signal } = competitorDetailAbortController
+  competitorDetailLoading.value = true
+  selectedCompetitor.value = {
+    name: row.name,
+    count: row.count,
+    pct: row.pct,
+    barTone: row.barTone || 'primary',
+    questionTypes: [],
+    models: [],
+    win: 0,
+    neutral: 0,
+    lose: 0,
+    negCount: 0,
+    winQuestions: [],
+    loseQuestions: [],
+    neutralQuestions: [],
+    negQuestions: [],
+  }
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/geo-health-report/competitor?taskId=${encodeURIComponent(String(tid))}&name=${encodeURIComponent(row.name)}`,
+      { headers: { 'x-user-id': 'default_user' }, signal }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    if (!data.success) throw new Error(data.error || '加载失败')
+    selectedCompetitor.value = data.competitor
+    console.log(selectedCompetitor.value);
+  } catch (e) {
+    if (e?.name === 'AbortError') return
+    console.error('加载竞品详情失败:', e)
+    ElMessage.error('加载竞品详情失败：' + (e.message || String(e)))
+    selectedCompetitor.value = null
+  } finally {
+    competitorDetailLoading.value = false
+  }
+}
 
 watch(competitorMentions, () => {
+  competitorDetailAbortController?.abort()
+  competitorDetailAbortController = null
   selectedCompetitor.value = null
+  competitorDetailLoading.value = false
   nextTick(syncCompetitorParetoChart)
 }, { deep: true, flush: 'post' })
 const lossTriggerTags = ref([])
@@ -1320,14 +1731,23 @@ const wordCloudStyleForPolarity = (pol, strength) => {
 }
 
 const buildSentimentWordCloudOption = (list) => {
-  const data = list.map((w) => {
+  const counts = list.map((w) => {
+    const c = Number(w.count)
+    if (Number.isFinite(c) && c > 0) return c
+    const wgt = Number(w.weight)
+    if (Number.isFinite(wgt) && wgt > 0) return Math.max(1, Math.round(wgt * 100))
+    return 1
+  })
+  const maxCount = Math.max(1, ...counts)
+  const data = list.map((w, i) => {
     const pol =
       w.polarity === 'positive' ? 'positive' : w.polarity === 'negative' ? 'negative' : 'neutral'
-    const strength = Number(w.weight) || 0
+    const cnt = counts[i] || 1
+    const strength = cnt / maxCount
     const style = wordCloudStyleForPolarity(pol, strength)
     return {
       name: w.text,
-      value: Math.max(1, Math.round(strength * 100)),
+      value: cnt,
       textStyle: {
         color: style.color,
         fontWeight: style.fontWeight,
@@ -1350,7 +1770,8 @@ const buildSentimentWordCloudOption = (list) => {
             : row?.polarity === 'negative'
               ? '负面/警示'
               : '中性描述'
-        return `${p.name}\n${polLabel}\n相对权重 ${p.value}`
+        const n = row?.count != null && Number.isFinite(Number(row.count)) ? Number(row.count) : Number(p.value) || 0
+        return `${p.name}\n${polLabel}\n出现 ${n} 次`
       },
     },
     series: [
@@ -1398,7 +1819,73 @@ const disposeSentimentWordCloudChart = () => {
     sentimentWordCloudChart = null
   }
 }
+const mvDrag = {
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startScrollLeft: 0,
+}
 
+const finishMvScrollDrag = (e) => {
+  if (!mvDrag.active) return
+  if (e?.pointerId != null && e.pointerId !== mvDrag.pointerId) return
+  const el = mvScrollRef.value
+  const pid = mvDrag.pointerId
+  mvDrag.active = false
+  mvDrag.pointerId = null
+  if (el) {
+    el.classList.remove('mv-scroll--grabbing')
+    if (pid != null) {
+      try {
+        el.releasePointerCapture(pid)
+      } catch (_) {
+        /* ignore */
+      }
+    }
+  }
+}
+
+const onMvScrollPointerDown = (e) => {
+  if (e.pointerType !== 'mouse' || e.button !== 0) return
+  const el = mvScrollRef.value
+  if (!el) return
+  mvDrag.active = true
+  mvDrag.pointerId = e.pointerId
+  mvDrag.startX = e.clientX
+  mvDrag.startScrollLeft = el.scrollLeft
+  el.classList.add('mv-scroll--grabbing')
+  try {
+    el.setPointerCapture(e.pointerId)
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+const onMvScrollPointerMove = (e) => {
+  if (!mvDrag.active || e.pointerId !== mvDrag.pointerId) return
+  const el = mvScrollRef.value
+  if (!el) return
+  const dx = e.clientX - mvDrag.startX
+  el.scrollLeft = mvDrag.startScrollLeft - dx
+}
+
+const onMvScrollPointerUp = (e) => finishMvScrollDrag(e)
+
+const onMvScrollLostPointerCapture = (e) => finishMvScrollDrag(e)
+/** 环形进度周长（r=44） */
+const MV_DONUT_LEN = 2 * Math.PI * 44
+const modelDonutDash = (score) => {
+  const s = Math.min(100, Math.max(0, Number(score) || 0))
+  const arc = (s / 100) * MV_DONUT_LEN
+  return `${arc} ${MV_DONUT_LEN}`
+}
+
+const modelDonutStrokeClass = (score) => {
+  const s = Number(score) || 0
+  if (s >= 70) return 'mv-stroke-good'
+  if (s >= 45) return 'mv-stroke-warn'
+  return 'mv-stroke-bad'
+}
 const ensureSentimentWcResizeObserver = (el) => {
   if (typeof ResizeObserver === 'undefined' || !el || !sentimentWordCloudChart) return
   if (sentimentWordCloudResizeObserver && sentimentWcObservedEl === el) return
@@ -1549,7 +2036,7 @@ const normalizedLossTriggerTags = computed(() => {
 const sourceData = ref([
   { type: '权威媒体', count: 0, pct: 0, color: '#67c23a' },
   { type: '行业垂直', count: 0, pct: 0, color: '#409eff' },
-  { type: '自媒体', count: 0, pct: 0, color: '#e6a23c' },
+  { type: '官方自媒体', count: 0, pct: 0, color: '#e6a23c' },
   { type: 'UGC / 社区', count: 0, pct: 0, color: '#909399' },
 ])
 
@@ -1634,7 +2121,7 @@ const loadHealthReport = async () => {
     // 填充基础数据
     brandName.value = data.brandName || '品牌'
     brandDomain.value = data.brandDomain || ''
-    checkTime.value = data.checkTime ? new Date(data.checkTime).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN')
+    checkTime.value = data.checkTime ? formatZhCnDateTime(data.checkTime) : nowZhCnDateTime()
     healthScore.value = data.healthScore || 0
 
     if (Array.isArray(data.modelVisibilityCards) && data.modelVisibilityCards.length) {
@@ -1684,6 +2171,7 @@ const loadHealthReport = async () => {
     if (data.platforms) platforms.value = data.platforms
 
     competitorMentions.value = Array.isArray(data.competitorMentions) ? data.competitorMentions : []
+    reportTaskId.value = data.rawData?.taskId ?? null
     lossTriggerTags.value = Array.isArray(data.lossTriggerTags) ? data.lossTriggerTags : []
     sentimentWordCloud.value = Array.isArray(data.sentimentWordCloud) ? data.sentimentWordCloud : []
     suggestionOverrides.value = {}
@@ -1777,11 +2265,9 @@ const pollTaskProgress = async (taskId) => {
         generatingText.value = `探针中 ${done}/${t}`
       }
 
-      if (
-        progress.status === 'completed' ||
-        progress.status === 'failed' ||
-        (progress.pendingCount === 0 && done >= t && progress.status !== 'analyzing')
-      ) {
+      // 仅当任务状态终局时结束：probing_done 探针已结束但分析可能尚未开始/未完成，
+      // 若用「pendingCount===0 && status!==analyzing」会误判提前拉报告，需刷新页面才看到新数据。
+      if (progress.status === 'completed' || progress.status === 'failed') {
         break
       }
     }
@@ -1881,6 +2367,7 @@ const resumeActiveTaskIfAny = async () => {
     const status = progress.status
     if (status === 'completed' || status === 'failed') {
       localStorage.removeItem(ACTIVE_TASK_KEY)
+      await loadHealthReport()
       return
     }
     ElMessage.info(`检测到正在进行的任务 #${taskId}，已恢复进度跟踪`)
@@ -1904,17 +2391,30 @@ const shareReport = () => {
   ElMessage.success('分享链接已复制到剪贴板')
 }
 
+const onDocumentVisibility = () => {
+  if (document.visibilityState !== 'visible' || generating.value) return
+  loadHealthReport().catch(() => {})
+}
+
 onMounted(async () => {
   window.addEventListener('resize', onWindowResizeForSentimentCloud)
+  document.addEventListener('visibilitychange', onDocumentVisibility)
   await loadEnterpriseSettings()
   await loadHealthReport()
   // 切回来时恢复未完成的任务轮询
   resumeActiveTaskIfAny()
 })
 
+onActivated(async () => {
+  if (generating.value) return
+  await loadHealthReport()
+  await resumeActiveTaskIfAny()
+})
+
 onUnmounted(() => {
   sentimentWcScopeActive = false
   window.removeEventListener('resize', onWindowResizeForSentimentCloud)
+  document.removeEventListener('visibilitychange', onDocumentVisibility)
   disposeSentimentWordCloudChart()
   disposeMvRestChart()
   disposeCompetitorParetoChart()
@@ -2029,8 +2529,20 @@ onUnmounted(() => {
 }
 
 .nav-time {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
   font-size: 12px;
   color: #c0c4cc;
+}
+.nav-time-skel {
+  display: inline-block;
+  vertical-align: middle;
+  min-width: 120px;
+}
+.nav-time-skel-ph {
+  display: none;
 }
 
 /* ===== 报告主体 ===== */
@@ -2447,24 +2959,86 @@ onUnmounted(() => {
 .kpi-card.danger { border-color: rgba(245,108,108,0.3); }
 .kpi-card.good { border-color: rgba(103,194,58,0.3); }
 
-.kpi-header {
+/* 四大核心指标：统一布局（左上标题、右上图标 + 同色底 icon 区） */
+.kpi-card--metrics-layout {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
+  flex-direction: column;
+  min-height: 0;
 }
 
-.kpi-icon-wrap {
+.kpi-m-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.kpi-m-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #909399;
+  line-height: 1.3;
+}
+
+.kpi-m-icon-wrap {
   width: 36px;
   height: 36px;
   border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  color: #606266;
 }
 
-.kpi-trend {
+.kpi-m-metric {
+  margin-bottom: 10px;
+}
+
+.kpi-m-metric--dual {
   display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.kpi-m-metric--single {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kpi-m-tier {
+  font-size: 26px;
+  font-weight: 800;
+  color: #1a1a1a;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.kpi-m-ratio {
+  font-size: 15px;
+  font-weight: 700;
+  color: #606266;
+}
+
+.kpi-m-metric--high-risk .kpi-m-tier,
+.kpi-m-metric--high-risk .kpi-m-ratio {
+  color: #f04438;
+}
+
+.kpi-m-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: #1a1a1a;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.kpi-m-trend {
+  display: inline-flex;
   align-items: center;
   gap: 2px;
   font-size: 11px;
@@ -2472,22 +3046,41 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.kpi-value {
-  font-size: 28px;
-  font-weight: 900;
-  color: #1a1a1a;
-  line-height: 1;
-  margin-bottom: 4px;
-}
-
-.kpi-label {
-  font-size: 12px;
+.kpi-m-pill {
+  align-self: flex-start;
+  font-size: 11px;
   font-weight: 600;
-  color: #606266;
+  padding: 5px 11px;
+  border-radius: 999px;
   margin-bottom: 10px;
+  line-height: 1.35;
+  max-width: 100%;
 }
 
-.kpi-bar {
+.kpi-m-pill--high {
+  background: rgba(62, 33, 37, 0.1);
+  color: #dc2626;
+}
+
+.kpi-m-pill--mid {
+  background: rgba(230, 162, 60, 0.14);
+  color: #b45309;
+}
+
+.kpi-m-pill--low {
+  background: rgba(103, 194, 58, 0.12);
+  color: #529b2e;
+}
+
+.kpi-m-foot {
+  font-size: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  color: #c0c4cc;
+  margin-bottom: 8px;
+  letter-spacing: 0.02em;
+}
+
+.kpi-m-bar {
   height: 4px;
   background: #ebeef5;
   border-radius: 2px;
@@ -2495,16 +3088,16 @@ onUnmounted(() => {
   margin-bottom: 6px;
 }
 
-.kpi-bar-fill {
+.kpi-m-bar-fill {
   height: 100%;
   border-radius: 2px;
   transition: width 1.2s ease;
 }
 
-.kpi-sub {
+.kpi-m-detail {
   font-size: 11px;
   color: #909399;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* ===== 品牌提及率 vs 行业基准线 ===== */
@@ -2777,15 +3370,16 @@ onUnmounted(() => {
   background: rgba(230, 162, 60, 0.15);
   color: #e6a23c;
 }
-.cell-mind_missing,
+
 .cell-mentioned_tail,
-.cell-competitor_win,
 .cell-rank_tail,
 .cell-none,
 .cell-no_data {
   background: #f5f5f5;
   color: #c0c4cc;
 }
+.cell-mind_missing,
+.cell-competitor_win,
 .cell-negative_risk,
 .cell-hijack_risk {
   background: rgba(245, 108, 108, 0.18);
@@ -2919,11 +3513,23 @@ onUnmounted(() => {
   background: rgba(255, 255, 255, 0.35);
 }
 
+.competitor-detail-loading-hint {
+  margin: 0 16px 0;
+  padding: 0 0 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
 .competitor-detail-body {
   padding: 14px 16px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.competitor-detail-body--dim {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .competitor-detail-row {
@@ -2987,10 +3593,50 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.sent-win    { background: rgba(103, 194, 58, 0.12); color: #67c23a; border: 1px solid rgba(103,194,58,0.25); }
-.sent-neutral{ background: rgba(144, 147, 153, 0.1);  color: #909399; border: 1px solid #e4e7ed; }
-.sent-lose   { background: rgba(245, 108, 108, 0.12); color: #f56c6c; border: 1px solid rgba(245,108,108,0.25); }
-.sent-neg    { background: rgba(230,   0,   0, 0.1);  color: #c0392b; border: 1px solid rgba(230,0,0,0.2); }
+.sent-win    { background: rgba(103, 194, 58, 0.12); color: #67c23a; border: 1px solid rgba(103,194,58,0.25); cursor: help; }
+.sent-neutral{ background: rgba(144, 147, 153, 0.1);  color: #909399; border: 1px solid #e4e7ed; cursor: help; }
+.sent-lose   { background: rgba(245, 108, 108, 0.12); color: #f56c6c; border: 1px solid rgba(245,108,108,0.25); cursor: help; }
+.sent-neg    { background: rgba(230,   0,   0, 0.1);  color: #c0392b; border: 1px solid rgba(230,0,0,0.2); cursor: help; }
+
+/* ===== 情感倾向 pill 悬停提示 ===== */
+.sent-pill-tip {
+  max-width: 420px;
+  font-size: 12px;
+  color: #303133;
+}
+.sent-pill-tip-head {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #606266;
+}
+.sent-pill-tip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sent-pill-tip-list li {
+  line-height: 1.5;
+  padding-left: 0.65em;
+  text-indent: -0.65em;
+}
+.sent-pill-tip-list li::before {
+  content: '·';
+  margin-right: 0.35em;
+  color: #909399;
+}
+.sent-pill-tip-text {
+  color: #ffffff;
+  word-break: break-word;
+}
+.sent-pill-tip-empty {
+  color: #909399;
+  font-style: italic;
+}
 
 /* 进场动画 */
 .comp-detail-fade-enter-active,
@@ -3474,6 +4120,150 @@ onUnmounted(() => {
   justify-content: center;
   gap: 16px;
   padding: 8px 0;
+}
+
+/* ===== 加载骨架（各模块）===== */
+.health-sk-block {
+  width: 100%;
+}
+.health-sk-title-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.health-sk-mv-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.health-sk-mv-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+}
+.health-sk-mv-mid {
+  flex: 1;
+  min-width: 0;
+}
+.health-sk-mv-chart {
+  width: 100% !important;
+  height: 220px !important;
+  margin-top: 8px;
+  border-radius: 10px;
+}
+
+.health-sk-kpi-wrap {
+  margin-top: 4px;
+}
+.health-sk-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.health-sk-kpi-card {
+  height: 168px !important;
+  border-radius: 12px;
+}
+.health-sk-mention-card {
+  width: 100% !important;
+  height: 132px !important;
+  margin-top: 16px;
+  border-radius: 12px;
+}
+
+.health-sk-matrix-skel {
+  margin-top: 8px;
+}
+.health-sk-matrix-table {
+  width: 100% !important;
+  height: 260px !important;
+  border-radius: 10px;
+}
+.health-sk-matrix-sum {
+  display: flex;
+  gap: 20px;
+  margin-top: 16px;
+}
+
+.health-sk-competitor-skel {
+  margin-top: 8px;
+}
+.health-sk-competitor-chart {
+  width: 100% !important;
+  height: 300px !important;
+  border-radius: 10px;
+}
+
+.health-sk-emotion-skel {
+  margin-top: 12px;
+}
+.health-sk-emotion-cloud {
+  width: 100% !important;
+  height: 280px !important;
+  border-radius: 12px;
+}
+
+.health-sk-authority-skel {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 24px;
+  align-items: start;
+  margin-top: 8px;
+}
+.health-sk-authority-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.health-sk-source-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.health-sk-authority-pie {
+  width: 200px !important;
+  height: 200px !important;
+  border-radius: 50%;
+  justify-self: center;
+}
+
+.health-sk-diagnosis-skel {
+  width: 100%;
+}
+.health-sk-diagnosis-head {
+  margin-bottom: 16px;
+}
+.health-sk-diagnosis-card {
+  display: flex;
+  gap: 14px;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+}
+.health-sk-diagnosis-body {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .health-sk-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .health-sk-authority-skel {
+    grid-template-columns: 1fr;
+  }
+  .health-sk-authority-pie {
+    width: 100% !important;
+    max-width: 220px;
+    height: 220px !important;
+    margin: 0 auto;
+  }
 }
 
 /* ===== 响应式 ===== */

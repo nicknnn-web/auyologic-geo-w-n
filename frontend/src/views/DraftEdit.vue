@@ -104,6 +104,7 @@ import { draftsAPI } from '../utils/api'
 import { ArrowLeft, Check, Edit, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { formatZhCnDateTime } from '../utils/dateTime.js'
 
 // 配置 marked
 marked.use({ gfm: true, breaks: true })
@@ -220,10 +221,7 @@ onBeforeUnmount(() => {
   editor.value?.destroy()
 })
 
-const formatDate = (dateStr) => {
-  if (!dateStr) return '-'
-  return new Date(dateStr).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
-}
+const formatDate = (dateStr) => (!dateStr ? '-' : formatZhCnDateTime(dateStr))
 
 const handleSave = async () => {
   saving.value = true

@@ -14,7 +14,7 @@
  *   competitorsMentioned  出现的竞品列表（string[]）
  *   hasNegative     是否出现负面（boolean）
  *   sourceType      主要信源类型（由 AI 根据回答内容动态判断，如"官网""知乎""小红书"等）
- *   sentimentKeywords     语义情绪关键词（string[]）
+ *   sentimentKeywords     语义情绪精炼词（string[]，模型可选输出；词云统计用 answer_tokens 服务端分词）
  *
  * category 由 question_type 在代码侧映射，不让 AI 判断：
  *   brand / enterprise → "brand"
@@ -59,6 +59,8 @@ import {
   ANALYSIS_SYSTEM_PROMPT,
   buildAnalysisPrompt,
 } from '../prompts/geoHealthAnalysis.js';
+import { loadSentimentLexiconForPrompt } from './sentimentLexiconService.js';
+import { segmentAnswerText } from './answerTokenizer.js';
 export { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt };
 
 // ─────────────────────────────────────────────
@@ -99,9 +101,11 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
        ga.error_text   AS answer_error,
        gq.question,
        gq.question_type,
-       gq.source_question_id
+       gq.source_question_id,
+       gt.user_id      AS task_user_id
      FROM geo_health_answer ga
      JOIN geo_health_question gq ON gq.id = ga.question_id
+     JOIN geo_health_task gt ON gt.id = ga.task_id
      WHERE ga.id = $1 AND ga.task_id = $2`,
     [answerId, taskId]
   );
@@ -122,6 +126,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
       questionType: row.question_type,
       modelName: row.model_name,
       analysisProvider: ANALYSIS_MODEL,
+      answerTokens: [],
       errorText: `探针失败，跳过分析：${row.answer_error}`,
       rawAnalysisJson: null,
     });
@@ -143,22 +148,28 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
       questionType: row.question_type,
       modelName: row.model_name,
       analysisProvider: ANALYSIS_MODEL,
+      answerTokens: [],
       errorText: '探针 raw_json 中未找到有效回答文本',
       rawAnalysisJson: null,
     });
     return { skipped: false, answerId, error: 'no_answer_text' };
   }
 
+  const answerTokens = segmentAnswerText(answerText);
+
   if (!brand) {
     throw new Error('brand 为空，请先在「企业设置」中配置品牌名称');
   }
 
   const category = inferCategory(row.question_type);
+  const taskUserId = String(row.task_user_id || 'default_user').trim() || 'default_user';
+  const sentimentLexicon = await loadSentimentLexiconForPrompt(pool, taskUserId);
   const prompt = buildAnalysisPrompt({
     brand,
     question: row.question,
     answer: answerText,
     category,
+    sentimentLexicon,
   });
 
   let analysisResult = null;
@@ -184,6 +195,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
       category,
       modelName: row.model_name,
       analysisProvider: ANALYSIS_MODEL,
+      answerTokens,
       errorText: errMsg,
       rawAnalysisJson: null,
     });
@@ -210,6 +222,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
     hasNegative: normalizeBool(analysisResult.hasNegative),
     sourceType: normStr(analysisResult.sourceType),
     sentimentKeywords: normalizeArray(analysisResult.sentimentKeywords),
+    answerTokens,
     rawAnalysisJson: analysisResult,
     errorText: null,
   });
@@ -314,9 +327,11 @@ async function upsertAnalysis(pool, fields) {
     modelName, analysisProvider,
     visibility, position, brandStatus, compareStatus,
     brandMentioned, brandRank, topBrand,
-    competitorsMentioned, hasNegative, sourceType, sentimentKeywords,
+    competitorsMentioned, hasNegative, sourceType, sentimentKeywords, answerTokens,
     rawAnalysisJson, errorText,
   } = fields;
+
+  const tokensJson = JSON.stringify(Array.isArray(answerTokens) ? answerTokens : []);
 
   await pool.query(
     `INSERT INTO geo_health_analysis (
@@ -324,15 +339,15 @@ async function upsertAnalysis(pool, fields) {
        model_name, analysis_provider,
        visibility, position, brand_status, compare_status,
        brand_mentioned, brand_rank, top_brand,
-       competitors_mentioned, has_negative, source_type, sentiment_keywords,
+       competitors_mentioned, has_negative, source_type, sentiment_keywords, answer_tokens,
        raw_analysis_json, error_text
      ) VALUES (
        $1, $2, $3, $4, $5, $6,
        $7, $8,
        $9, $10, $11, $12,
        $13, $14, $15,
-       $16::jsonb, $17, $18, $19::jsonb,
-       $20::jsonb, $21
+       $16::jsonb, $17, $18, $19::jsonb, $20::jsonb,
+       $21::jsonb, $22
      )
      ON CONFLICT (answer_id) DO UPDATE SET
        category            = EXCLUDED.category,
@@ -347,6 +362,7 @@ async function upsertAnalysis(pool, fields) {
        has_negative        = EXCLUDED.has_negative,
        source_type         = EXCLUDED.source_type,
        sentiment_keywords  = EXCLUDED.sentiment_keywords,
+       answer_tokens         = EXCLUDED.answer_tokens,
        raw_analysis_json   = EXCLUDED.raw_analysis_json,
        error_text          = EXCLUDED.error_text,
        created_at          = NOW()`,
@@ -359,6 +375,7 @@ async function upsertAnalysis(pool, fields) {
       hasNegative ?? null,
       sourceType ?? null,
       JSON.stringify(sentimentKeywords ?? []),
+      tokensJson,
       rawAnalysisJson ? JSON.stringify(rawAnalysisJson) : null,
       errorText ?? null,
     ]

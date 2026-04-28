@@ -1,8 +1,15 @@
 import pg from 'pg';
 const { Pool } = pg;
 
+// 与报告「检测时间」等业务一致：连接池创建前默认东八区，便于解析 PG 的 timestamp（无时区）与序列化 ISO
+if (!process.env.TZ) process.env.TZ = 'Asia/Shanghai';
+
+/** 每条连接建立时让 PostgreSQL 会话使用东八区，使 NOW()/DEFAULT 写入的 timestamp 与业务「中国时间」一致 */
+export const PG_CONNECTION_OPTIONS = '-c timezone=Asia/Shanghai';
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  options: PG_CONNECTION_OPTIONS,
 });
 
 pool.on('error', (err) => {
@@ -334,6 +341,12 @@ export async function initDB() {
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_health_article_task_dedupe ON geo_health_article(task_id, dedupe_key)`
     );
     await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_article_task ON geo_health_article(task_id)`);
+    await client.query(
+      `ALTER TABLE geo_health_article ADD COLUMN IF NOT EXISTS source_category VARCHAR(32)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_article_task_category ON geo_health_article(task_id, source_category)`
+    );
 
     // —— 品牌体检分析结果（每条 geo_health_answer 对应一条分析）——
     await client.query(`
@@ -366,6 +379,44 @@ export async function initDB() {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_analysis_task ON geo_health_analysis(task_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_analysis_question ON geo_health_analysis(question_id)`);
+    await client.query(
+      `ALTER TABLE geo_health_analysis ADD COLUMN IF NOT EXISTS answer_tokens JSONB DEFAULT '[]'::jsonb`
+    );
+
+    // —— 情感词库（品牌体检分析 Prompt 注入；三档：正面 / 中性 / 负面）——
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_sentiment_lexicon (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL DEFAULT 'default_user',
+        keyword VARCHAR(128) NOT NULL,
+        tier VARCHAR(16) NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT chk_geo_sentiment_lexicon_tier CHECK (tier IN ('positive', 'neutral', 'negative'))
+      )
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_sentiment_lexicon_user ON geo_sentiment_lexicon(user_id)`
+    );
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_sentiment_lexicon_user_kw ON geo_sentiment_lexicon (user_id, lower(keyword))`
+    );
+
+    // 默认企业用户情感词种子（每档 20 条；仅在该用户尚无词库时写入，避免重复 init 叠加）
+    const { rows: seedCnt } = await client.query(
+      `SELECT COUNT(*)::int AS c FROM geo_sentiment_lexicon WHERE user_id = 'default_user'`
+    );
+    if (seedCnt[0].c === 0) {
+      await client.query(`
+        INSERT INTO geo_sentiment_lexicon (user_id, keyword, tier, enabled, sort_order) VALUES
+        ('default_user','领先','positive',true,0),('default_user','优质','positive',true,1),('default_user','口碑好','positive',true,2),('default_user','值得信赖','positive',true,3),('default_user','出色','positive',true,4),('default_user','推荐','positive',true,5),('default_user','稳健','positive',true,6),('default_user','专业','positive',true,7),('default_user','创新','positive',true,8),('default_user','性价比高','positive',true,9),('default_user','体验好','positive',true,10),('default_user','服务周到','positive',true,11),('default_user','行业标杆','positive',true,12),('default_user','实力强','positive',true,13),('default_user','好评','positive',true,14),('default_user','可靠','positive',true,15),('default_user','亮点突出','positive',true,16),('default_user','表现优秀','positive',true,17),('default_user','备受认可','positive',true,18),('default_user','优势明显','positive',true,19),
+        ('default_user','一般','neutral',true,0),('default_user','尚可','neutral',true,1),('default_user','中规中矩','neutral',true,2),('default_user','略有差异','neutral',true,3),('default_user','视场景而定','neutral',true,4),('default_user','各有特点','neutral',true,5),('default_user','需结合需求','neutral',true,6),('default_user','多品牌可选','neutral',true,7),('default_user','价格区间大','neutral',true,8),('default_user','配置多样','neutral',true,9),('default_user','版本较多','neutral',true,10),('default_user','地区差异','neutral',true,11),('default_user','待定','neutral',true,12),('default_user','信息有限','neutral',true,13),('default_user','需核实','neutral',true,14),('default_user','因人制宜','neutral',true,15),('default_user','选项丰富','neutral',true,16),('default_user','没有绝对','neutral',true,17),('default_user','持平','neutral',true,18),('default_user','了解不多','neutral',true,19),
+        ('default_user','差评','negative',true,0),('default_user','避雷','negative',true,1),('default_user','踩坑','negative',true,2),('default_user','翻车','negative',true,3),('default_user','风险','negative',true,4),('default_user','投诉','negative',true,5),('default_user','问题较多','negative',true,6),('default_user','逊色','negative',true,7),('default_user','不推荐','negative',true,8),('default_user','谨慎','negative',true,9),('default_user','争议','negative',true,10),('default_user','短板','negative',true,11),('default_user','噪音大','negative',true,12),('default_user','售后差','negative',true,13),('default_user','缩水','negative',true,14),('default_user','槽点','negative',true,15),('default_user','假货','negative',true,16),('default_user','隐患','negative',true,17),('default_user','不佳','negative',true,18),('default_user','退款难','negative',true,19)
+      `);
+      console.log('✅ 已为 default_user 写入情感词种子（正面/中性/负面各 20 条）');
+    }
 
     console.log('✅ 数据库表初始化完成');
   } finally {
