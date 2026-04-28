@@ -1,0 +1,341 @@
+/**
+ * 大模型接入管理：密文存库、可编辑、测试连接
+ * GET/POST/PUT/DELETE /api/ai-provider-connections
+ * POST /api/ai-provider-connections/:id/test
+ * GET /api/ai-provider-connections/presets
+ */
+import { Router } from 'express';
+import pool from '../db.js';
+import { encryptSecret, decryptSecret, isEncryptionConfigured } from '../services/credentialCrypto.js';
+import {
+  PROVIDERS,
+  getPresetBaseURL,
+  createOpenAiCompatibleClient,
+} from '../services/aiClientFactory.js';
+
+const router = Router();
+
+const ALLOWED_KEYS = new Set(['deepseek', 'qwen', 'kimi', 'glm', 'openai', 'doubao', 'custom']);
+
+function userId(req) {
+  return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+}
+
+function keyLast4(plain) {
+  const s = String(plain || '');
+  if (s.length >= 4) return s.slice(-4);
+  return s || null;
+}
+
+function resolveBaseUrl(row) {
+  const override = (row.base_url_override || '').trim();
+  if (override) return override;
+  if (row.provider_key === 'custom') return '';
+  return getPresetBaseURL(row.provider_key) || '';
+}
+
+function defaultModelForRow(row) {
+  const m = (row.default_model || '').trim();
+  if (m) return m;
+  const p = PROVIDERS[row.provider_key];
+  return p?.defaultModel || 'gpt-4o-mini';
+}
+
+function toDto(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    vendorName: row.vendor_name,
+    providerKey: row.provider_key,
+    baseUrlOverride: row.base_url_override || '',
+    defaultModel: row.default_model || '',
+    enabled: row.enabled,
+    keyLast4: row.key_last4 || null,
+    lastTestStatus: row.last_test_status,
+    lastTestAt: row.last_test_at,
+    lastTestMessage: row.last_test_message,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/** 预设厂商（无密钥，供前端下拉） */
+router.get('/ai-provider-connections/presets', (req, res) => {
+  const list = Object.entries(PROVIDERS).map(([key, v]) => ({
+    providerKey: key,
+    label: v.label,
+    defaultBaseUrl: v.baseURL,
+    defaultModel: v.defaultModel,
+  }));
+  list.push({
+    providerKey: 'custom',
+    label: '自定义（OpenAI 兼容）',
+    defaultBaseUrl: '',
+    defaultModel: 'gpt-4o-mini',
+  });
+  res.json({ success: true, presets: list });
+});
+
+router.get('/ai-provider-connections', async (req, res) => {
+  try {
+    const uid = userId(req);
+    const { rows } = await pool.query(
+      `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at
+       FROM ai_provider_connection
+       WHERE user_id = $1
+       ORDER BY id DESC`,
+      [uid]
+    );
+    res.json({ success: true, list: rows.map(toDto) });
+  } catch (e) {
+    console.error('[ai-provider-connections]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.get('/ai-provider-connections/:id', async (req, res) => {
+  try {
+    const uid = userId(req);
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: '无效 id' });
+    }
+    const { rows } = await pool.query(
+      `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at
+       FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: '未找到' });
+    }
+    res.json({ success: true, data: toDto(rows[0]) });
+  } catch (e) {
+    console.error('[ai-provider-connections]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/ai-provider-connections', async (req, res) => {
+  try {
+    const secret = process.env.AI_CREDENTIALS_SECRET;
+    if (!isEncryptionConfigured(secret)) {
+      return res.status(503).json({
+        success: false,
+        error: '服务端未配置 AI_CREDENTIALS_SECRET（至少 16 字符），无法安全保存密钥',
+      });
+    }
+    const uid = userId(req);
+    const {
+      vendorName,
+      providerKey,
+      baseUrlOverride,
+      defaultModel,
+      apiKey,
+      enabled = true,
+    } = req.body || {};
+    const pk = String(providerKey || '').trim();
+    if (!ALLOWED_KEYS.has(pk)) {
+      return res.status(400).json({ success: false, error: '无效的 providerKey' });
+    }
+    const vname = String(vendorName || '').trim();
+    if (!vname) {
+      return res.status(400).json({ success: false, error: '请填写厂家名称' });
+    }
+    const apiKeyTrim = String(apiKey || '').trim();
+    if (!apiKeyTrim) {
+      return res.status(400).json({ success: false, error: '请填写 API Key' });
+    }
+    const override = String(baseUrlOverride || '').trim();
+    if (pk === 'custom' && !override) {
+      return res.status(400).json({ success: false, error: '自定义接入须填写 Base URL' });
+    }
+    const cipher = encryptSecret(apiKeyTrim, secret);
+    const kl4 = keyLast4(apiKeyTrim);
+    const dm = String(defaultModel || '').trim();
+    const { rows } = await pool.query(
+      `INSERT INTO ai_provider_connection (
+        user_id, vendor_name, provider_key, base_url_override, api_key_cipher, key_last4,
+        default_model, enabled, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+      RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+                key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at`,
+      [uid, vname, pk, override || null, cipher, kl4, dm || null, !!enabled]
+    );
+    res.json({ success: true, data: toDto(rows[0]) });
+  } catch (e) {
+    console.error('[ai-provider-connections]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.put('/ai-provider-connections/:id', async (req, res) => {
+  try {
+    const secret = process.env.AI_CREDENTIALS_SECRET;
+    if (!isEncryptionConfigured(secret)) {
+      return res.status(503).json({
+        success: false,
+        error: '服务端未配置 AI_CREDENTIALS_SECRET',
+      });
+    }
+    const uid = userId(req);
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: '无效 id' });
+    }
+    const {
+      vendorName,
+      providerKey,
+      baseUrlOverride,
+      defaultModel,
+      apiKey,
+      enabled,
+    } = req.body || {};
+
+    const { rows: exist } = await pool.query(
+      `SELECT * FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    if (!exist[0]) {
+      return res.status(404).json({ success: false, error: '未找到' });
+    }
+
+    const pk = providerKey != null ? String(providerKey).trim() : exist[0].provider_key;
+    if (!ALLOWED_KEYS.has(pk)) {
+      return res.status(400).json({ success: false, error: '无效的 providerKey' });
+    }
+    const vname = vendorName != null ? String(vendorName).trim() : exist[0].vendor_name;
+    if (!vname) {
+      return res.status(400).json({ success: false, error: '请填写厂家名称' });
+    }
+    const override =
+      baseUrlOverride !== undefined
+        ? String(baseUrlOverride || '').trim()
+        : (exist[0].base_url_override || '');
+    if (pk === 'custom' && !override) {
+      return res.status(400).json({ success: false, error: '自定义接入须填写 Base URL' });
+    }
+    const dm =
+      defaultModel !== undefined
+        ? String(defaultModel || '').trim()
+        : (exist[0].default_model || '');
+    const en = enabled !== undefined ? !!enabled : exist[0].enabled;
+
+    let cipher = exist[0].api_key_cipher;
+    let kl4 = exist[0].key_last4;
+    if (apiKey != null && String(apiKey).trim() !== '') {
+      const apiKeyTrim = String(apiKey).trim();
+      cipher = encryptSecret(apiKeyTrim, secret);
+      kl4 = keyLast4(apiKeyTrim);
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE ai_provider_connection SET
+        vendor_name = $1,
+        provider_key = $2,
+        base_url_override = $3,
+        api_key_cipher = $4,
+        key_last4 = $5,
+        default_model = $6,
+        enabled = $7,
+        updated_at = NOW()
+      WHERE id = $8 AND user_id = $9
+      RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+                key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at`,
+      [vname, pk, override || null, cipher, kl4, dm || null, en, id, uid]
+    );
+    res.json({ success: true, data: toDto(rows[0]) });
+  } catch (e) {
+    console.error('[ai-provider-connections]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.delete('/ai-provider-connections/:id', async (req, res) => {
+  try {
+    const uid = userId(req);
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: '无效 id' });
+    }
+    const del = await pool.query(
+      `DELETE FROM ai_provider_connection WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [id, uid]
+    );
+    if (!del.rowCount) {
+      return res.status(404).json({ success: false, error: '未找到' });
+    }
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[ai-provider-connections]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post('/ai-provider-connections/:id/test', async (req, res) => {
+  try {
+    const secret = process.env.AI_CREDENTIALS_SECRET;
+    if (!isEncryptionConfigured(secret)) {
+      return res.status(503).json({ success: false, error: '服务端未配置 AI_CREDENTIALS_SECRET' });
+    }
+    const uid = userId(req);
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: '无效 id' });
+    }
+    const { rows } = await pool.query(
+      `SELECT * FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: '未找到' });
+    }
+    const baseURL = resolveBaseUrl(row);
+    if (!baseURL) {
+      await pool.query(
+        `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+        ['fail', '无法解析 Base URL，请检查预设或自定义地址', id]
+      );
+      return res.json({ success: false, ok: false, message: '无法解析 Base URL' });
+    }
+    let apiKey;
+    try {
+      apiKey = decryptSecret(row.api_key_cipher, secret);
+    } catch (err) {
+      await pool.query(
+        `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+        ['fail', '密钥解密失败，请检查 AI_CREDENTIALS_SECRET 是否与写入时一致', id]
+      );
+      return res.status(500).json({ success: false, ok: false, error: '密钥解密失败' });
+    }
+    const model = defaultModelForRow(row);
+    const client = createOpenAiCompatibleClient({
+      baseURL,
+      apiKey,
+      defaultModel: model,
+    });
+    try {
+      await client.chat([{ role: 'user', content: 'hi' }], { maxTokens: 8, temperature: 0, model });
+      await pool.query(
+        `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+        ['ok', '连接成功', id]
+      );
+      res.json({ success: true, ok: true, message: '连接成功' });
+    } catch (err) {
+      const msg = err?.message || String(err);
+      await pool.query(
+        `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+        ['fail', msg.slice(0, 2000), id]
+      );
+      res.json({ success: true, ok: false, message: msg });
+    }
+  } catch (e) {
+    console.error('[ai-provider-connections test]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+export default router;
