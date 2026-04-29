@@ -289,6 +289,12 @@ export async function initDB() {
     await client.query(
       `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS error_text TEXT`
     );
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS connection_ids INTEGER[]`
+    );
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS analysis_connection_id INTEGER`
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_health_question (
         id SERIAL PRIMARY KEY,
@@ -320,6 +326,9 @@ export async function initDB() {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_geo_health_answer_task ON geo_health_answer(task_id)`);
+    await client.query(
+      `ALTER TABLE geo_health_answer ADD COLUMN IF NOT EXISTS connection_id INTEGER`
+    );
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_health_article (
@@ -382,6 +391,9 @@ export async function initDB() {
     await client.query(
       `ALTER TABLE geo_health_analysis ADD COLUMN IF NOT EXISTS answer_tokens JSONB DEFAULT '[]'::jsonb`
     );
+    await client.query(
+      `ALTER TABLE geo_health_analysis ADD COLUMN IF NOT EXISTS connection_id INTEGER`
+    );
 
     // —— 情感词库（品牌体检分析 Prompt 注入；三档：正面 / 中性 / 负面）——
     await client.query(`
@@ -408,6 +420,35 @@ export async function initDB() {
     const { rows: seedCnt } = await client.query(
       `SELECT COUNT(*)::int AS c FROM geo_sentiment_lexicon WHERE user_id = 'default_user'`
     );
+    // —— 大模型接入（API Key 密文 + 可编辑；中国区预设 + OpenAI 兼容自定义）——
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_provider_connection (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL DEFAULT 'default_user',
+        vendor_name VARCHAR(200) NOT NULL,
+        provider_key VARCHAR(32) NOT NULL,
+        base_url_override VARCHAR(1024),
+        api_key_cipher TEXT NOT NULL,
+        key_last4 VARCHAR(4),
+        default_model VARCHAR(128),
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        last_test_status VARCHAR(16),
+        last_test_at TIMESTAMP,
+        last_test_message TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_ai_provider_connection_user ON ai_provider_connection(user_id)`
+    );
+    await client.query(
+      `ALTER TABLE ai_provider_connection ADD COLUMN IF NOT EXISTS logo_relpath VARCHAR(512)`
+    );
+    await client.query(
+      `ALTER TABLE ai_provider_connection ADD COLUMN IF NOT EXISTS logo_bg_color VARCHAR(40)`
+    );
+
     if (seedCnt[0].c === 0) {
       await client.query(`
         INSERT INTO geo_sentiment_lexicon (user_id, keyword, tier, enabled, sort_order) VALUES

@@ -3,8 +3,12 @@
  * GET/POST/PUT/DELETE /api/ai-provider-connections
  * POST /api/ai-provider-connections/:id/test
  * GET /api/ai-provider-connections/presets
+ * POST/DELETE /api/ai-provider-connections/:id/logo  Logo 图片与底色
  */
 import { Router } from 'express';
+import path from 'path';
+import fs from 'fs';
+import multer from 'multer';
 import pool from '../db.js';
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from '../services/credentialCrypto.js';
 import {
@@ -15,7 +19,67 @@ import {
 
 const router = Router();
 
+const UPLOADS_ROOT = path.join(process.cwd(), 'public', 'uploads');
+
 const ALLOWED_KEYS = new Set(['deepseek', 'qwen', 'kimi', 'glm', 'openai', 'doubao', 'custom']);
+
+function safePathSegment(s) {
+  return String(s || 'user')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .slice(0, 80) || 'user';
+}
+
+function tryUnlinkRel(relpath) {
+  if (!relpath || typeof relpath !== 'string') return;
+  const p = path.join(UPLOADS_ROOT, relpath.split('/').join(path.sep));
+  try {
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+  } catch (e) {
+    console.warn('[ai-provider-connections] unlink logo', p, e?.message);
+  }
+}
+
+/** 合法则返回色值，空串/仅空白返回 null，非法返回 undefined（表示应 400） */
+function normalizeLogoBgColor(input) {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  const s = String(input).trim();
+  if (s === '') return null;
+  if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(s)) return s;
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(\s*,\s*[\d.]+\s*)?\)$/.test(s) && s.length < 80) {
+    return s;
+  }
+  return undefined;
+}
+
+const logoStorage = multer.diskStorage({
+  destination: (req, _file, cb) => {
+    const uid = safePathSegment(req.headers['x-user-id'] || 'default_user');
+    const dir = path.join(UPLOADS_ROOT, 'ai-logos', uid);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const id = String(req.params.id || '');
+    const ext0 = path.extname(file.originalname).toLowerCase() || '.png';
+    const allowed = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']);
+    const ext = allowed.has(ext0) ? ext0 : '.png';
+    cb(null, `${id}${ext}`);
+  },
+});
+
+const logoUpload = multer({
+  storage: logoStorage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      /^image\/(png|jpeg|gif|webp|svg\+xml)$/i.test(file.mimetype) ||
+      file.mimetype === 'image/svg+xml';
+    if (ok) cb(null, true);
+    else cb(new Error('请上传 png / jpg / gif / webp / svg 图片'));
+  },
+});
 
 function userId(req) {
   return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
@@ -43,6 +107,12 @@ function defaultModelForRow(row) {
 
 function toDto(row) {
   if (!row) return null;
+  const logoRel = String(row.logo_relpath || '').trim();
+  const logoUrl = logoRel
+    ? `/uploads/${logoRel.replace(/\\/g, '/')}`
+    : null;
+  const rawBg = row.logo_bg_color;
+  const logoBgColor = rawBg != null && String(rawBg).trim() !== '' ? String(rawBg).trim() : null;
   return {
     id: row.id,
     userId: row.user_id,
@@ -57,7 +127,25 @@ function toDto(row) {
     lastTestMessage: row.last_test_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    logoUrl,
+    logoBgColor,
   };
+}
+
+/** 同一 user 下每种 provider_key 仅允许一条 */
+async function existsOtherByProviderKey(uid, providerKey, excludeId) {
+  if (excludeId == null) {
+    const { rows } = await pool.query(
+      `SELECT 1 FROM ai_provider_connection WHERE user_id = $1 AND provider_key = $2 LIMIT 1`,
+      [uid, providerKey]
+    );
+    return rows.length > 0;
+  }
+  const { rows } = await pool.query(
+    `SELECT 1 FROM ai_provider_connection WHERE user_id = $1 AND provider_key = $2 AND id != $3 LIMIT 1`,
+    [uid, providerKey, excludeId]
+  );
+  return rows.length > 0;
 }
 
 /** 预设厂商（无密钥，供前端下拉） */
@@ -82,7 +170,8 @@ router.get('/ai-provider-connections', async (req, res) => {
     const uid = userId(req);
     const { rows } = await pool.query(
       `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
-              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at
+              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+              logo_relpath, logo_bg_color
        FROM ai_provider_connection
        WHERE user_id = $1
        ORDER BY id DESC`,
@@ -104,7 +193,8 @@ router.get('/ai-provider-connections/:id', async (req, res) => {
     }
     const { rows } = await pool.query(
       `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
-              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at
+              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+              logo_relpath, logo_bg_color
        FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
       [id, uid]
     );
@@ -135,6 +225,7 @@ router.post('/ai-provider-connections', async (req, res) => {
       defaultModel,
       apiKey,
       enabled = true,
+      logoBgColor: logoBgIn,
     } = req.body || {};
     const pk = String(providerKey || '').trim();
     if (!ALLOWED_KEYS.has(pk)) {
@@ -152,17 +243,28 @@ router.post('/ai-provider-connections', async (req, res) => {
     if (pk === 'custom' && !override) {
       return res.status(400).json({ success: false, error: '自定义接入须填写 Base URL' });
     }
+    if (await existsOtherByProviderKey(uid, pk, null)) {
+      return res.status(400).json({
+        success: false,
+        error: '该厂商类型已有一条接入，同类型仅允许保留一条。请编辑已有记录或先删除再新增。',
+      });
+    }
+    const lbgN = normalizeLogoBgColor(logoBgIn);
+    if (lbgN === undefined && String(logoBgIn || '').trim() !== '') {
+      return res.status(400).json({ success: false, error: 'Logo 底色格式无效（请使用 # 开头的 HEX 或 rgb/rgba）' });
+    }
     const cipher = encryptSecret(apiKeyTrim, secret);
     const kl4 = keyLast4(apiKeyTrim);
     const dm = String(defaultModel || '').trim();
     const { rows } = await pool.query(
       `INSERT INTO ai_provider_connection (
         user_id, vendor_name, provider_key, base_url_override, api_key_cipher, key_last4,
-        default_model, enabled, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+        default_model, enabled, updated_at, logo_bg_color
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),$9)
       RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
-                key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at`,
-      [uid, vname, pk, override || null, cipher, kl4, dm || null, !!enabled]
+                key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+                logo_relpath, logo_bg_color`,
+      [uid, vname, pk, override || null, cipher, kl4, dm || null, !!enabled, lbgN ?? null]
     );
     res.json({ success: true, data: toDto(rows[0]) });
   } catch (e) {
@@ -192,6 +294,7 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
       defaultModel,
       apiKey,
       enabled,
+      logoBgColor: logoBgIn,
     } = req.body || {};
 
     const { rows: exist } = await pool.query(
@@ -217,11 +320,26 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
     if (pk === 'custom' && !override) {
       return res.status(400).json({ success: false, error: '自定义接入须填写 Base URL' });
     }
+    if (await existsOtherByProviderKey(uid, pk, id)) {
+      return res.status(400).json({
+        success: false,
+        error: '已存在同厂商类型的其他接入，同类型仅允许保留一条。请选择其它类型或编辑已有记录。',
+      });
+    }
     const dm =
       defaultModel !== undefined
         ? String(defaultModel || '').trim()
         : (exist[0].default_model || '');
     const en = enabled !== undefined ? !!enabled : exist[0].enabled;
+
+    let nextLogoBg = exist[0].logo_bg_color;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'logoBgColor')) {
+      const lbgN = normalizeLogoBgColor(logoBgIn);
+      if (lbgN === undefined && String(logoBgIn || '').trim() !== '') {
+        return res.status(400).json({ success: false, error: 'Logo 底色格式无效（请使用 # 开头的 HEX 或 rgb/rgba）' });
+      }
+      nextLogoBg = lbgN ?? null;
+    }
 
     let cipher = exist[0].api_key_cipher;
     let kl4 = exist[0].key_last4;
@@ -240,11 +358,13 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
         key_last4 = $5,
         default_model = $6,
         enabled = $7,
+        logo_bg_color = $8,
         updated_at = NOW()
-      WHERE id = $8 AND user_id = $9
+      WHERE id = $9 AND user_id = $10
       RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
-                key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at`,
-      [vname, pk, override || null, cipher, kl4, dm || null, en, id, uid]
+                key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+                logo_relpath, logo_bg_color`,
+      [vname, pk, override || null, cipher, kl4, dm || null, en, nextLogoBg, id, uid]
     );
     res.json({ success: true, data: toDto(rows[0]) });
   } catch (e) {
@@ -261,12 +381,14 @@ router.delete('/ai-provider-connections/:id', async (req, res) => {
       return res.status(400).json({ success: false, error: '无效 id' });
     }
     const del = await pool.query(
-      `DELETE FROM ai_provider_connection WHERE id = $1 AND user_id = $2 RETURNING id`,
+      `DELETE FROM ai_provider_connection WHERE id = $1 AND user_id = $2 RETURNING id, logo_relpath`,
       [id, uid]
     );
     if (!del.rowCount) {
       return res.status(404).json({ success: false, error: '未找到' });
     }
+    const rel = del.rows[0]?.logo_relpath;
+    if (rel) tryUnlinkRel(rel);
     res.json({ success: true });
   } catch (e) {
     console.error('[ai-provider-connections]', e);
@@ -334,6 +456,87 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
     }
   } catch (e) {
     console.error('[ai-provider-connections test]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+router.post(
+  '/ai-provider-connections/:id/logo',
+  (req, res, next) => {
+    logoUpload.single('logo')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, error: err.message || '上传失败' });
+      }
+      next();
+    });
+  },
+  async (req, res) => {
+    try {
+      const uid = userId(req);
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) {
+        return res.status(400).json({ success: false, error: '无效 id' });
+      }
+      if (!req.file?.path) {
+        return res.status(400).json({ success: false, error: '请选择图片文件' });
+      }
+      const rel = path.relative(UPLOADS_ROOT, req.file.path).replace(/\\/g, '/');
+      const { rows: exist } = await pool.query(
+        `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+        [id, uid]
+      );
+      if (!exist[0]) {
+        tryUnlinkRel(rel);
+        return res.status(404).json({ success: false, error: '未找到' });
+      }
+      const oldRel = exist[0].logo_relpath;
+      const { rows } = await pool.query(
+        `UPDATE ai_provider_connection SET logo_relpath = $1, updated_at = NOW()
+         WHERE id = $2 AND user_id = $3
+         RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+                   key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+                   logo_relpath, logo_bg_color`,
+        [rel, id, uid]
+      );
+      if (oldRel && oldRel !== rel) tryUnlinkRel(oldRel);
+      res.json({ success: true, data: toDto(rows[0]) });
+    } catch (e) {
+      console.error('[ai-provider-connections logo]', e);
+      res.status(500).json({ success: false, error: e.message });
+    }
+  }
+);
+
+router.delete('/ai-provider-connections/:id/logo', async (req, res) => {
+  try {
+    const uid = userId(req);
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: '无效 id' });
+    }
+    const sel = await pool.query(
+      `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    if (!sel.rows[0]) {
+      return res.status(404).json({ success: false, error: '未找到' });
+    }
+    const oldRel = sel.rows[0].logo_relpath;
+    await pool.query(
+      `UPDATE ai_provider_connection SET logo_relpath = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    if (oldRel) tryUnlinkRel(oldRel);
+    const { rows: again } = await pool.query(
+      `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+              key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+              logo_relpath, logo_bg_color
+       FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    res.json({ success: true, data: toDto(again[0]) });
+  } catch (e) {
+    console.error('[ai-provider-connections logo delete]', e);
     res.status(500).json({ success: false, error: e.message });
   }
 });

@@ -1,225 +1,459 @@
-// 网站分析服务 - 分析网站的技术SEO和AI抓取友好度
+// 网站优化检测 — 四维：技术基础 / 页面结构 / 结构化数据 / AI 亲和性
+// 与前端 WebsiteOptimization.vue 的 dimLabels（tech/structure/schema/aiFriendly）一致
 
-const ANALYSIS_DIMENSIONS = [
-  { key: 'seo', name: 'SEO友好度', weight: 0.25 },
-  { key: 'ai', name: 'AI抓取友好度', weight: 0.30 },
-  { key: 'tech', name: '技术架构', weight: 0.20 },
-  { key: 'content', name: '内容质量', weight: 0.25 },
-];
+const USER_AGENT = 'Mozilla/5.0 (compatible; Auyologic-GEO-Analyzer/1.2)';
 
-export async function analyzeWebsite(url, apiKey) {
-  // 确保 URL 带协议前缀
-  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+const FAMOUS_HOSTS = {
+  'baidu.com': { name: '百度', type: '搜索', bonus: 12, aiBonus: 8 },
+  'google.com': { name: 'Google', type: '搜索', bonus: 12, aiBonus: 8 },
+  'qq.com': { name: '腾讯', type: '门户', bonus: 10, aiBonus: 6 },
+  'taobao.com': { name: '淘宝', type: '电商', bonus: 10, aiBonus: 6 },
+  'zhihu.com': { name: '知乎', type: '社区', bonus: 8, aiBonus: 5 },
+  'bilibili.com': { name: 'B站', type: '视频', bonus: 8, aiBonus: 5 },
+};
 
-  const report = {};
-  let overallScore = 0;
-
-  // 1. 获取网页内容
-  let html = '';
+function normalizeUrlInput(url) {
+  let u = String(url || '').trim();
+  if (!u) return null;
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
   try {
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; GEO-Analyzer/1.0)',
-      },
-    });
-    html = await resp.text();
-  } catch (err) {
-    throw new Error(`无法访问该网站: ${err.message}`);
+    return new URL(u).href;
+  } catch {
+    return null;
   }
+}
 
-  // 2. 各维度分析（并行）
-  const [seoResult, aiResult, techResult, contentResult] = await Promise.all([
-    analyzeSEO(html, url),
-    analyzeAICompatibility(html, url, apiKey),
-    analyzeTechnical(html, url),
-    analyzeContent(html),
-  ]);
+function getFamousSiteBonus(url) {
+  try {
+    const { hostname } = new URL(url);
+    const h = hostname.toLowerCase().replace(/^www\./, '');
+    for (const [suffix, meta] of Object.entries(FAMOUS_HOSTS)) {
+      if (h === suffix || h.endsWith(`.${suffix}`)) {
+        return { name: meta.name, type: meta.type, bonus: meta.bonus, aiBonus: meta.aiBonus || 0 };
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
-  report.seo = seoResult;
-  report.ai = aiResult;
-  report.tech = techResult;
-  report.content = contentResult;
+async function fetchText(href) {
+  try {
+    const res = await fetch(href, {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml,*/*' },
+      redirect: 'follow',
+    });
+    const text = await res.text();
+    return { ok: res.ok, text, status: res.status };
+  } catch (e) {
+    return { ok: false, text: '', status: 0, error: e.message };
+  }
+}
 
-  // 3. 综合评分
-  overallScore = Math.round(
-    report.seo.score * 0.25 +
-    report.ai.score * 0.30 +
-    report.tech.score * 0.20 +
-    report.content.score * 0.25
-  );
+async function checkRobots(baseUrl) {
+  let status = 'missing';
+  try {
+    const u = new URL(baseUrl);
+    const robotsUrl = `${u.origin}/robots.txt`;
+    const r = await fetch(robotsUrl, { headers: { 'User-Agent': USER_AGENT } });
+    if (!r.ok) {
+      return { status, raw: '', snippet: '无法获取' };
+    }
+    const raw = await r.text();
+    const lower = raw.toLowerCase();
+    if (lower.includes('user-agent: *') && /disallow:\s*\//.test(lower)) {
+      status = 'blocked';
+    } else {
+      status = 'allowed';
+    }
+    return { status, raw };
+  } catch {
+    return { status, raw: '' };
+  }
+}
 
+function countMatches(re, html) {
+  return (html.match(re) || []).length;
+}
+
+function stripTags(html) {
+  return String(html || '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function scoreItems(items, weights) {
+  const w = weights || items.map(() => 1);
+  const maxW = w.reduce((a, b) => a + b, 0);
+  let earned = 0;
+  items.forEach((it, i) => {
+    if (it.result === 'pass') earned += w[i] || 1;
+  });
+  return maxW > 0 ? Math.round((earned / maxW) * 100) : 0;
+}
+
+function countChecked(items) {
+  return items.filter((i) => i.result === 'pass').length;
+}
+
+function buildTechDimension(url, html, robots) {
+  const items = [];
+  const isHttps = url.startsWith('https://');
+  items.push({
+    name: 'HTTPS 协议',
+    result: isHttps ? 'pass' : 'fail',
+    value: isHttps ? '已启用' : '未启用',
+  });
+
+  const rb =
+    robots.status === 'allowed' ? '允许抓取' : robots.status === 'blocked' ? '可能限制抓取' : '未检测/无文件';
+  items.push({
+    name: 'robots.txt',
+    result: robots.status === 'allowed' ? 'pass' : 'fail',
+    value: rb,
+  });
+
+  const hasCanonical = /rel=["']canonical["']/i.test(html) || /<link[^>]+canonical/i.test(html);
+  items.push({
+    name: 'Canonical 标签',
+    result: hasCanonical ? 'pass' : 'fail',
+    value: hasCanonical ? '已设置' : '未设置',
+  });
+
+  const hasViewport = /name=["']viewport["']/i.test(html);
+  items.push({
+    name: '移动端视口',
+    result: hasViewport ? 'pass' : 'fail',
+    value: hasViewport ? '已配置 viewport' : '未配置',
+  });
+
+  const sizeKb = Buffer.byteLength(html, 'utf8') / 1024;
+  const sizeOk = sizeKb < 800;
+  items.push({
+    name: '首屏 HTML 体积',
+    result: sizeOk ? 'pass' : 'fail',
+    value: `约 ${Math.round(sizeKb)} KB`,
+  });
+
+  const weights = [2, 2, 1, 1, 1];
+  const score = scoreItems(items, weights);
   return {
-    url,
-    overallScore,
-    seoScore: report.seo.score,
-    aiScore: report.ai.score,
-    techScore: report.tech.score,
-    contentScore: report.content.score,
-    report,
-    analyzedAt: new Date().toISOString(),
+    score,
+    checked: countChecked(items),
+    total: items.length,
+    items: items.map((i) => ({ name: i.name, result: i.result, value: i.value })),
   };
 }
 
-async function analyzeSEO(html, url) {
-  const checks = [];
-  let score = 70;
+function buildStructureDimension(html) {
+  const items = [];
 
-  // Title
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if (titleMatch) checks.push({ item: '页面标题', pass: true, detail: titleMatch[1] });
-  else { checks.push({ item: '页面标题', pass: false, detail: '缺少<title>标签' }); score -= 10; }
+  const titleM = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+  const hasTitle = !!(titleM && titleM[1].trim());
+  items.push({
+    name: 'Title 标签',
+    result: hasTitle ? 'pass' : 'fail',
+    value: hasTitle ? `${titleM[1].trim().slice(0, 60)}` : '未设置',
+  });
 
-  // Meta description
-  const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
-  if (descMatch) checks.push({ item: 'Meta描述', pass: true, detail: descMatch[1].substring(0, 100) });
-  else { checks.push({ item: 'Meta描述', pass: false, detail: '缺少Meta描述' }); score -= 8; }
+  const descM =
+    html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
+  const hasDesc = !!(descM && descM[1].trim());
+  items.push({
+    name: 'Meta Description',
+    result: hasDesc ? 'pass' : 'fail',
+    value: hasDesc ? `${descM[1].trim().slice(0, 80)}` : '未设置',
+  });
 
-  // OG tags
-  const ogTitle = html.includes('og:title');
-  const ogDesc = html.includes('og:description');
-  if (ogTitle && ogDesc) checks.push({ item: 'Open Graph标签', pass: true, detail: '已配置' });
-  else { checks.push({ item: 'Open Graph标签', pass: false, detail: '缺少OG标签' }); score -= 5; }
+  const h1n = countMatches(/<h1[^>]*>/gi, html);
+  const h1ok = h1n === 1;
+  items.push({
+    name: 'H1 标签',
+    result: h1ok ? 'pass' : 'fail',
+    value: h1n === 0 ? '缺少' : `${h1n} 个`,
+  });
 
-  // H1
-  const h1Count = (html.match(/<h1[^>]*>/gi) || []).length;
-  if (h1Count >= 1) checks.push({ item: 'H1标签', pass: true, detail: `找到${h1Count}个H1` });
-  else { checks.push({ item: 'H1标签', pass: false, detail: '缺少H1标签' }); score -= 7; }
+  const h2n = countMatches(/<h2[^>]*>/gi, html);
+  const h3n = countMatches(/<h3[^>]*>/gi, html);
+  const hierarchyOk = h2n >= 1 && h3n >= 1;
+  items.push({
+    name: 'H2-H6 层级',
+    result: hierarchyOk ? 'pass' : 'fail',
+    value: `H2:${h2n} H3:${h3n}`,
+  });
 
-  // 图片Alt
-  const imgsWithoutAlt = (html.match(/<img(?![^>]*alt=[^>]*)(?![^>]*alt=")[^>]*>/gi) || []).length;
-  if (imgsWithoutAlt < 5) checks.push({ item: '图片Alt属性', pass: true, detail: `无Alt图片: ${imgsWithoutAlt}` });
-  else { checks.push({ item: '图片Alt属性', pass: false, detail: `${imgsWithoutAlt}个图片缺少Alt` }); score -= 5; }
+  const plain = stripTags(html);
+  const words = plain.split(/[\s\u3000]+/).filter((w) => w.length > 1);
+  const wc = words.length;
+  const lenOk = wc >= 200;
+  items.push({
+    name: '内容长度',
+    result: lenOk ? 'pass' : 'fail',
+    value: `约 ${wc} 词`,
+  });
 
-  return { name: 'SEO友好度', score: Math.max(0, score), checks };
+  const imgTags = html.match(/<img[^>]*>/gi) || [];
+  let withoutAlt = 0;
+  for (const tag of imgTags) {
+    if (!/\balt\s*=\s*["'][^"']*["']/i.test(tag) && !/\balt\s*=\s*[^\s>]+/i.test(tag)) withoutAlt++;
+  }
+  const totalImg = imgTags.length || 1;
+  const altRatio = totalImg ? ((totalImg - withoutAlt) / totalImg) * 100 : 100;
+  const altOk = totalImg === 0 || altRatio >= 70;
+  items.push({
+    name: '图片 Alt 标签',
+    result: altOk ? 'pass' : 'fail',
+    value: totalImg ? `${Math.round(altRatio)}% 有 alt` : '无图片',
+  });
+
+  const weights = [2, 2, 2, 1, 2, 2];
+  const score = scoreItems(items, weights);
+  return {
+    score,
+    checked: countChecked(items),
+    total: items.length,
+    items: items.map((i) => ({ name: i.name, result: i.result, value: i.value })),
+  };
 }
 
-async function analyzeAICompatibility(html, url, apiKey) {
-  const checks = [];
-  let score = 60;
+function buildSchemaDimension(html) {
+  const items = [];
 
-  // 结构化数据
-  const hasJsonLd = html.includes('application/ld+json') || html.includes('"@type"');
+  const hasJsonLd =
+    /application\/ld\+json/i.test(html) ||
+    /<script[^>]*type=["']application\/ld\+json["']/i.test(html);
+  const typeHints = [];
   if (hasJsonLd) {
-    checks.push({ item: '结构化数据(Schema)', pass: true, detail: '发现JSON-LD' });
-    score += 10;
-  } else {
-    checks.push({ item: '结构化数据(Schema)', pass: false, detail: '未发现结构化数据' });
-    score -= 10;
+    if (/FAQPage|QAPage/i.test(html)) typeHints.push('FAQ/Q&A');
+    if (/Organization|Corporation/i.test(html)) typeHints.push('Organization');
+    if (/Article|BlogPosting|NewsArticle/i.test(html)) typeHints.push('Article');
+    if (/Product|Offer/i.test(html)) typeHints.push('Product');
   }
+  items.push({
+    name: 'JSON-LD Schema',
+    result: hasJsonLd ? 'pass' : 'fail',
+    value: hasJsonLd ? (typeHints.length ? typeHints.join('、') : '已检测到') : '未检测到',
+  });
 
-  // 语义标签
-  const semanticTags = ['<article', '<section', '<nav', '<header', '<footer', '<main'];
-  const semanticCount = semanticTags.filter(tag => html.includes(tag)).length;
-  if (semanticCount >= 4) {
-    checks.push({ item: '语义化HTML', pass: true, detail: `使用${semanticCount}个语义标签` });
-    score += 10;
-  } else {
-    checks.push({ item: '语义化HTML', pass: false, detail: `仅使用${semanticCount}个语义标签` });
-    score -= 5;
-  }
+  const ogTitle = /property=["']og:title["']/i.test(html);
+  const ogDesc = /property=["']og:description["']/i.test(html);
+  const ogOk = ogTitle && ogDesc;
+  items.push({
+    name: 'Open Graph',
+    result: ogOk ? 'pass' : 'fail',
+    value: ogOk ? 'og:title + og:description' : '不完整或未设置',
+  });
 
-  // 纯文本内容占比
-  const textLength = html.replace(/<[^>]+>/g, '').length;
-  const htmlLength = html.length;
-  const textRatio = textLength / htmlLength;
-  if (textRatio > 0.15) {
-    checks.push({ item: '内容丰富度', pass: true, detail: `文本占比${Math.round(textRatio * 100)}%` });
-    score += 10;
-  } else {
-    checks.push({ item: '内容丰富度', pass: false, detail: `文本占比${Math.round(textRatio * 100)}%，偏低` });
-  }
+  const tw = /name=["']twitter:card["']/i.test(html) || /property=["']twitter:title["']/i.test(html);
+  items.push({
+    name: 'Twitter / 社交图',
+    result: tw ? 'pass' : 'fail',
+    value: tw ? '已配置' : '未配置',
+  });
 
-  // robots.txt / sitemap
-  try {
-    const robotsResp = await fetch(new URL('/robots.txt', url).href).catch(() => null);
-    if (robotsResp?.ok) checks.push({ item: 'robots.txt', pass: true, detail: '存在' });
-    else checks.push({ item: 'robots.txt', pass: false, detail: '未找到' });
-  } catch {
-    checks.push({ item: 'robots.txt', pass: false, detail: '无法检测' });
-  }
-
-  return { name: 'AI抓取友好度', score: Math.max(0, Math.min(100, score)), checks };
+  const weights = [3, 2, 1];
+  const score = scoreItems(items, weights);
+  return {
+    score,
+    checked: countChecked(items),
+    total: items.length,
+    items: items.map((i) => ({ name: i.name, result: i.result, value: i.value })),
+  };
 }
 
-async function analyzeTechnical(html, url) {
-  const checks = [];
-  let score = 75;
+function buildAiFriendlyDimension(html, robots) {
+  const items = [];
 
-  // HTTPS
-  if (url.startsWith('https://')) {
-    checks.push({ item: 'HTTPS加密', pass: true, detail: '使用HTTPS' });
-    score += 10;
-  } else {
-    checks.push({ item: 'HTTPS加密', pass: false, detail: '未使用HTTPS' });
-    score -= 10;
+  const semantic = ['article', 'section', 'nav', 'header', 'footer', 'main'];
+  let semCount = 0;
+  for (const t of semantic) {
+    if (new RegExp(`<${t}[^>]*>`, 'i').test(html)) semCount++;
   }
+  const semOk = semCount >= 3;
+  items.push({
+    name: '语义化 HTML',
+    result: semOk ? 'pass' : 'fail',
+    value: `使用 ${semCount}/6 类语义标签`,
+  });
 
-  // 响应式
-  if (html.includes('viewport') || html.includes('max-width')) {
-    checks.push({ item: '移动端适配', pass: true, detail: '有viewport配置' });
-    score += 5;
-  } else {
-    checks.push({ item: '移动端适配', pass: false, detail: '未发现viewport配置' });
-    score -= 5;
-  }
+  const len = html.length || 1;
+  const textLen = stripTags(html).length;
+  const ratio = textLen / len;
+  const ratioOk = ratio > 0.12;
+  items.push({
+    name: '正文信息密度',
+    result: ratioOk ? 'pass' : 'fail',
+    value: `${Math.round(ratio * 100)}% 文本占比`,
+  });
 
-  // 加载速度估算（文件大小）
-  const sizeKB = new TextEncoder().encode(html).length / 1024;
-  if (sizeKB < 500) {
-    checks.push({ item: '页面体积', pass: true, detail: `约${Math.round(sizeKB)}KB` });
-    score += 5;
-  } else {
-    checks.push({ item: '页面体积', pass: false, detail: `${Math.round(sizeKB)}KB，偏大` });
-    score -= 5;
-  }
+  const faqPattern =
+    /faq|常见问题|问与答|q\s*[&＆]\s*a/i.test(html) ||
+    /FAQPage|QAPage/i.test(html);
+  items.push({
+    name: 'FAQ 内容',
+    result: faqPattern ? 'pass' : 'fail',
+    value: faqPattern ? '检测到 FAQ 线索或 Schema' : '未检测',
+  });
 
-  // Canonical标签
-  if (html.includes('canonical')) {
-    checks.push({ item: 'Canonical标签', pass: true, detail: '已配置' });
-  } else {
-    checks.push({ item: 'Canonical标签', pass: false, detail: '未配置' });
-    score -= 3;
-  }
+  const lists = countMatches(/<ul[\s>]/gi, html) + countMatches(/<ol[\s>]/gi, html);
+  const listOk = lists >= 1;
+  items.push({
+    name: '列表与要点',
+    result: listOk ? 'pass' : 'fail',
+    value: `${lists} 个列表`,
+  });
 
-  return { name: '技术架构', score: Math.max(0, Math.min(100, score)), checks };
+  let renderHint = '静态/未知';
+  if (/\bid=["']__next|__NEXT_DATA__|next\.js/i.test(html)) renderHint = 'Next.js（多为 SSR/SSG）';
+  else if (/nuxt|__NUXT__|data-v-/i.test(html)) renderHint = 'Nuxt/Vue';
+  else if (/react/.test(html) && /<div\s+id=["']root["']/i.test(html)) renderHint = 'SPA 倾向';
+  items.push({
+    name: '渲染形态线索',
+    result: /__NEXT_DATA__|ssr|server/i.test(html) ? 'pass' : 'fail',
+    value: renderHint,
+  });
+
+  const crawlOk = robots.status === 'allowed';
+  items.push({
+    name: 'AI 爬虫友好（robots）',
+    result: crawlOk ? 'pass' : 'fail',
+    value: crawlOk ? '未全局禁止' : '可能受限',
+  });
+
+  const weights = [2, 2, 2, 1, 1, 2];
+  const score = scoreItems(items, weights);
+  return {
+    score,
+    checked: countChecked(items),
+    total: items.length,
+    items: items.map((i) => ({ name: i.name, result: i.result, value: i.value })),
+  };
 }
 
-async function analyzeContent(html) {
-  const checks = [];
-  let score = 65;
+const DIM_LABEL = {
+  tech: '技术基础',
+  structure: '页面结构',
+  schema: '结构化数据',
+  aiFriendly: 'AI亲和性',
+};
 
-  const text = html.replace(/<[^>]+>/g, '').trim();
-  const words = text.split(/\s+/).filter(w => w.length > 2);
-  const wordCount = words.length;
+function buildDetails(tech, structure, schema, aiFriendly) {
+  const out = [];
+  for (const dimKey of ['tech', 'structure', 'schema', 'aiFriendly']) {
+    const dim = { tech, structure, schema, aiFriendly }[dimKey];
+    const label = DIM_LABEL[dimKey];
+    for (const it of dim.items || []) {
+      out.push({
+        dimension: label,
+        item: it.name,
+        result: it.result === 'pass' ? 'pass' : 'fail',
+        value: it.value || '',
+        suggestion: it.result === 'pass' ? '保持现状' : '建议按 GEO/SEO 最佳实践优化',
+      });
+    }
+  }
+  return out;
+}
 
-  if (wordCount >= 500) {
-    checks.push({ item: '内容字数', pass: true, detail: `约${wordCount}字` });
-    score += 15;
-  } else {
-    checks.push({ item: '内容字数', pass: false, detail: `仅${wordCount}字，内容偏少` });
-    score -= 10;
+function buildIssues(tech, structure, schema, aiFriendly) {
+  const warn = [];
+  const pass = [];
+
+  const pushFail = (dimLabel, it, impact) => {
+    if (it.result !== 'pass') {
+      warn.push({
+        title: `${dimLabel}：${it.name}`,
+        desc: `当前值：${it.value}`,
+        fix: '参考 GEO / SEO 规范完善该项',
+        level: 'warn',
+        impact: impact || 5,
+      });
+    }
+  };
+
+  const pushPass = (title, desc, impact) => {
+    pass.push({ title, desc, level: 'pass', impact: impact || 3 });
+  };
+
+  for (const it of tech.items) {
+    pushFail('技术基础', it, 6);
+    if (it.name === 'HTTPS 协议' && it.result === 'pass') pushPass('HTTPS 已启用', '传输安全', 5);
+  }
+  for (const it of structure.items) pushFail('页面结构', it, 4);
+  for (const it of schema.items) pushFail('结构化数据', it, 5);
+  for (const it of aiFriendly.items) pushFail('AI亲和性', it, 4);
+
+  const avg =
+    (tech.score + structure.score + schema.score + aiFriendly.score) / 4;
+  if (avg >= 75) {
+    pass.push({
+      title: '整体 GEO 友好度良好',
+      desc: '四维综合表现较好，建议持续更新内容与结构化数据',
+      level: 'pass',
+      impact: 0,
+    });
   }
 
-  // 标题层级
-  const h2Count = (html.match(/<h2/gi) || []).length;
-  const h3Count = (html.match(/<h3/gi) || []).length;
-  if (h2Count >= 2 && h3Count >= 2) {
-    checks.push({ item: '内容结构', pass: true, detail: `H2:${h2Count} H3:${h3Count}` });
-    score += 10;
-  } else {
-    checks.push({ item: '内容结构', pass: false, detail: `H2:${h2Count} H3:${h3Count}` });
-    score -= 5;
+  return { warn, pass };
+}
+
+export async function analyzeWebsite(url, _apiKey) {
+  const normalized = normalizeUrlInput(url);
+  if (!normalized) {
+    throw new Error('无效的网址');
   }
 
-  // 列表使用
-  const ulCount = (html.match(/<ul/gi) || []).length;
-  const olCount = (html.match(/<ol/gi) || []).length;
-  if (ulCount + olCount >= 2) {
-    checks.push({ item: '列表结构', pass: true, detail: `找到${ulCount + olCount}个列表` });
-    score += 5;
-  } else {
-    checks.push({ item: '列表结构', pass: false, detail: '缺少列表' });
+  const page = await fetchText(normalized);
+  if (!page.text || page.text.length < 80) {
+    throw new Error(
+      page.error || `无法获取页面内容（HTTP ${page.status || '—'}）`
+    );
+  }
+  const html = page.text;
+
+  const robots = await checkRobots(normalized);
+
+  const tech = buildTechDimension(normalized, html, robots);
+  const structure = buildStructureDimension(html);
+  const schema = buildSchemaDimension(html);
+  const aiFriendly = buildAiFriendlyDimension(html, robots);
+
+  let overallScore = Math.round(
+    tech.score * 0.22 + structure.score * 0.28 + schema.score * 0.22 + aiFriendly.score * 0.28
+  );
+
+  const famousSiteBonus = getFamousSiteBonus(normalized);
+  if (famousSiteBonus) {
+    overallScore = Math.min(
+      100,
+      overallScore + Math.round((famousSiteBonus.bonus + (famousSiteBonus.aiBonus || 0)) / 4)
+    );
   }
 
-  return { name: '内容质量', score: Math.max(0, Math.min(100, score)), checks };
+  const issues = buildIssues(tech, structure, schema, aiFriendly);
+  const details = buildDetails(tech, structure, schema, aiFriendly);
+
+  const checkedAt = new Date().toISOString();
+
+  return {
+    url: normalized,
+    overallScore,
+    tech,
+    structure,
+    schema,
+    aiFriendly,
+    issues,
+    details,
+    checkedAt,
+    famousSiteBonus,
+    seoScore: structure.score,
+    aiScore: aiFriendly.score,
+    techScore: tech.score,
+    contentScore: schema.score,
+  };
 }

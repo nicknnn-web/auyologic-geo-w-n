@@ -72,6 +72,10 @@
               <el-icon><Comment /></el-icon>
               <template #title>情感词管理</template>
             </el-menu-item>
+            <el-menu-item index="/ai-provider-connections">
+              <el-icon><Connection /></el-icon>
+              <template #title>大模型接入</template>
+            </el-menu-item>
 
             <!-- 关键词裂变 -->
             <div v-if="!isCollapse" class="px-4 py-0.5 text-xs text-gray-400">关键词裂变</div>
@@ -179,6 +183,10 @@
               <el-icon><Comment /></el-icon>
               <template #title>情感词管理</template>
             </el-menu-item>
+            <el-menu-item index="/ai-provider-connections">
+              <el-icon><Connection /></el-icon>
+              <template #title>大模型接入</template>
+            </el-menu-item>
 
             <div class="px-4 py-0.5 text-xs text-gray-400">关键词裂变</div>
             <el-menu-item index="/keywords">
@@ -253,7 +261,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Menu, Close, TrendCharts, Management, Comment } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Menu, Close, TrendCharts, Management, Comment, Connection } from '@element-plus/icons-vue'
 
 const isCollapse = ref(false)
 const mobileMenuOpen = ref(false)

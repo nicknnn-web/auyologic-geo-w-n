@@ -9,7 +9,8 @@
  * `/geo-health-report/competitor` 拉取该竞品完整详情（含情感桶与源问题题干）。
  *
  * 响应字段与前端 GEOHealthReport.vue 的 loadHealthReport 完全对应：
- *   brandName / brandDomain / checkTime（该用户最近完成任务的 last_analysis_at）/ healthScore
+ *   brandName / brandDomain / checkTime / healthScore（= modelVisibilityCards[0].healthScore，按大模型；非全模型平均）
+ *   modelVisibilityCards[].healthScore 每模型独立
  *   kpiDenominator / interceptRate / blindIndex / negativeRate / authorityScore
  *   modelVisibilityCards[]
  *   intentPaths[] / platforms[] / matrixData{}
@@ -27,6 +28,7 @@ import {
   loadSentimentLexiconPolarityRules,
   sentimentPolarityFromLexicon,
 } from '../services/sentimentLexiconService.js';
+import { computeAiHealthScore } from '../utils/aiHealthScore.js';
 
 const router = Router();
 
@@ -46,6 +48,25 @@ const MODEL_DISPLAY_MAP = {
   'gpt-4o-mini':        { name: 'GPT-4o mini',   icon: 'G',  color: '#22C55E' },
   'gpt-4o':             { name: 'GPT-4o',        icon: 'G',  color: '#22C55E' },
 };
+
+/** 探针写入的 model_name 与 ai_provider_connection.vendor_name 一致时可匹配 Logo/底色 */
+function buildVendorLogoMap(rows) {
+  const m = new Map();
+  for (const row of rows) {
+    const vn = String(row.vendor_name || '').trim();
+    if (!vn) continue;
+    const rel = String(row.logo_relpath || '').trim();
+    const iconUrl = rel ? `/uploads/${rel.replace(/\\/g, '/')}` : null;
+    const rawBg = row.logo_bg_color;
+    const iconBgColor = rawBg != null && String(rawBg).trim() !== '' ? String(rawBg).trim() : null;
+    m.set(vn, { iconUrl, iconBgColor });
+  }
+  return m;
+}
+
+function logoExtrasFor(logoMap, modelName) {
+  return logoMap.get(String(modelName || '').trim()) || { iconUrl: null, iconBgColor: null };
+}
 
 /**
  * keyword_type data_key 展示/归类配置
@@ -338,8 +359,10 @@ router.get('/geo-health-report', async (req, res) => {
     const enterprise = enterpriseRes.rows[0] || {};
     const brandName = String(enterprise.company_name || '品牌').trim();
     const brandDomain = String(enterprise.website || '').trim();
+    /** 与 geo_health_task.keyword 比对用（创建任务时写入的企业名称）；空字符串与库内空 keyword 对齐 */
+    const brandKey = brandName.slice(0, 500);
 
-    // 取「分析流水线最后写入时间」最晚的已完成任务；检测时间用该任务的完成时刻（非任务创建时间）
+    // 取当前企业名称下「分析流水线最后写入时间」最晚的已完成任务；keyword 为空视为历史数据（迁移前）仍参与匹配
     const taskRes = await pool.query(
       `SELECT t.id AS task_id, finished.last_analysis_at AS check_time
        FROM geo_health_task t
@@ -349,9 +372,13 @@ router.get('/geo-health-report', async (req, res) => {
          GROUP BY task_id
        ) finished ON finished.task_id = t.id
        WHERE t.user_id = $1 AND t.status = 'completed'
+         AND (
+           trim(coalesce(t.keyword, '')) = $2
+           OR trim(coalesce(t.keyword, '')) = ''
+         )
        ORDER BY finished.last_analysis_at DESC NULLS LAST, t.id DESC
        LIMIT 1`,
-      [userId]
+      [userId, brandKey]
     );
 
     // 如果没有任何分析数据，返回空白报告
@@ -376,37 +403,25 @@ router.get('/geo-health-report', async (req, res) => {
 
     const modelNames = mvRes.rows.map((r) => r.model_name);
 
+    const logoConnRes = await pool.query(
+      `SELECT vendor_name, logo_relpath, logo_bg_color
+       FROM ai_provider_connection
+       WHERE user_id = $1`,
+      [userId]
+    );
+    const vendorLogoMap = buildVendorLogoMap(logoConnRes.rows);
+
     const platforms = modelNames.map((mn) => {
       const cfg = MODEL_DISPLAY_MAP[mn] || {
         name: mn,
         icon: mn.charAt(0).toUpperCase(),
         color: '#909399',
       };
-      return { key: mn, ...cfg, simulated: false };
+      const { iconUrl, iconBgColor } = logoExtrasFor(vendorLogoMap, mn);
+      return { key: mn, ...cfg, simulated: false, iconUrl, iconBgColor };
     });
 
-    const modelVisibilityCards = mvRes.rows.map((r) => {
-      const score = r.total > 0 ? clamp100((r.visible_count / r.total) * 100) : 0;
-      const cfg = MODEL_DISPLAY_MAP[r.model_name] || {
-        name: r.model_name, icon: r.model_name.charAt(0).toUpperCase(), color: '#909399',
-      };
-      let status = 'high', statusText = '高风险';
-      if (score >= 70) { status = 'good'; statusText = '表现良好'; }
-      else if (score >= 40) { status = 'mid'; statusText = '待加强'; }
-      return {
-        platformKey: r.model_name,
-        name: cfg.name,
-        icon: cfg.icon,
-        brandColor: cfg.color,
-        simulated: false,
-        score,
-        status,
-        statusText,
-        total: r.total,
-        visibleCount: r.visible_count,
-        bullets: buildModelBullets({ score, total: r.total, visibleCount: r.visible_count }),
-      };
-    });
+    // modelVisibilityCards 在 KPI（拦截/负面/品牌行业）算完后按「单模型」生成，见下方
 
     // ── 2. KPI ──
 
@@ -506,6 +521,42 @@ router.get('/geo-health-report', async (req, res) => {
           : negativeRatio < 0.3
             ? '高风险'
             : '超高风险';
+
+    // 各模型可见度卡片 + 按大模型的 AI 健康分（与核心指标同一套任务级 KPI，仅「可见度」为当前模型得分）
+    const modelVisibilityCards = mvRes.rows.map((r) => {
+      const score = r.total > 0 ? clamp100((r.visible_count / r.total) * 100) : 0;
+      const cfg = MODEL_DISPLAY_MAP[r.model_name] || {
+        name: r.model_name, icon: r.model_name.charAt(0).toUpperCase(), color: '#909399',
+      };
+      const { iconUrl, iconBgColor } = logoExtrasFor(vendorLogoMap, r.model_name);
+      const healthScore = computeAiHealthScore({
+        modelVisibilityScores: [score],
+        interceptRate,
+        negativeRatio,
+        brandMentionRate,
+        industryMentionRate,
+      });
+      let status = 'high';
+      let statusText = '高风险';
+      if (healthScore >= 70) { status = 'good'; statusText = '表现良好'; }
+      else if (healthScore >= 40) { status = 'mid'; statusText = '待加强'; }
+      return {
+        platformKey: r.model_name,
+        name: cfg.name,
+        icon: cfg.icon,
+        brandColor: cfg.color,
+        iconUrl,
+        iconBgColor,
+        simulated: false,
+        score,
+        healthScore,
+        status,
+        statusText,
+        total: r.total,
+        visibleCount: r.visible_count,
+        bullets: buildModelBullets({ score, total: r.total, visibleCount: r.visible_count }),
+      };
+    });
 
     // authorityScore = 引用了可信信源的比例
     const srcR = await pool.query(
@@ -686,13 +737,8 @@ router.get('/geo-health-report', async (req, res) => {
       color: SOURCE_PIE_COLORS[k],
     }));
 
-    // ── 7. 综合健康分 ──
-    const healthScore = clamp100(
-      interceptRate * 0.35 +
-      (100 - blindIndex) * 0.30 +
-      (100 - negativeRate) * 0.20 +
-      authorityScore * 0.15
-    );
+    // ── 7. 首模型 AI 健康分（与 modelVisibilityCards[0].healthScore 一致，兼容旧字段 healthScore）──
+    const healthScore = modelVisibilityCards[0]?.healthScore ?? 0;
 
     // ── 8. 诊断 ──
     const diagnosticSuggestions = buildDiagnostics({

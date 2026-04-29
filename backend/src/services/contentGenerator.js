@@ -192,12 +192,11 @@ function getFormatRequirement(format) {
   return formatMap[format] || formatMap.headings
 }
 
-export async function generateContent(prompt, apiKey, options = {}) {
-  const { default: OpenAI } = await import('openai');
-  const openai = new OpenAI({ 
-    apiKey,
-    baseURL: 'https://api.deepseek.com'
-  });
+export async function generateContent(prompt, ctx = {}, options = {}) {
+  const aiClient = ctx?.aiClient;
+  if (!aiClient) {
+    throw new Error('generateContent: 缺少 aiClient（应由路由层从数据库连接解析）');
+  }
 
   // 从 prompt 中尝试解析结构化参数（如果前端传来了结构化 prompt）
   // 这里优先使用 options 中的参数，其次解析 prompt
@@ -253,21 +252,13 @@ export async function generateContent(prompt, apiKey, options = {}) {
   
   userPrompt += '请按照上述模板结构，生成一篇完整、高质量的文章。注意：直接输出文章内容，不需要前言说明。'
 
-  const response = await openai.chat.completions.create({
-    model: 'deepseek-chat',
-    messages: [
-      {
-        role: 'system',
-        content: systemPrompt
-      },
-      {
-        role: 'user',
-        content: userPrompt
-      }
+  const { content } = await aiClient.chat(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
     ],
-    temperature: 0.75,
-    max_tokens: 4000,
-  });
+    { temperature: 0.75, maxTokens: 4000 }
+  );
 
-  return response.choices[0]?.message?.content || '生成失败，请重试';
+  return content || '生成失败，请重试';
 }

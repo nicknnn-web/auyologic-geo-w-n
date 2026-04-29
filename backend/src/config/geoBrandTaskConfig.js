@@ -55,11 +55,17 @@ export const GEO_HEALTH_QUESTIONS_PER_TYPE = Math.max(
   numEnv('GEO_HEALTH_QUESTIONS_PER_TYPE', 10)
 );
 
-/** 探针阶段：同时并发几道题 */
-export const GEO_HEALTH_PROBE_CONCURRENCY = Math.max(1, numEnv('GEO_HEALTH_PROBE_CONCURRENCY', 2));
+/** 探针阶段：滑动窗口并发上限（题×模型为单位调度） */
+export const GEO_HEALTH_PROBE_CONCURRENCY = Math.max(1, numEnv('GEO_HEALTH_PROBE_CONCURRENCY', 12));
 
-/** 探针阶段：每批之间停顿（毫秒） */
-export const GEO_HEALTH_PROBE_BATCH_DELAY_MS = numEnv('GEO_HEALTH_PROBE_BATCH_DELAY_MS', 250);
+/** 探针阶段：每批之间停顿（毫秒）。滑动窗口模式下默认 0 */
+export const GEO_HEALTH_PROBE_BATCH_DELAY_MS = numEnv('GEO_HEALTH_PROBE_BATCH_DELAY_MS', 0);
+
+/** 探针阶段：单次 chat 的 max_tokens；过大会显著拉长尾延迟 */
+export const GEO_HEALTH_PROBE_MAX_TOKENS = Math.max(256, numEnv('GEO_HEALTH_PROBE_MAX_TOKENS', 2000));
+
+/** 探针阶段：单次 chat 的超时（毫秒），到点直接 abort 并落库错误，避免卡死 */
+export const GEO_HEALTH_PROBE_TIMEOUT_MS = Math.max(5_000, numEnv('GEO_HEALTH_PROBE_TIMEOUT_MS', 90_000));
 
 /** 从 sys_dict 读取的字典类型（与 questions.keyword_type 存的 data_key 一致） */
 export const GEO_HEALTH_KEYWORD_TYPE_DICT_TYPE = 'keyword_type';
@@ -78,11 +84,14 @@ export const PROBE_MODELS = strEnv('PROBE_MODELS', 'deepseek')
  */
 export const ANALYSIS_MODEL = strEnv('ANALYSIS_MODEL', 'deepseek');
 
-/** 分析阶段：同时并发几条 */
+/** 分析阶段：滑动窗口并发上限 */
 export const GEO_HEALTH_ANALYSIS_CONCURRENCY = Math.max(
   1,
-  numEnv('GEO_HEALTH_ANALYSIS_CONCURRENCY', 2)
+  numEnv('GEO_HEALTH_ANALYSIS_CONCURRENCY', 8)
 );
 
-/** 分析阶段：每批之间停顿（毫秒） */
-export const GEO_HEALTH_ANALYSIS_DELAY_MS = numEnv('GEO_HEALTH_ANALYSIS_DELAY_MS', 300);
+/** 分析阶段：每批之间停顿（毫秒）。滑动窗口默认 0 */
+export const GEO_HEALTH_ANALYSIS_DELAY_MS = numEnv('GEO_HEALTH_ANALYSIS_DELAY_MS', 0);
+
+/** 分析阶段：单次 chat 的超时（毫秒） */
+export const GEO_HEALTH_ANALYSIS_TIMEOUT_MS = Math.max(5_000, numEnv('GEO_HEALTH_ANALYSIS_TIMEOUT_MS', 60_000));

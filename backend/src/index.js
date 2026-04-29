@@ -21,6 +21,7 @@ import {
 } from './services/playwrightPublisher.js';
 import { parsePagination, pagedResponse } from './pagination.js';
 
+const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
 const app = express();
 
@@ -202,6 +203,13 @@ async function upsertSysDictType(dictTypeKey, dictTypeValue) {
 
 // 中间件
 app.use(cors());
+{
+  const uploadsRoot = join(process.cwd(), 'public', 'uploads');
+  if (!existsSync(uploadsRoot)) {
+    mkdirSync(uploadsRoot, { recursive: true });
+  }
+  app.use('/uploads', express.static(uploadsRoot));
+}
 app.use(express.json({ limit: '50mb' }));
 
 // 获取用户ID
@@ -625,6 +633,49 @@ app.post('/api/sys-dict/entries/batch-delete', async (req, res) => {
     })
   } catch (err) {
     console.error('sys-dict/entries batch-delete:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/** 拓展问题：批量删除、按筛选条件删除（须注册在通用 `/api/questions/:id` 之前） */
+const QUESTIONS_BATCH_DELETE_MAX = 20000
+app.post('/api/questions/batch-delete', async (req, res) => {
+  try {
+    await ensureTable('questions')
+    const raw = req.body?.ids
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: '请提供非空 ids 数组' })
+    }
+    const ids = [
+      ...new Set(
+        raw
+          .map((x) => parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ]
+    if (ids.length === 0) return res.status(400).json({ error: 'ids 中无有效正整数' })
+    if (ids.length > QUESTIONS_BATCH_DELETE_MAX) {
+      return res.status(400).json({ error: `单次最多删除 ${QUESTIONS_BATCH_DELETE_MAX} 条` })
+    }
+    const r = await pool.query(`DELETE FROM questions WHERE id = ANY($1::int[]) RETURNING id`, [ids])
+    res.json({ ok: true, deletedCount: r.rowCount })
+  } catch (err) {
+    console.error('questions batch-delete:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/** 与 GET /api/questions 相同的 keywordType、status 筛选，一次性删除命中行（清空全部） */
+app.post('/api/questions/delete-matching', async (req, res) => {
+  try {
+    await ensureTable('questions')
+    const merged = { ...req.query, ...(req.body && typeof req.body === 'object' ? req.body : {}) }
+    const fakeReq = { query: merged }
+    const { where, params } = buildCrudTableFilter('questions', fakeReq)
+    const r = await pool.query(`DELETE FROM questions ${where} RETURNING id`, params)
+    res.json({ ok: true, deletedCount: r.rowCount })
+  } catch (err) {
+    console.error('questions delete-matching:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -1457,6 +1508,7 @@ import fileUploadRouter from './routes/fileUpload.js';
 import geoBrandTaskRouter from './routes/geoBrandTask.js';
 import geoHealthReportRouter from './routes/geoHealthReport.js';
 import sentimentLexiconRouter from './routes/sentimentLexicon.js';
+import aiProviderConnectionsRouter from './routes/aiProviderConnections.js';
 
 app.use('/api', contentGeneratorRouter);
 app.use('/api/minio', fileUploadRouter);
@@ -1466,6 +1518,7 @@ app.use('/api/ai', aiProxyRouter);
 app.use('/api', geoBrandTaskRouter);
 app.use('/api', geoHealthReportRouter);
 app.use('/api', sentimentLexiconRouter);
+app.use('/api', aiProviderConnectionsRouter);
 
 // ========== Stub 接口（功能完善后替换为真实实现）==========
 

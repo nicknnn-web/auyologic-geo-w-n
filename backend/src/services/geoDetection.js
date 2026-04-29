@@ -11,7 +11,10 @@ const AI_PLATFORMS = {
   'zhipu': { name: '智谱', searchUrl: 'https://chatglm.cn/search' },
 };
 
-export async function processGeoDetection(keywords, platforms = Object.keys(AI_PLATFORMS), apiKey) {
+export async function processGeoDetection(keywords, platforms = Object.keys(AI_PLATFORMS), { aiClient } = {}) {
+  if (!aiClient) {
+    throw new Error('processGeoDetection: 缺少 aiClient（应由路由层从数据库连接解析）');
+  }
   const results = [];
   const platformResults = {};
 
@@ -20,7 +23,7 @@ export async function processGeoDetection(keywords, platforms = Object.keys(AI_P
       try {
         // 使用AI分析该关键词在对应平台的搜索结果摘要
         const searchQuery = `品牌"${kw}"在${AI_PLATFORMS[platform]?.name || platform}中的可见度`;
-        const result = await analyzeBrandVisibility(searchQuery, kw, apiKey);
+        const result = await analyzeBrandVisibility(searchQuery, kw, aiClient);
 
         results.push({
           keyword: kw,
@@ -61,11 +64,7 @@ export async function processGeoDetection(keywords, platforms = Object.keys(AI_P
   };
 }
 
-async function analyzeBrandVisibility(query, keyword, apiKey) {
-  // 使用DeepSeek分析
-  const { default: OpenAI } = await import('openai');
-  const openai = new OpenAI({ apiKey });
-
+async function analyzeBrandVisibility(query, keyword, aiClient) {
   const prompt = `请分析搜索查询："${query}"
 请判断搜索结果中是否明确提到了品牌"${keyword}"。
 返回JSON格式：
@@ -76,13 +75,11 @@ async function analyzeBrandVisibility(query, keyword, apiKey) {
 }`;
 
   try {
-    const response = await openai.chat.completions.create({
-      model: 'deepseek-chat',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-    });
-
-    const text = response.choices[0]?.message?.content || '{}';
+    const { content } = await aiClient.chat(
+      [{ role: 'user', content: prompt }],
+      { temperature: 0.3, maxTokens: 1024 }
+    );
+    const text = content || '{}';
     const match = text.match(/\{[\s\S]*\}/);
     if (match) {
       return JSON.parse(match[0]);

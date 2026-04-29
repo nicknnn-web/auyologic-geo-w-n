@@ -22,13 +22,12 @@
  *   price / product / scenario / 其它 → "open"
  */
 
-import { createAiClient } from './aiClientFactory.js';
-import { extractJsonFromText } from './geoBrandTaskService.js';
+import { createAiClientByConnectionId } from './aiClientFactory.js';
+import { extractJsonFromText, runWithSlidingConcurrency } from './geoBrandTaskService.js';
 import {
-  ANALYSIS_MODEL,
   GEO_HEALTH_ANALYSIS_CONCURRENCY,
   GEO_HEALTH_ANALYSIS_DELAY_MS,
-  PROBE_MODELS,
+  GEO_HEALTH_ANALYSIS_TIMEOUT_MS,
 } from '../config/geoBrandTaskConfig.js';
 
 // ─────────────────────────────────────────────
@@ -78,7 +77,10 @@ export { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt };
  * @param {string} options.brand      - 企业/品牌名称
  * @param {boolean} [options.force]   - true 时强制重新分析（忽略已有结果）
  */
-export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = false }) {
+export async function analyzeOneAnswer(
+  pool,
+  { taskId, answerId, brand, analysisClient, force = false, sentimentLexicon, timeoutMs = GEO_HEALTH_ANALYSIS_TIMEOUT_MS, signal }
+) {
   // 断点续跑：已成功分析的直接跳过
   if (!force) {
     const existing = await pool.query(
@@ -125,7 +127,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
       sourceQuestionId: row.source_question_id,
       questionType: row.question_type,
       modelName: row.model_name,
-      analysisProvider: ANALYSIS_MODEL,
+      analysisProvider: analysisClient?.vendorName || analysisClient?.providerKey || null,
       answerTokens: [],
       errorText: `探针失败，跳过分析：${row.answer_error}`,
       rawAnalysisJson: null,
@@ -147,7 +149,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
       sourceQuestionId: row.source_question_id,
       questionType: row.question_type,
       modelName: row.model_name,
-      analysisProvider: ANALYSIS_MODEL,
+      analysisProvider: analysisClient?.vendorName || analysisClient?.providerKey || null,
       answerTokens: [],
       errorText: '探针 raw_json 中未找到有效回答文本',
       rawAnalysisJson: null,
@@ -163,25 +165,33 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
 
   const category = inferCategory(row.question_type);
   const taskUserId = String(row.task_user_id || 'default_user').trim() || 'default_user';
-  const sentimentLexicon = await loadSentimentLexiconForPrompt(pool, taskUserId);
+  const lexicon = sentimentLexicon || (await loadSentimentLexiconForPrompt(pool, taskUserId));
   const prompt = buildAnalysisPrompt({
     brand,
     question: row.question,
     answer: answerText,
     category,
-    sentimentLexicon,
+    sentimentLexicon: lexicon,
   });
 
   let analysisResult = null;
   let errMsg = null;
 
+  if (!analysisClient) {
+    throw new Error('analysisClient 未提供，无法执行分析（应由 runAllAnalysisForTask 注入）');
+  }
+
   try {
-    const client = createAiClient(ANALYSIS_MODEL);
     const messages = [
       { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
       { role: 'user', content: prompt },
     ];
-    const { content } = await client.chat(messages, { maxTokens: 1024, temperature: 0.1 });
+    const { content } = await analysisClient.chat(messages, {
+      maxTokens: 1024,
+      temperature: 0.1,
+      signal,
+      timeoutMs,
+    });
     analysisResult = extractJsonFromText(content);
     if (!analysisResult) throw new Error(`分析 AI 返回内容无法解析为 JSON：${content?.slice(0, 200)}`);
   } catch (e) {
@@ -194,7 +204,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
       questionType: row.question_type,
       category,
       modelName: row.model_name,
-      analysisProvider: ANALYSIS_MODEL,
+      analysisProvider: analysisClient?.vendorName || analysisClient?.providerKey || null,
       answerTokens,
       errorText: errMsg,
       rawAnalysisJson: null,
@@ -210,7 +220,7 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
     questionType: row.question_type,
     category,
     modelName: row.model_name,
-    analysisProvider: ANALYSIS_MODEL,
+    analysisProvider: analysisClient?.vendorName || analysisClient?.providerKey || null,
     visibility: analysisResult.visibility,
     position: analysisResult.position,
     brandStatus: analysisResult.brand_status,
@@ -243,6 +253,40 @@ export async function analyzeOneAnswer(pool, { taskId, answerId, brand, force = 
  * @param {number} taskId
  */
 export async function runAllAnalysisForTask(pool, taskId) {
+  // 读取任务的分析连接（必须由数据库提供 API Key）
+  const tRes = await pool.query(
+    `SELECT user_id, analysis_connection_id, connection_ids
+     FROM geo_health_task WHERE id = $1`,
+    [taskId]
+  );
+  const taskRow = tRes.rows[0];
+  if (!taskRow) throw new Error(`任务不存在 taskId=${taskId}`);
+
+  let analysisCid = taskRow.analysis_connection_id;
+  if (!analysisCid && Array.isArray(taskRow.connection_ids) && taskRow.connection_ids.length) {
+    analysisCid = taskRow.connection_ids[0];
+  }
+  if (!analysisCid) {
+    const warnMsg = '任务未指定分析模型连接（analysis_connection_id），无法分析';
+    await pool.query(
+      `UPDATE geo_health_task SET status = 'failed', error_text = $2 WHERE id = $1`,
+      [taskId, warnMsg]
+    );
+    throw new Error(warnMsg);
+  }
+
+  let analysisClient;
+  try {
+    analysisClient = await createAiClientByConnectionId(pool, analysisCid, { userId: taskRow.user_id });
+  } catch (e) {
+    const warnMsg = `分析模型连接不可用：${e?.message || e}`;
+    await pool.query(
+      `UPDATE geo_health_task SET status = 'failed', error_text = $2 WHERE id = $1`,
+      [taskId, warnMsg]
+    );
+    throw new Error(warnMsg);
+  }
+
   // 读取企业名称 —— 必须有值，否则分析结果无意义，直接中断
   const brand = await fetchBrandName(pool);
   if (!brand) {
@@ -255,11 +299,13 @@ export async function runAllAnalysisForTask(pool, taskId) {
     throw new Error(warnMsg);
   }
 
-  // 查询该任务所有 answer
+  // 查询该任务所有 answer，并左联 geo_health_analysis 直接过滤掉「已成功分析」的，避免逐条再 SELECT 一次
   const { rows: answers } = await pool.query(
     `SELECT ga.id AS answer_id
      FROM geo_health_answer ga
-     WHERE ga.task_id = $1
+     LEFT JOIN geo_health_analysis gx
+       ON gx.answer_id = ga.id AND gx.error_text IS NULL
+     WHERE ga.task_id = $1 AND gx.id IS NULL
      ORDER BY ga.id ASC`,
     [taskId]
   );
@@ -271,31 +317,31 @@ export async function runAllAnalysisForTask(pool, taskId) {
 
   await pool.query(`UPDATE geo_health_task SET status = 'analyzing' WHERE id = $1`, [taskId]);
 
+  // 词典预加载：原先每条 answer 都重新查库，6 模型 × N 题量级时浪费严重
+  const sentimentLexicon = await loadSentimentLexiconForPrompt(pool, taskRow.user_id);
+
   const conc = GEO_HEALTH_ANALYSIS_CONCURRENCY;
   const delayMs = GEO_HEALTH_ANALYSIS_DELAY_MS;
-  let failedCount = 0;
   let skippedCount = 0;
 
-  for (let i = 0; i < answers.length; i += conc) {
-    const batch = answers.slice(i, i + conc);
-    const results = await Promise.all(
-      batch.map(async ({ answer_id: answerId }) => {
-        try {
-          const r = await analyzeOneAnswer(pool, { taskId, answerId, brand });
-          if (r.skipped) skippedCount += 1;
-          return 0;
-        } catch (e) {
-          console.error(
-            `[geo-analysis] fail task=${taskId} answer=${answerId}`,
-            e?.message || e
-          );
-          return 1;
-        }
-      })
-    );
-    failedCount += results.reduce((a, b) => a + b, 0);
-    if (i + conc < answers.length) await sleep(delayMs);
-  }
+  const failedCount = await runWithSlidingConcurrency(answers, conc, async ({ answer_id: answerId }) => {
+    try {
+      const r = await analyzeOneAnswer(pool, {
+        taskId,
+        answerId,
+        brand,
+        analysisClient,
+        sentimentLexicon,
+      });
+      if (r.skipped) skippedCount += 1;
+      return 0;
+    } catch (e) {
+      console.error(`[geo-analysis] fail task=${taskId} answer=${answerId}`, e?.message || e);
+      return 1;
+    } finally {
+      if (delayMs > 0) await sleep(delayMs);
+    }
+  });
 
   await pool.query(`UPDATE geo_health_task SET status = 'completed' WHERE id = $1`, [taskId]);
   console.log(

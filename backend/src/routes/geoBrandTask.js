@@ -15,8 +15,6 @@ import {
   GEO_HEALTH_PROBE_BATCH_DELAY_MS,
   GEO_HEALTH_PROBE_CONCURRENCY,
   GEO_HEALTH_QUESTIONS_PER_TYPE,
-  PROBE_MODELS,
-  ANALYSIS_MODEL,
 } from '../config/geoBrandTaskConfig.js';
 import {
   createGeoTaskAndQuestions,
@@ -50,16 +48,66 @@ router.get('/geo-brand/config', (req, res) => {
     questionsPerType: GEO_HEALTH_QUESTIONS_PER_TYPE,
     probeConcurrency: GEO_HEALTH_PROBE_CONCURRENCY,
     probeBatchDelayMs: GEO_HEALTH_PROBE_BATCH_DELAY_MS,
-    probeModels: PROBE_MODELS,
-    analysisModel: ANALYSIS_MODEL,
-    hint: '改 backend/src/config/geoBrandTaskConfig.js 或对应环境变量后重启服务',
+    hint: '探针/分析使用的模型由前端创建任务时传入 connectionIds 决定',
   });
 });
 
-/** 创建任务并从 questions 抽样；响应立即返回，探针在后台分批执行 */
+/**
+ * 当前用户「可用」的体检模型列表 = ai_provider_connection 中 enabled=true 的连接
+ * 前端弹窗里展示给用户勾选
+ */
+router.get('/geo-brand/available-models', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { rows } = await pool.query(
+      `SELECT id, vendor_name, provider_key, default_model, base_url_override,
+              key_last4, last_test_status, last_test_at, last_test_message
+       FROM ai_provider_connection
+       WHERE user_id = $1 AND enabled = true
+       ORDER BY id ASC`,
+      [userId]
+    );
+    res.json({
+      success: true,
+      list: rows.map((r) => ({
+        id: r.id,
+        vendorName: r.vendor_name,
+        providerKey: r.provider_key,
+        defaultModel: r.default_model,
+        baseUrlOverride: r.base_url_override,
+        keyLast4: r.key_last4,
+        lastTestStatus: r.last_test_status,
+        lastTestAt: r.last_test_at,
+        lastTestMessage: r.last_test_message,
+      })),
+    });
+  } catch (e) {
+    console.error('geo-brand GET /available-models:', e);
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+/**
+ * 创建任务并从 questions 抽样；响应立即返回，探针在后台分批执行
+ * body: { connectionIds: number[]（必填）, analysisConnectionId?: number }
+ */
 router.post('/geo-brand/tasks', async (req, res) => {
   try {
     const userId = getUserId(req);
+    const { connectionIds, analysisConnectionId } = req.body || {};
+
+    if (!Array.isArray(connectionIds) || connectionIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: '请至少选择一个用于体检的大模型连接（connectionIds 必填）',
+      });
+    }
+    if (connectionIds.length > 10) {
+      return res.status(400).json({
+        success: false,
+        error: '一次体检最多选择 10 个模型',
+      });
+    }
 
     // 互斥：同一用户如已有未结束任务，直接返回已有 taskId，不创建新任务
     // 未结束 = status NOT IN ('completed','failed')
@@ -82,7 +130,11 @@ router.post('/geo-brand/tasks', async (req, res) => {
       });
     }
 
-    const result = await createGeoTaskAndQuestions(pool, { userId });
+    const result = await createGeoTaskAndQuestions(pool, {
+      userId,
+      connectionIds,
+      analysisConnectionId,
+    });
     const taskId = result.taskId;
     // 后台：探针 → 分析，全自动串联
     setImmediate(async () => {
@@ -99,8 +151,6 @@ router.post('/geo-brand/tasks', async (req, res) => {
       success: true,
       ...result,
       backgroundProbe: true,
-      probeModels: PROBE_MODELS,
-      analysisModel: ANALYSIS_MODEL,
       message: '任务已创建，探针+分析在后台执行，请轮询 GET .../tasks/:id/progress',
     });
   } catch (e) {
@@ -256,17 +306,20 @@ router.get('/geo-brand/tasks/:id/results', async (req, res) => {
 });
 
 /**
- * 对某一题调用 DeepSeek（模型固定 deepseek-chat）
- * body: { questionId, systemPrompt?, userPrompt?, maxTokens?, temperature? }
+ * 对某一题手动重跑探针（按指定连接）
+ * body: { questionId, connectionId, systemPrompt?, userPrompt?, maxTokens?, temperature? }
  */
 router.post('/geo-brand/tasks/:taskId/probe', async (req, res) => {
   try {
     const userId = getUserId(req);
     const taskId = Number(req.params.taskId);
-    const { questionId, systemPrompt, userPrompt, maxTokens, temperature } = req.body || {};
+    const { questionId, connectionId, systemPrompt, userPrompt, maxTokens, temperature } = req.body || {};
 
     if (!questionId) {
       return res.status(400).json({ success: false, error: 'body.questionId 必填' });
+    }
+    if (!connectionId) {
+      return res.status(400).json({ success: false, error: 'body.connectionId 必填' });
     }
 
     const t = await pool.query(`SELECT id FROM geo_health_task WHERE id = $1 AND user_id = $2`, [taskId, userId]);
@@ -275,6 +328,7 @@ router.post('/geo-brand/tasks/:taskId/probe', async (req, res) => {
     const result = await probeWithDeepseekAndStore(pool, {
       taskId,
       questionId: Number(questionId),
+      connectionId: Number(connectionId),
       systemPrompt,
       userPrompt,
       maxTokens,

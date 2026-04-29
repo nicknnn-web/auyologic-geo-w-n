@@ -448,56 +448,64 @@ const handleStartCheck = async (force = false) => {
       throw new Error(result.error || '检测服务异常')
     }
 
-    // 后端返回 seo/ai/tech/content，映射为前端期望的 tech/structure/schema/aiFriendly
+    const emptyDim = () => ({ score: 0, checked: 0, total: 0, items: [] })
     const dimMap = {
-      tech: result.tech || { score: 0, checked: 0, total: 0, items: [] },
-      structure: result.seo || { score: 0, checked: 0, total: 0, items: [] },
-      schema: result.content || { score: 0, checked: 0, total: 0, items: [] },
-      aiFriendly: result.ai || { score: 0, checked: 0, total: 0, items: [] }
+      tech: result.tech || emptyDim(),
+      structure: result.structure || emptyDim(),
+      schema: result.schema || emptyDim(),
+      aiFriendly: result.aiFriendly || emptyDim(),
     }
 
-    // 计算总分
-    const techScore = (dimMap.tech.score || 0) + (dimMap.structure.score || 0) + (dimMap.schema.score || 0)
-    const aiScore = dimMap.aiFriendly.score || 0
-    let totalScore = Math.round(techScore * 0.3 + aiScore * 0.7)
+    let totalScore = Math.min(
+      100,
+      Number(result.overallScore) ||
+        Math.round(
+          dimMap.tech.score * 0.22 +
+            dimMap.structure.score * 0.28 +
+            dimMap.schema.score * 0.22 +
+            dimMap.aiFriendly.score * 0.28
+        )
+    )
 
-    // 知名网站加分
-    if (result.famousSiteBonus) {
-      totalScore = totalScore + result.famousSiteBonus.bonus + (result.famousSiteBonus.aiBonus || 0)
-    }
+    const rawDetails = Array.isArray(result.details) ? result.details : []
+    const detailsNormalized = rawDetails.map((d) => ({
+      dimension: d.dimension || '',
+      item: d.item ?? d.name ?? '',
+      result: d.result === 'pass' ? 'pass' : 'fail',
+      value: d.value ?? '',
+      suggestion: d.suggestion || (d.result === 'pass' ? '保持现状' : '建议优化'),
+    }))
 
-    // 转换数据格式以匹配现有UI
     report.value = {
-      url: inputUrl.value,
+      url: result.url || inputUrl.value,
       score: totalScore,
       items: dimMap,
-      issues: result.issues || { warn: [], pass: [] },
+      issues: result.issues &&
+        typeof result.issues === 'object' &&
+        Array.isArray(result.issues.warn) &&
+        Array.isArray(result.issues.pass)
+        ? result.issues
+        : { warn: [], pass: [] },
       checkedAt: result.checkedAt || new Date().toISOString(),
-      details: (result.details || []).map(d => ({
-        dimension: '',
-        item: d.name,
-        result: d.result,
-        value: d.value,
-        suggestion: d.result === 'pass' ? '保持现状' : '建议优化'
-      }))
+      famousSiteBonus: result.famousSiteBonus || null,
+      details:
+        detailsNormalized.length > 0
+          ? detailsNormalized
+          : [
+              ...(dimMap.tech.items || []).map((i) => ({ ...i, dimension: '技术基础', item: i.name })),
+              ...(dimMap.structure.items || []).map((i) => ({ ...i, dimension: '页面结构', item: i.name })),
+              ...(dimMap.schema.items || []).map((i) => ({ ...i, dimension: '结构化数据', item: i.name })),
+              ...(dimMap.aiFriendly.items || []).map((i) => ({ ...i, dimension: 'AI亲和性', item: i.name })),
+            ].map((row) => ({
+              dimension: row.dimension,
+              item: row.item || row.name,
+              result: row.result === 'pass' ? 'pass' : 'fail',
+              value: row.value ?? '',
+              suggestion: row.result === 'pass' ? '保持现状' : '建议优化',
+            })),
     }
-    // 更新维度标签
-    if (report.value.details.length === 0) {
-      report.value.details = [
-        ...(dimMap.tech.items || []).map(i => ({ ...i, dimension: '技术基础' })),
-        ...(dimMap.structure.items || []).map(i => ({ ...i, dimension: '页面结构' })),
-        ...(dimMap.schema.items || []).map(i => ({ ...i, dimension: '结构化数据' })),
-        ...(dimMap.aiFriendly.items || []).map(i => ({ ...i, dimension: 'AI亲和性' }))
-      ]
-    } else {
-      report.value.details = report.value.details.map(d => {
-        const item = (dimMap.tech.items || []).find(i => i.name === d.item)
-          || (dimMap.structure.items || []).find(i => i.name === d.item)
-          || (dimMap.schema.items || []).find(i => i.name === d.item)
-          || (dimMap.aiFriendly.items || []).find(i => i.name === d.item)
-        return { ...d, dimension: item ? getDimByItem(item.name) : '' }
-      })
-    }
+
+    updateProgress(0, 'complete')
   } catch (error) {
     console.error('检测失败:', error)
     ElMessage.error({ message: '检测失败: ' + error.message, offset: 80 })

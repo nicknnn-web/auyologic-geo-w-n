@@ -23,7 +23,8 @@
     "playwright": "^1.58.2",
     "vue": "^3.4.0",
     "vue-echarts": "^6.6.0",
-    "vue-router": "^4.2.0"
+    "vue-router": "^4.2.0",
+    "vuedraggable": "^4.1.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

@@ -11,10 +11,17 @@
         </div>
         <div class="no-data-text">
           <h3>暂无体检数据</h3>
-          <p>请先完成可见度检测，再生成品牌 AI 健康体检报告</p>
+          <p>请填写品牌信息后，再生成品牌 AI 健康体检报告</p>
         </div>
-        <el-button type="primary" @click="goToGEODetection">
-          前往可见度检测
+        <el-button
+            size="small"
+            type="primary"
+            :loading="generating || loading"
+            :disabled="generating || loading"
+            @click="generateHealthReport"
+        >
+          <el-icon><MagicStick /></el-icon>
+          {{ generating ? generatingText : '生成体检报告' }}
         </el-button>
       </div>
     </div>
@@ -71,7 +78,137 @@
 
     <!-- 主报告体 -->
     <div class="report-body">
+      <div class="section-model-visibility">
+        <el-skeleton :loading="loading" animated>
+          <template #template>
+            <div class="health-sk-block" aria-hidden="true">
+              <div class="section-title-row health-sk-title-row">
+                <el-skeleton-item variant="h3" style="width: 220px; height: 22px" />
+                <el-skeleton-item variant="text" style="width: 160px; height: 14px; margin-left: 10px" />
+              </div>
+              <div class="health-sk-mv-cards health-sk-mv-grid">
+                <div v-for="si in 3" :key="'sk-mv-' + si" class="health-sk-mv-card">
+                  <el-skeleton-item variant="circle" style="width: 40px; height: 40px; flex-shrink: 0" />
+                  <div class="health-sk-mv-mid">
+                    <el-skeleton-item variant="text" style="width: 45%; height: 14px" />
+                    <el-skeleton-item variant="text" style="width: 92%; height: 12px; margin-top: 10px" />
+                    <el-skeleton-item variant="text" style="width: 88%; height: 12px; margin-top: 8px" />
+                    <el-skeleton-item variant="text" style="width: 70%; height: 12px; margin-top: 8px" />
+                  </div>
+                  <el-skeleton-item variant="circle" style="width: 72px; height: 72px; flex-shrink: 0" />
+                </div>
+              </div>
+              <el-skeleton-item variant="rect" class="health-sk-mv-chart" />
+            </div>
+          </template>
+          <template #default>
+            <div v-if="aiHealthDisplayCards.length" class="mv-rest-chart-block" role="region" aria-label="各模型 AI 健康分与可见度">
+              <div class="mv-rest-chart-head">
+                <div class="section-title-row">
+                  <h2 class="section-title">AI健康分</h2>
+                  <span class="section-tag">AI HEALTH SCORE</span>
+                </div>
+              </div>
+              <p class="ai-health-block-hint">以下按<strong>大模型</strong>分别计算；环内为 AI 健康分。卡片内展示基于可见度与核心指标映射的 <strong>AI 语境状态</strong>（状态名与说明）。</p>
+              <div class="mv-grid-outer">
+                <draggable
+                    v-model="aiHealthDisplayCards"
+                    class="mv-grid-track"
+                    item-key="platformKey"
+                    handle=".mv-card__drag-handle"
+                    tag="div"
+                    :animation="200"
+                    ghost-class="mv-card--sort-ghost"
+                    @end="persistAiHealthCardOrder"
+                >
+                  <template #item="{ element: m, index }">
+                    <div v-show="mvGridExpanded || index < 3" class="mv-card">
+                  <div class="mv-card-inner">
 
+                    <div class="mv-card-left">
+                      <div class="mv-plat-head">
+                        <div
+                          class="mv-plat-icon"
+                          :style="{ background: (m.iconBgColor || m.brandColor) }"
+                        >
+                          <img
+                            v-if="m.iconUrl"
+                            :src="reportAssetUrl(m.iconUrl)"
+                            alt=""
+                            class="mv-plat-icon-img"
+                          />
+                          <template v-else>{{ m.icon }}</template>
+                        </div>
+                        <div class="mv-plat-titles">
+                          <div class="mv-plat-name">{{ m.name }}</div>
+                          <span v-if="m.simulated" class="mv-plat-badge">AI 推断</span>
+                        </div>
+                      </div>
+                      <template v-for="st in [aiContextForModel(m)]" :key="m.platformKey + '-ctx'">
+                        <div v-if="st.code > 0" class="mv-ai-context" role="note" :aria-label="`AI语境：${st.name}`">
+                          <div class="mv-ai-context-name">{{ st.name }}</div>
+                          <p class="mv-ai-context-desc">{{ st.desc }}</p>
+                        </div>
+                      </template>
+                    </div>
+                    <div class="mv-card-right">
+                      <div class="mv-score-widget">
+                        <div class="mv-donut-wrap">
+                          <svg viewBox="0 0 120 120" class="mv-donut-svg">
+                            <circle cx="60" cy="60" r="44" class="mv-donut-bg" fill="none" stroke-width="10" />
+                            <circle
+                                cx="60" cy="60"
+                                r="44"
+                                class="mv-donut-fill"
+                                :class="modelDonutStrokeClass(m.healthScore ?? m.score)"
+                                fill="none"
+                                stroke-width="10"
+                                stroke-linecap="round"
+                                :stroke-dasharray="modelDonutDash(m.healthScore ?? m.score)"
+                                transform="rotate(-90 60 60)"
+                            />
+                          </svg>
+                          <div class="mv-donut-center">
+                            <span class="mv-donut-score">{{ m.healthScore ?? m.score }}</span>
+                            <span class="mv-donut-total">/ 100</span>
+                          </div>
+                        </div>
+                        <div class="mv-score-side">
+                          <div class="mv-status-pill" :class="'mv-pill--' + m.status">
+                            <span v-if="m.status === 'good'" class="mv-pill-dot" />
+                            {{ m.statusText }}
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                  </template>
+                </draggable>
+                <div
+                  v-if="aiHealthDisplayCards.length > 3"
+                  class="mv-grid-expand"
+                >
+                  <button
+                    type="button"
+                    class="mv-grid-expand__btn"
+                    :aria-expanded="mvGridExpanded"
+                    @click="mvGridExpanded = !mvGridExpanded"
+                  >
+                    <span v-if="!mvGridExpanded">展开更多（还有 {{ aiHealthDisplayCards.length - 3 }} 个模型）</span>
+                    <span v-else>收起</span>
+                    <el-icon class="mv-grid-expand__icon" aria-hidden="true">
+                      <ArrowDown v-if="!mvGridExpanded" />
+                      <ArrowUp v-else />
+                    </el-icon>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+        </el-skeleton>
+      </div>
       <!-- ===== 区块1：大模型可见度综合得分（全部模型柱状图）===== -->
       <div class="section-model-visibility">
         <el-skeleton :loading="loading" animated>
@@ -97,82 +234,11 @@
             </div>
           </template>
           <template #default>
-        <div v-if="modelVisibilitySorted.length" class="mv-rest-chart-block" role="region" aria-label="各模型可见度得分">
+        <div v-if="modelVisibilityForChart.length" class="mv-rest-chart-block" role="region" aria-label="各模型可见度得分">
           <div class="mv-rest-chart-head">
             <div class="section-title-row">
               <h2 class="section-title">大模型可见度综合得分</h2>
               <span class="section-tag">AI VISIBILITY SCORE</span>
-            </div>
-          </div>
-          <div
-              ref="mvScrollRef"
-              class="mv-scroll"
-              role="region"
-              aria-label="各模型可见度得分"
-              @pointerdown="onMvScrollPointerDown"
-              @pointermove="onMvScrollPointerMove"
-              @pointerup="onMvScrollPointerUp"
-              @pointercancel="onMvScrollPointerUp"
-              @lostpointercapture="onMvScrollLostPointerCapture"
-          >
-            <div
-                v-for="m in modelVisibilityCards.slice(0, 3)"
-                :key="m.platformKey"
-                class="mv-card"
-            >
-              <div class="mv-card-inner">
-                <div class="mv-card-left">
-                  <div class="mv-plat-head">
-                    <div class="mv-plat-icon" :style="{ background: m.brandColor }">{{ m.icon }}</div>
-                    <div class="mv-plat-titles">
-                      <div class="mv-plat-name">{{ m.name }}</div>
-                      <span v-if="m.simulated" class="mv-plat-badge">AI 推断</span>
-                    </div>
-                  </div>
-                  <ul class="mv-bullets">
-                    <li
-                        v-for="(b, bi) in m.bullets"
-                        :key="'b'+m.platformKey+bi"
-                        class="mv-bullet"
-                        :class="'mv-bullet--' + (b.tone || 'neutral')"
-                    >
-                      <span class="mv-bullet-dot" aria-hidden="true" />
-                      <span class="mv-bullet-text">{{ b.text }}</span>
-                    </li>
-                  </ul>
-                </div>
-                <div class="mv-card-right">
-                  <div class="mv-score-widget">
-                    <div class="mv-donut-wrap">
-                      <svg viewBox="0 0 120 120" class="mv-donut-svg">
-                        <circle cx="60" cy="60" r="44" class="mv-donut-bg" fill="none" stroke-width="10" />
-                        <circle
-                            cx="60" cy="60"
-                            r="44"
-                            class="mv-donut-fill"
-                            :class="modelDonutStrokeClass(m.score)"
-                            fill="none"
-                            stroke-width="10"
-                            stroke-linecap="round"
-                            :stroke-dasharray="modelDonutDash(m.score)"
-                            transform="rotate(-90 60 60)"
-                        />
-                      </svg>
-                      <div class="mv-donut-center">
-                        <span class="mv-donut-score">{{ m.score }}</span>
-                        <span class="mv-donut-total">/ 100</span>
-                      </div>
-                    </div>
-                    <div class="mv-score-side">
-                      <div class="mv-status-pill" :class="'mv-pill--' + m.status">
-                        <span v-if="m.status === 'good'" class="mv-pill-dot" />
-                        {{ m.statusText }}
-                      </div>
-                      <div class="mv-score-caption">可见度得分</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
           <div ref="mvRestChartDom" class="mv-rest-chart-echarts" />
@@ -347,7 +413,18 @@
                   <th class="th-path">提问意图路径</th>
                   <th v-for="plat in platforms" :key="plat.key" class="th-platform">
                     <div class="plat-header">
-                      <span class="plat-icon" :style="{ backgroundColor: plat.color }">{{ plat.icon }}</span>
+                      <span
+                        class="plat-icon"
+                        :style="{ backgroundColor: plat.iconBgColor || plat.color }"
+                      >
+                        <img
+                          v-if="plat.iconUrl"
+                          :src="reportAssetUrl(plat.iconUrl)"
+                          alt=""
+                          class="plat-icon-img"
+                        />
+                        <template v-else>{{ plat.icon }}</template>
+                      </span>
                       <span class="plat-name">{{ plat.name }}</span>
                     </div>
                   </th>
@@ -798,6 +875,150 @@
 
     </div>
   </div>
+
+  <!-- 选择体检模型弹窗：API Key 来源完全是数据库 ai_provider_connection -->
+  <el-dialog
+    v-model="modelPickerVisible"
+    class="model-picker-dialog"
+    width="600px"
+    :close-on-click-modal="false"
+    destroy-on-close
+    align-center
+  >
+    <template #header>
+      <div class="mp-header">
+        <div class="mp-header__icon" aria-hidden="true">
+          <el-icon :size="22"><MagicStick /></el-icon>
+        </div>
+        <div class="mp-header__text">
+          <span class="mp-header__title">选择体检模型</span>
+          <p class="mp-header__sub">同一题目会对每个已选模型各探针一次，用于多模型对比，选择多模型探针时间会相对增长 请耐心等候...</p>
+        </div>
+      </div>
+    </template>
+
+    <div class="mp-body">
+      <p v-if="!modelPickerLoading && modelPickerList.length" class="mp-tip">
+        请勾选参与本次探针的模型。未在列表中请先到「大模型接入」配置并启用。
+      </p>
+
+    <div v-if="modelPickerLoading" class="mp-loading">
+      <el-icon class="is-loading mp-loading__icon"><Loading /></el-icon>
+      <span>正在加载可用连接…</span>
+    </div>
+
+    <div v-else-if="!modelPickerList.length" class="mp-empty">
+      <div class="mp-empty__icon">
+        <el-icon :size="36"><Warning /></el-icon>
+      </div>
+      <p class="mp-empty__title">尚未配置已启用的大模型</p>
+      <p class="mp-empty__desc">请先在「大模型接入」添加并启用至少一个连接</p>
+      <el-button type="primary" round @click="goToAiConnections">前往「大模型接入」</el-button>
+    </div>
+
+    <div v-else class="mp-content">
+      <div class="mp-block">
+        <div class="mp-block__head">
+          <span class="mp-block__label">探针模型</span>
+          <el-checkbox
+            :model-value="isAllPicked"
+            :indeterminate="isIndeterminate"
+            size="small"
+            @change="toggleSelectAll"
+          >
+            全选 · 共 {{ modelPickerList.length }} 个
+          </el-checkbox>
+        </div>
+        <div
+          class="mp-probe-scroll"
+          role="region"
+          aria-label="探针模型列表"
+        >
+          <el-checkbox-group v-model="pickedConnectionIds" class="mp-check-group">
+          <div
+            v-for="m in modelPickerList"
+            :key="m.id"
+            class="mp-probe-item"
+          >
+            <el-checkbox
+              :value="m.id"
+              :label="m.id"
+              class="mp-probe-cb"
+            >
+              <div class="mp-card__inner">
+                <div class="mp-card__row1">
+                  <span class="mp-card__name">{{ m.vendorName }}</span>
+                  <el-tag size="small" type="info" effect="plain" class="mp-card__pk">
+                    {{ m.providerKey }}
+                  </el-tag>
+                </div>
+                <div class="mp-card__row2">
+                  <span
+                    v-if="m.defaultModel"
+                    class="mp-card__model"
+                    :title="m.defaultModel"
+                  >模型：{{ m.defaultModel }}</span>
+                  <el-tag
+                    v-if="m.lastTestStatus === 'ok'"
+                    size="small"
+                    type="success"
+                    effect="light"
+                    class="mp-card__st"
+                  >测连成功</el-tag>
+                  <el-tag
+                    v-else-if="m.lastTestStatus === 'fail'"
+                    size="small"
+                    type="danger"
+                    effect="light"
+                    class="mp-card__st"
+                  >测连失败</el-tag>
+                  <el-tag
+                    v-else
+                    size="small"
+                    class="mp-card__st"
+                    effect="plain"
+                  >未测连</el-tag>
+                </div>
+              </div>
+            </el-checkbox>
+          </div>
+        </el-checkbox-group>
+        </div>
+      </div>
+
+      <div class="mp-block mp-block--analysis">
+        <span class="mp-block__label">分析模型</span>
+        <p class="mp-block__hint">对全部探针回答做二次结构化分析，建议选稳定、解析 JSON 能力好的模型</p>
+        <el-select
+          v-model="pickedAnalysisId"
+          placeholder="不选则默认使用已选中的第一个"
+          class="mp-select"
+          clearable
+        >
+          <el-option
+            v-for="m in modelPickerList"
+            :key="m.id"
+            :label="`${m.vendorName}（${m.providerKey}）`"
+            :value="m.id"
+          />
+        </el-select>
+      </div>
+    </div>
+    </div>
+
+    <template #footer>
+      <div class="mp-footer">
+        <el-button @click="modelPickerVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!pickedConnectionIds.length"
+          @click="confirmModelPicker"
+        >
+          开始体检（已选 {{ pickedConnectionIds.length }} 个模型）
+        </el-button>
+      </div>
+    </template>
+  </el-dialog>
 </div>
 </template>
 
@@ -806,13 +1027,86 @@ import { ref, computed, onMounted, onUnmounted, onActivated, watch, nextTick } f
 import * as echarts from 'echarts'
 import 'echarts-wordcloud'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  RefreshRight, Top, WarnTriangleFilled, ArrowLeft,
+  RefreshRight, Top, WarnTriangleFilled, ArrowLeft, ArrowDown, ArrowUp,
   Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram,
-  MagicStick
+  MagicStick, Loading, Rank
 } from '@element-plus/icons-vue'
+import draggable from 'vuedraggable'
+
+// ===== 体检模型选择弹窗状态 =====
+const modelPickerVisible = ref(false)
+const modelPickerLoading = ref(false)
+const modelPickerList = ref([])
+const pickedConnectionIds = ref([])
+const pickedAnalysisId = ref(null)
+
+const isAllPicked = computed(() =>
+  modelPickerList.value.length > 0 &&
+  pickedConnectionIds.value.length === modelPickerList.value.length
+)
+const isIndeterminate = computed(() =>
+  pickedConnectionIds.value.length > 0 &&
+  pickedConnectionIds.value.length < modelPickerList.value.length
+)
+
+const toggleSelectAll = (val) => {
+  if (val) {
+    pickedConnectionIds.value = modelPickerList.value.map((m) => m.id)
+  } else {
+    pickedConnectionIds.value = []
+  }
+}
+
+const goToAiConnections = () => {
+  modelPickerVisible.value = false
+  router.push('/ai-provider-connections')
+}
+
+const fetchAvailableModels = async () => {
+  modelPickerLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-brand/available-models`, {
+      headers: { 'x-user-id': 'default_user' },
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!data.success) throw new Error(data.error || '加载失败')
+    modelPickerList.value = Array.isArray(data.list) ? data.list : []
+    // 默认勾选「测连成功」的连接，避免误选未测的
+    const okIds = modelPickerList.value
+      .filter((m) => m.lastTestStatus === 'ok')
+      .map((m) => m.id)
+    pickedConnectionIds.value = okIds.length
+      ? okIds
+      : modelPickerList.value.map((m) => m.id)
+    pickedAnalysisId.value = null
+  } catch (e) {
+    ElMessage.error(e.message || '加载可用模型失败')
+    modelPickerList.value = []
+  } finally {
+    modelPickerLoading.value = false
+  }
+}
+
+const openModelPickerDialog = async () => {
+  modelPickerVisible.value = true
+  await fetchAvailableModels()
+}
+
+const confirmModelPicker = async () => {
+  if (!pickedConnectionIds.value.length) {
+    ElMessage.warning('请至少选择一个模型')
+    return
+  }
+  modelPickerVisible.value = false
+  await submitHealthReportTask({
+    connectionIds: pickedConnectionIds.value.slice(),
+    analysisConnectionId: pickedAnalysisId.value || undefined,
+  })
+}
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
+import { getBrandStatusForModelCard } from '../utils/brandHealth.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -821,6 +1115,16 @@ const hasData = ref(false)
 
 // ===== API 配置 =====
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
+
+/** 报告内 /uploads/... 等与后端 origin 拼接 */
+function reportAssetUrl(u) {
+  if (!u) return ''
+  const s = String(u)
+  if (/^https?:\/\//i.test(s)) return s
+  const base = API_BASE_URL.replace(/\/$/, '')
+  const path = s.startsWith('/') ? s : `/${s}`
+  return `${base}${path}`
+}
 
 /**
  * 企业信息（数据库 users 表，GET /api/settings）
@@ -871,15 +1175,74 @@ const applyEnterpriseContextToReport = () => {
 const brandName = ref('请先进行可见度检测')
 const brandDomain = ref('')
 const checkTime = ref(nowZhCnDateTime())
-const healthScore = ref(0)
 
 const modelVisibilityCards = ref([])
 
-/** 按得分降序；柱状图展示全部模型 */
+const LS_MV_ORDER_KEY = 'geo_health_report_mv_order_v1'
+
+/** 与 localStorage 中记录顺序合并，新模型排在末尾 */
+function applySavedOrderToCards(cards) {
+  if (!Array.isArray(cards) || !cards.length) return []
+  const byKey = new Map(cards.map((c) => [c.platformKey, c]))
+  let order = []
+  try {
+    const raw = localStorage.getItem(LS_MV_ORDER_KEY)
+    if (raw) order = JSON.parse(raw)
+  } catch {
+    order = []
+  }
+  if (!Array.isArray(order)) order = []
+  order = order.filter((k) => byKey.has(k))
+  for (const c of cards) {
+    if (!order.includes(c.platformKey)) order.push(c.platformKey)
+  }
+  return order.map((k) => byKey.get(k)).filter(Boolean)
+}
+
+/** 用于 AI 健康分模块，支持拖拽重排，顺序与柱状图 modelVisibilityForChart 一致 */
+const aiHealthDisplayCards = ref([])
+/** 超过 3 张时默认折叠，点「展开更多」显示其余卡片 */
+const mvGridExpanded = ref(false)
+
+watch(
+  modelVisibilityCards,
+  (cards) => {
+    aiHealthDisplayCards.value = applySavedOrderToCards(cards)
+  },
+  { deep: true, immediate: true }
+)
+
+watch(
+  () => {
+    const keys = modelVisibilityCards.value.map((c) => c.platformKey).filter(Boolean)
+    return JSON.stringify([...new Set(keys)].sort())
+  },
+  () => {
+    mvGridExpanded.value = false
+  }
+)
+
+const persistAiHealthCardOrder = () => {
+  try {
+    localStorage.setItem(
+      LS_MV_ORDER_KEY,
+      JSON.stringify(aiHealthDisplayCards.value.map((c) => c.platformKey))
+    )
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 按得分降序；无自定义顺序时用于回退 */
 const modelVisibilitySorted = computed(() =>
   [...modelVisibilityCards.value].sort(
     (a, b) => (Number(b.score) || 0) - (Number(a.score) || 0)
   )
+)
+
+/** 柱状图与重排后卡片顺序一致 */
+const modelVisibilityForChart = computed(() =>
+  aiHealthDisplayCards.value.length ? aiHealthDisplayCards.value : modelVisibilitySorted.value
 )
 
 const mvRestChartDom = ref(null)
@@ -951,6 +1314,8 @@ const buildMvRestBarOption = (rows) => {
         const bullets = Array.isArray(row.bullets) ? row.bullets : []
         let html = `<div style="font-weight:600;margin-bottom:6px;color:#303133">${row.name || ''}</div>`
         html += `<div style="color:#606266;margin-bottom:8px">可见度得分：<b>${row.score}</b> / 100</div>`
+        const hs = row.healthScore != null ? row.healthScore : '—'
+        html += `<div style="color:#606266;margin-bottom:8px">AI 健康分：<b>${hs}</b> / 100</div>`
         if (bullets.length) {
           html +=
             '<div style="border-top:1px solid #ebeef5;padding-top:8px;line-height:1.55;text-align:left">'
@@ -1027,7 +1392,7 @@ const buildMvRestBarOption = (rows) => {
 }
 
 const syncMvRestBarChart = () => {
-  const rows = modelVisibilitySorted.value
+  const rows = modelVisibilityForChart.value
   const el = mvRestChartDom.value
   if (!rows.length) {
     disposeMvRestChart()
@@ -1054,7 +1419,7 @@ const syncMvRestBarChart = () => {
   }
 }
 
-watch(modelVisibilitySorted, syncMvRestBarChart, { deep: true, flush: 'post' })
+watch(modelVisibilityForChart, syncMvRestBarChart, { deep: true, flush: 'post' })
 
 // ===== KPI 卡片（动态计算）=====
 const interceptRate = ref(0)
@@ -1073,6 +1438,14 @@ const kpiDenominator = ref('open_only')
 const brandMentionRate = ref(0)
 const industryMentionRate = ref(0)
 const openMentionTotal = ref(0)
+
+/** 本卡 AI 语境状态文案（getBrandStatus；exposure/penalty 与工具类中 exposurePenaltyFromKpi 一致） */
+const aiContextForModel = (m) =>
+  getBrandStatusForModelCard({
+    visibilityScore: m?.score,
+    interceptRate: interceptRate.value,
+    negativeRatio: negativeRatio.value,
+  })
 
 // 负面关联度风险等级 → 颜色
 const NEGATIVE_RISK_COLOR = {
@@ -1819,59 +2192,6 @@ const disposeSentimentWordCloudChart = () => {
     sentimentWordCloudChart = null
   }
 }
-const mvDrag = {
-  active: false,
-  pointerId: null,
-  startX: 0,
-  startScrollLeft: 0,
-}
-
-const finishMvScrollDrag = (e) => {
-  if (!mvDrag.active) return
-  if (e?.pointerId != null && e.pointerId !== mvDrag.pointerId) return
-  const el = mvScrollRef.value
-  const pid = mvDrag.pointerId
-  mvDrag.active = false
-  mvDrag.pointerId = null
-  if (el) {
-    el.classList.remove('mv-scroll--grabbing')
-    if (pid != null) {
-      try {
-        el.releasePointerCapture(pid)
-      } catch (_) {
-        /* ignore */
-      }
-    }
-  }
-}
-
-const onMvScrollPointerDown = (e) => {
-  if (e.pointerType !== 'mouse' || e.button !== 0) return
-  const el = mvScrollRef.value
-  if (!el) return
-  mvDrag.active = true
-  mvDrag.pointerId = e.pointerId
-  mvDrag.startX = e.clientX
-  mvDrag.startScrollLeft = el.scrollLeft
-  el.classList.add('mv-scroll--grabbing')
-  try {
-    el.setPointerCapture(e.pointerId)
-  } catch (_) {
-    /* ignore */
-  }
-}
-
-const onMvScrollPointerMove = (e) => {
-  if (!mvDrag.active || e.pointerId !== mvDrag.pointerId) return
-  const el = mvScrollRef.value
-  if (!el) return
-  const dx = e.clientX - mvDrag.startX
-  el.scrollLeft = mvDrag.startScrollLeft - dx
-}
-
-const onMvScrollPointerUp = (e) => finishMvScrollDrag(e)
-
-const onMvScrollLostPointerCapture = (e) => finishMvScrollDrag(e)
 /** 环形进度周长（r=44） */
 const MV_DONUT_LEN = 2 * Math.PI * 44
 const modelDonutDash = (score) => {
@@ -2122,7 +2442,6 @@ const loadHealthReport = async () => {
     brandName.value = data.brandName || '品牌'
     brandDomain.value = data.brandDomain || ''
     checkTime.value = data.checkTime ? formatZhCnDateTime(data.checkTime) : nowZhCnDateTime()
-    healthScore.value = data.healthScore || 0
 
     if (Array.isArray(data.modelVisibilityCards) && data.modelVisibilityCards.length) {
       modelVisibilityCards.value = data.modelVisibilityCards
@@ -2132,6 +2451,8 @@ const loadHealthReport = async () => {
         name: p.name,
         icon: p.icon,
         brandColor: p.color,
+        iconUrl: p.iconUrl ?? null,
+        iconBgColor: p.iconBgColor ?? null,
         simulated: !!p.simulated,
         score: 0,
         status: 'high',
@@ -2301,18 +2622,51 @@ const pollTaskProgress = async (taskId) => {
  * 2) pollTaskProgress 轮询，直到 completed / failed
  * 3) 完成后 loadHealthReport() 重新加载
  */
+/**
+ * 弹出"选择体检模型"对话框；用户选完后再创建任务
+ */
 const generateHealthReport = async () => {
   if (generating.value) {
     ElMessage.info('已有任务正在执行，请等待当前任务完成')
     return
   }
+
+  await loadEnterpriseSettings()
+  const companyName = String(enterpriseSettings.value.companyName || '').trim()
+  if (!companyName) {
+    try {
+      await ElMessageBox.confirm(
+        '生成品牌体检报告前，请先在「企业设置」中填写企业名称（品牌名称）等信息。',
+        '缺少企业信息',
+        {
+          confirmButtonText: '前往企业设置',
+          cancelButtonText: '取消',
+          type: 'warning',
+          distinguishCancelAndClose: true,
+        }
+      )
+      router.push('/enterprise-settings')
+    } catch {
+      /* 取消 */
+    }
+    return
+  }
+
+  // 拉取数据库中可用的大模型连接，让用户勾选参与体检
+  await openModelPickerDialog()
+}
+
+/**
+ * 真正的提交动作：用户在弹窗中选完模型后调用
+ */
+const submitHealthReportTask = async ({ connectionIds, analysisConnectionId }) => {
   generating.value = true
   generatingText.value = '抽取问题中...'
   try {
     const createRes = await fetch(`${API_BASE_URL}/api/geo-brand/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ connectionIds, analysisConnectionId }),
     })
     const createData = await createRes.json().catch(() => ({}))
 
@@ -2428,6 +2782,317 @@ onUnmounted(() => {
   min-height: 100vh;
   background: #f5f6fa;
   font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+}
+
+/* ===== 体检模型选择弹窗 ===== */
+.model-picker-dialog :deep(.el-dialog__header) {
+  margin-right: 0;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #eef0f4;
+}
+.model-picker-dialog :deep(.el-dialog__body) {
+  padding: 0 22px 10px;
+}
+.model-picker-dialog :deep(.el-dialog__footer) {
+  padding: 12px 20px 20px;
+  border-top: 1px solid #f0f2f5;
+}
+
+.mp-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  text-align: left;
+  padding-right: 32px;
+}
+.mp-header__icon {
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #ecf5ff 0%, #e8f0fe 100%);
+  color: #409eff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.mp-header__text {
+  min-width: 0;
+  padding-top: 2px;
+}
+.mp-header__title {
+  display: block;
+  font-size: 17px;
+  font-weight: 700;
+  color: #303133;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+.mp-header__sub {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #909399;
+  font-weight: 400;
+}
+
+.mp-body {
+  overflow: visible;
+  max-height: none;
+  padding-right: 0;
+}
+.mp-tip {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #606266;
+  background: #f8fafc;
+  border: 1px solid #ebeef5;
+  border-radius: 10px;
+}
+
+.mp-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 160px;
+  color: #909399;
+  font-size: 13px;
+}
+.mp-loading__icon {
+  font-size: 28px;
+  color: #c0c4cc;
+}
+
+.mp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 28px 16px 8px;
+}
+.mp-empty__icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: #fdf6ec;
+  color: #e6a23c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.mp-empty__title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+.mp-empty__desc {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: #909399;
+  line-height: 1.5;
+  max-width: 280px;
+}
+
+/* 仅探针模型列表区域滚动，弹窗整体不随内容出现纵向滚动条 */
+.mp-probe-scroll {
+  max-height: min(40vh, 300px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-top: 4px;
+  padding: 2px 4px 6px 0;
+  box-sizing: border-box;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(144, 147, 153, 0.5) transparent;
+}
+.mp-probe-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.mp-probe-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+.mp-probe-scroll::-webkit-scrollbar-thumb {
+  background: rgba(144, 147, 153, 0.45);
+  border-radius: 3px;
+}
+.mp-probe-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(144, 147, 153, 0.7);
+}
+
+.mp-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 4px;
+}
+
+.mp-block {
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+  background: #fff;
+  padding: 16px 16px 14px;
+  min-width: 0;
+}
+.mp-block--analysis {
+  background: linear-gradient(180deg, #fafcff 0%, #fff 40%);
+  border-color: #e4e7ed;
+}
+.mp-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-bottom: 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid #f2f3f5;
+}
+.mp-block__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+}
+.mp-block--analysis .mp-block__label {
+  display: block;
+  margin-bottom: 4px;
+}
+.mp-block__hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #909399;
+}
+
+/* 外层 .mp-probe-item 做卡片盒，el-checkbox 仅负责勾选项，避免与 EP 的 inline-flex 根样式打架 */
+.model-picker-dialog :deep(.mp-check-group) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.mp-probe-item {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  box-sizing: border-box;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  background: #f9fafb;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.mp-probe-item:last-child {
+  margin-bottom: 0;
+}
+.mp-probe-item:hover {
+  border-color: #c6e2ff;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(64, 158, 255, 0.1);
+}
+
+.model-picker-dialog :deep(.mp-probe-cb) {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  justify-content: flex-start;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  white-space: normal;
+  vertical-align: top;
+  box-sizing: border-box;
+}
+
+.model-picker-dialog :deep(.mp-probe-cb .el-checkbox__input) {
+  flex-shrink: 0;
+  margin-top: 1px;
+  line-height: 1;
+  align-self: flex-start;
+}
+
+.model-picker-dialog :deep(.mp-probe-cb .el-checkbox__label) {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+  padding-left: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  display: block;
+}
+
+.mp-card__inner {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mp-card__row1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  row-gap: 6px;
+}
+.mp-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+.mp-card__pk {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.mp-card__row2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  row-gap: 6px;
+}
+.mp-card__model {
+  font-size: 12px;
+  color: #909399;
+  flex: 1 1 12rem;
+  min-width: 0;
+  line-height: 1.4;
+  word-break: break-word;
+}
+.mp-card__st {
+  flex-shrink: 0;
+}
+
+.mp-select {
+  width: 100%;
+}
+.model-picker-dialog :deep(.mp-select .el-input__wrapper) {
+  border-radius: 8px;
+}
+
+.mp-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 /* ===== 无数据提示 ===== */
@@ -2623,53 +3288,117 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.mv-scroll {
+/* AI 健康分：三列网格 + 超出折叠 */
+.mv-grid-outer {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 6px;
+  min-width: 0;
+}
+
+.mv-grid-track {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  overflow-x: auto;
-  padding: 4px 2px 10px;
-  scroll-snap-type: x mandatory;
-  scroll-behavior: auto;
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.2) transparent;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+}
+
+@media (max-width: 1100px) {
+  .mv-grid-track {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .mv-grid-track {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mv-grid-expand {
+  display: flex;
+  justify-content: center;
+  padding: 2px 0 6px;
+}
+
+.mv-grid-expand__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #5b6b8a;
+  background: rgba(64, 158, 255, 0.08);
+  border: 1px solid rgba(64, 158, 255, 0.2);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, border-color 0.2s;
+}
+.mv-grid-expand__btn:hover {
+  color: #409eff;
+  background: rgba(64, 158, 255, 0.14);
+  border-color: rgba(64, 158, 255, 0.35);
+}
+.mv-grid-expand__icon {
+  font-size: 14px;
+}
+
+/* vuedraggable 根：网格子项为 mv-card */
+.mv-card--sort-ghost {
+  opacity: 0.55;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.mv-card__drag-handle {
+  position: absolute;
+  top: 10px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: grab;
+  transition: color 0.2s, background 0.2s;
 }
-
-/* 拖拽时关闭 snap 与卡片 hit-test：与拖动滚动条一致的一比一跟手，松手后再由浏览器对齐 snap */
-.mv-scroll.mv-scroll--grabbing {
-  scroll-snap-type: none;
-  scroll-behavior: auto;
+.mv-card__drag-handle:hover {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(64, 158, 255, 0.2);
+}
+.mv-card__drag-handle:active {
   cursor: grabbing;
-  user-select: none;
 }
 
-.mv-scroll.mv-scroll--grabbing .mv-card {
-  pointer-events: none;
-}
-
-.mv-scroll::-webkit-scrollbar {
-  height: 6px;
-}
-
-.mv-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 4px;
+.ai-health-hint-icon {
+  display: inline-flex;
+  vertical-align: text-bottom;
+  margin: 0 2px;
+  color: #409eff;
 }
 
 .mv-card {
-  flex: 0 0 min(340px, 88vw);
-  scroll-snap-align: start;
-  min-width: 280px;
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .mv-card-inner {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 16px;
   height: 100%;
-  padding: 18px 18px 20px;
+  padding: 18px 18px 20px 40px;
   border-radius: 16px;
   background: linear-gradient(165deg, rgba(40, 46, 68, 0.95) 0%, rgba(28, 32, 48, 0.98) 100%);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -2700,6 +3429,13 @@ onUnmounted(() => {
   color: #fff;
   flex-shrink: 0;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.mv-plat-icon-img {
+  width: 70%;
+  height: 70%;
+  object-fit: contain;
+  display: block;
 }
 
 .mv-plat-titles {
@@ -2765,6 +3501,29 @@ onUnmounted(() => {
 
 .mv-bullet--neutral .mv-bullet-dot {
   background: rgba(255, 255, 255, 0.35);
+}
+
+/* AI 语境状态（getBrandStatus 标题 + 说明） */
+.mv-ai-context {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.mv-ai-context-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #a5b4fc;
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+.mv-ai-context-desc {
+  font-size: 12px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.58);
+  margin: 0;
 }
 
 .mv-card-right {
@@ -2894,6 +3653,24 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.ai-health-block-hint {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.55;
+  margin: 0 0 14px 0;
+}
+.ai-health-block-hint strong {
+  color: #606266;
+  font-weight: 600;
+}
+
+.mv-score-visible {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-top: 4px;
+  line-height: 1.3;
 }
 
 .mv-rest-chart-icon {
@@ -3303,6 +4080,13 @@ onUnmounted(() => {
   font-size: 14px;
   font-weight: 700;
   color: white;
+}
+
+.plat-icon-img {
+  width: 70%;
+  height: 70%;
+  object-fit: contain;
+  display: block;
 }
 
 .plat-name {
@@ -4136,6 +4920,21 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 14px;
 }
+.health-sk-mv-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+@media (max-width: 1100px) {
+  .health-sk-mv-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .health-sk-mv-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .health-sk-mv-card {
   display: flex;
   align-items: flex-start;
@@ -4308,6 +5107,36 @@ onUnmounted(() => {
   max-width: 320px;
   line-height: 1.55;
   font-size: 12px;
+  box-sizing: border-box;
+}
+
+/* 体检模型弹窗 teleport 到 body：checkbox 与 label 布局强制兜底，避免内容贴边/挤在一起 */
+.model-picker-dialog .mp-probe-cb.el-checkbox {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  white-space: normal;
+  box-sizing: border-box;
+}
+.model-picker-dialog .mp-probe-cb .el-checkbox__input {
+  flex-shrink: 0;
+  margin-top: 2px;
+  align-self: flex-start;
+}
+.model-picker-dialog .mp-probe-cb .el-checkbox__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding-left: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-word;
+  display: block;
   box-sizing: border-box;
 }
 </style>

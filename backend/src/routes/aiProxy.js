@@ -1,93 +1,78 @@
 /**
- * 统一 AI 代理端点
+ * 统一 AI 代理端点（密钥来源：ai_provider_connection 数据库表）
  *
  * POST /api/ai/generate
  * Body:
- *   prompt       string  必填
- *   provider?    string  provider key（deepseek / qwen / kimi / glm / openai），默认 deepseek
- *   model?       string  覆盖 provider 的默认模型名
- *   systemPrompt? string
- *   max_tokens?  number
- *   temperature? number
- *   apiKey?      string  临时覆盖（优先于环境变量，谨慎使用）
- *   baseURL?     string  临时覆盖 baseURL
+ *   prompt           string  必填
+ *   connectionId?    number  指定数据库中的连接 id；缺省时取该 user 的第一条 enabled 连接
+ *   model?           string  覆盖连接的默认模型名
+ *   systemPrompt?    string
+ *   max_tokens?      number
+ *   temperature?     number
+ *
+ * GET /api/ai/providers
+ *   返回当前用户已配置的连接清单（来自数据库）
  */
 
 import { Router } from 'express';
-import OpenAI from 'openai';
-import { createAiClient, PROVIDERS, isProviderConfigured } from '../services/aiClientFactory.js';
-import 'dotenv/config';
+import pool from '../db.js';
+import { createAiClientByConnectionId } from '../services/aiClientFactory.js';
 
 const router = Router();
 
+function getUserId(req) {
+  return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+}
+
+async function resolveConnectionId(userId, connectionId) {
+  if (connectionId) return Number(connectionId);
+  const { rows } = await pool.query(
+    `SELECT id FROM ai_provider_connection
+     WHERE user_id = $1 AND enabled = true
+     ORDER BY id ASC LIMIT 1`,
+    [userId]
+  );
+  return rows[0]?.id || null;
+}
+
 router.post('/generate', async (req, res) => {
   try {
-    const {
-      prompt,
-      provider: providerParam,
-      model,
-      max_tokens,
-      temperature,
-      systemPrompt,
-      // 兼容旧调用：直接传 apiKey/baseURL 走临时客户端
-      apiKey,
-      baseURL,
-    } = req.body;
+    const userId = getUserId(req);
+    const { prompt, connectionId, model, max_tokens, temperature, systemPrompt } = req.body || {};
 
     if (!prompt) {
       return res.status(400).json({ error: 'prompt 是必填项' });
     }
 
-    let content;
-
-    // 如果前端直接传了 apiKey / baseURL（旧方式），走临时 OpenAI 客户端
-    if (apiKey || baseURL) {
-      const resolvedKey = apiKey || process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY;
-      const resolvedURL = baseURL || process.env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1';
-      if (!resolvedKey) {
-        return res.status(500).json({ error: '未配置 API Key，请联系管理员' });
-      }
-      const tempClient = new OpenAI({ apiKey: resolvedKey, baseURL: resolvedURL });
-      const messages = [];
-      if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-      messages.push({ role: 'user', content: prompt });
-      const response = await tempClient.chat.completions.create({
-        model: model || 'deepseek-chat',
-        messages,
-        max_tokens: max_tokens || 2000,
-        temperature: temperature ?? 0.7,
+    const cid = await resolveConnectionId(userId, connectionId);
+    if (!cid) {
+      return res.status(400).json({
+        error: '尚未配置任何启用的大模型连接，请先到「大模型接入」添加并启用',
       });
-      content = response.choices?.[0]?.message?.content;
-    } else {
-      // 新方式：通过 provider key 路由
-      const provider = providerParam || 'deepseek';
-      if (!PROVIDERS[provider]) {
-        return res.status(400).json({
-          error: `未知的 provider: "${provider}"，可用值：${Object.keys(PROVIDERS).join(', ')}`,
-        });
-      }
-      if (!isProviderConfigured(provider)) {
-        return res.status(500).json({
-          error: `provider "${provider}" 的 API Key（${PROVIDERS[provider].apiKeyEnv}）未配置`,
-        });
-      }
-      const client = createAiClient(provider);
-      const messages = [];
-      if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
-      messages.push({ role: 'user', content: prompt });
-      const result = await client.chat(messages, {
-        model: model || undefined,
-        maxTokens: max_tokens || 2000,
-        temperature: temperature ?? 0.7,
-      });
-      content = result.content;
     }
 
-    if (!content) {
+    const client = await createAiClientByConnectionId(pool, cid, { userId });
+    const messages = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: prompt });
+
+    const result = await client.chat(messages, {
+      model: model || undefined,
+      maxTokens: max_tokens || 2000,
+      temperature: temperature ?? 0.7,
+    });
+
+    if (!result.content) {
       return res.status(500).json({ error: 'AI 返回内容为空' });
     }
 
-    res.json({ content });
+    res.json({
+      content: result.content,
+      vendorName: client.vendorName,
+      providerKey: client.providerKey,
+      connectionId: client.connectionId,
+      model: client.model,
+    });
   } catch (error) {
     console.error('AI 代理请求失败:', error);
     res.status(500).json({
@@ -97,15 +82,36 @@ router.post('/generate', async (req, res) => {
   }
 });
 
-/** 查询当前已配置的 provider 列表（只读，便于前端展示可用模型） */
-router.get('/providers', (req, res) => {
-  const list = Object.entries(PROVIDERS).map(([key, cfg]) => ({
-    key,
-    label: cfg.label,
-    defaultModel: cfg.defaultModel,
-    configured: isProviderConfigured(key),
-  }));
-  res.json({ success: true, providers: list });
+/**
+ * 列出当前用户在数据库中配置的可用连接
+ */
+router.get('/providers', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { rows } = await pool.query(
+      `SELECT id, vendor_name, provider_key, default_model, enabled,
+              key_last4, last_test_status
+       FROM ai_provider_connection
+       WHERE user_id = $1
+       ORDER BY id ASC`,
+      [userId]
+    );
+    res.json({
+      success: true,
+      providers: rows.map((r) => ({
+        connectionId: r.id,
+        vendorName: r.vendor_name,
+        providerKey: r.provider_key,
+        defaultModel: r.default_model,
+        enabled: r.enabled,
+        keyLast4: r.key_last4,
+        lastTestStatus: r.last_test_status,
+      })),
+    });
+  } catch (e) {
+    console.error('GET /api/ai/providers:', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 export default router;

@@ -18,6 +18,7 @@ import GEOReport from '../views/GEOReport.vue'
 import GEOHealthReport from '../views/GEOHealthReport.vue'
 import SysDictManage from '../views/SysDictManage.vue'
 import SentimentLexiconManage from '../views/SentimentLexiconManage.vue'
+import AiProviderConnections from '../views/AiProviderConnections.vue'
 
 const routes = [
   { path: '/', name: 'dashboard', component: Dashboard },
@@ -31,6 +32,7 @@ const routes = [
   { path: '/images', name: 'images', component: Images },
   { path: '/sys-dict', name: 'sys-dict', component: SysDictManage },
   { path: '/sentiment-lexicon', name: 'sentiment-lexicon', component: SentimentLexiconManage },
+  { path: '/ai-provider-connections', name: 'ai-provider-connections', component: AiProviderConnections },
   { path: '/enterprise-settings', name: 'enterprise-settings', component: EnterpriseSettings },
   
   // AI创作

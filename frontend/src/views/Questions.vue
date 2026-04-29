@@ -6,7 +6,14 @@
         <div class="text-sm text-gray-500">AI扩展的检测问题列表（共 {{ total }} 条，已审核 {{ approvedTotal }} 条）</div>
       </div>
       <div class="flex items-center filter-actions gap-4 ml-auto">
-        <el-select v-model="filterKeywordType" placeholder="全部类型" class="w-28" clearable @change="onFilterChange">
+        <el-select
+          v-model="filterKeywordType"
+          placeholder="全部类型"
+          class="w-28"
+          clearable
+          :disabled="mutationLoading"
+          @change="onFilterChange"
+        >
           <el-option label="全部类型" value="" />
           <el-option
             v-for="d in keywordTypeOptions"
@@ -15,7 +22,14 @@
             :value="d.dataKey"
           />
         </el-select>
-        <el-select v-model="filterStatus" placeholder="全部状态" class="w-28" clearable @change="onFilterChange">
+        <el-select
+          v-model="filterStatus"
+          placeholder="全部状态"
+          class="w-28"
+          clearable
+          :disabled="mutationLoading"
+          @change="onFilterChange"
+        >
           <el-option label="全部状态" value="" />
           <el-option label="待审核" value="待审核" />
           <el-option label="已审核" value="已审核" />
@@ -24,7 +38,8 @@
         <el-button
           type="danger"
           class="ml-0"
-          :disabled="selectedRows.length === 0 || isLoading"
+          :disabled="selectedRows.length === 0 || isLoading || mutationLoading || listLoading"
+          :loading="mutationLoading"
           @click="handleBatchDelete"
         >
           批量删除 ({{ selectedRows.length }})
@@ -34,7 +49,8 @@
           plain
           class="ml-2"
           @click="handleClearAll"
-          :disabled="total === 0 || isLoading"
+          :disabled="total === 0 || isLoading || mutationLoading || listLoading"
+          :loading="mutationLoading"
         >
           <el-icon class="mr-1"><Delete /></el-icon>
           清空全部
@@ -42,6 +58,7 @@
         <el-button
           type="warning"
           class="ml-0"
+          :disabled="mutationLoading"
           @click="openGeoDialog"
         >
           <el-icon class="mr-1"><Promotion /></el-icon>
@@ -57,7 +74,7 @@
 <!--          <el-icon class="mr-1" v-if="!isLoading"><MagicStick /></el-icon>-->
 <!--          {{ isSearching ? searchStatusText : (isLoading ? 'AI生成中...' : (selectedRows.length === 1 ? 'AI改写问题' : 'AI拓展问题')) }}-->
 <!--        </el-button>-->
-        <el-button type="primary" class="ml-0" @click="handleAdd">
+        <el-button type="primary" class="ml-0" :disabled="mutationLoading" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>
           手动添加
         </el-button>
@@ -65,7 +82,8 @@
     </div>
 
     <el-table
-      v-loading="listLoading"
+      v-loading="listLoading || mutationLoading"
+      :element-loading-text="tableLoadingText"
       :data="displayRows"
       style="width: 100%"
       @selection-change="handleSelectionChange"
@@ -125,7 +143,7 @@
     </el-table>
 
     <el-empty
-      v-if="!listLoading && displayRows.length === 0"
+      v-if="!listLoading && !mutationLoading && displayRows.length === 0"
       :description="total === 0 ? '暂无问题，请先在蒸馏词页面添加关键词并生成问题' : '没有匹配筛选条件的问题'"
     />
 
@@ -133,6 +151,7 @@
       v-model:page="page"
       v-model:page-size="pageSize"
       :total="total"
+      :disabled="mutationLoading"
       @change="loadData"
     />
 
@@ -300,6 +319,9 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(DEFAULT_PAGE_SIZE)
 const listLoading = ref(false)
+/** 批量/清空/行删除等写操作，与 loadData 的 listLoading 区分，避免无反馈 */
+const mutationLoading = ref(false)
+const tableLoadingText = computed(() => (mutationLoading.value ? '正在删除…' : '加载中…'))
 const approvedTotal = ref(0)
 const questionSortOrder = ref('') // '' | 'asc' | 'desc' — 仅对当前页排序
 
@@ -947,25 +969,41 @@ const handleSelectionChange = (selection) => {
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   const userId = 'default_user'
+  const idsToDelete = selectedRows.value.map((r) => r.id)
 
-  // 同步删除后端
-  const idsToDelete = selectedRows.value.map(r => r.id)
-  for (const row of selectedRows.value) {
+  mutationLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/questions/batch-delete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': userId,
+      },
+      body: JSON.stringify({ ids: idsToDelete }),
+    })
+    let data = {}
     try {
-      await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
-        method: 'DELETE',
-        headers: { 'x-user-id': userId }
-      })
-    } catch (e) {
-      console.warn('从后端删除失败:', e)
+      data = await res.json()
+    } catch {
+      /* ignore */
     }
+    if (!res.ok) {
+      ElMessage.error(data.error || '批量删除失败')
+      return
+    }
+    const deleted = data.deletedCount ?? idsToDelete.length
+    selectedRows.value = []
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
+    ElMessage.success(`已删除 ${deleted} 条记录`)
+  } catch (e) {
+    console.warn(e)
+    ElMessage.error('批量删除失败，请检查网络')
+  } finally {
+    mutationLoading.value = false
   }
-  selectedRows.value = []
-  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
-  ElMessage.success(`已删除 ${idsToDelete.length} 条记录`)
 }
 
-// 清空全部问题（按当前筛选条件拉全量后逐条删除）
+// 清空全部：与列表相同筛选条件，后端一条 SQL 删除
 const handleClearAll = async () => {
   if (total.value === 0) return
 
@@ -977,7 +1015,7 @@ const handleClearAll = async () => {
         confirmButtonText: '确认清空',
         cancelButtonText: '取消',
         type: 'warning',
-        confirmButtonClass: 'el-button--danger'
+        confirmButtonClass: 'el-button--danger',
       }
     )
   } catch {
@@ -985,33 +1023,40 @@ const handleClearAll = async () => {
   }
 
   const userId = 'default_user'
-  const buildQs = (p, ps) => {
-    const qs = new URLSearchParams({ page: String(p), pageSize: String(ps) })
-    if (filterKeywordType.value) qs.set('keywordType', filterKeywordType.value)
-    if (filterStatus.value) qs.set('status', filterStatus.value)
-    return `${API_BASE_URL}/api/questions?${qs}`
-  }
-  const rows = await fetchAllPages(buildQs, {
-    pageSize: 100,
-    fetchOptions: { headers: { 'x-user-id': userId } },
-  })
-  const count = rows.length
+  const body = {}
+  if (filterKeywordType.value) body.keywordType = filterKeywordType.value
+  if (filterStatus.value) body.status = filterStatus.value
 
-  for (const row of rows) {
+  mutationLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/questions/delete-matching`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': userId,
+      },
+      body: JSON.stringify(body),
+    })
+    let data = {}
     try {
-      await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
-        method: 'DELETE',
-        headers: { 'x-user-id': userId },
-      })
-    } catch (e) {
-      console.warn('从后端删除失败:', e)
+      data = await res.json()
+    } catch {
+      /* ignore */
     }
+    if (!res.ok) {
+      ElMessage.error(data.error || '清空失败')
+      return
+    }
+    page.value = 1
+    selectedRows.value = []
+    await loadData()
+    ElMessage.success(`已清空 ${data.deletedCount ?? 0} 条问题`)
+  } catch (e) {
+    console.warn(e)
+    ElMessage.error('清空失败，请检查网络')
+  } finally {
+    mutationLoading.value = false
   }
-
-  page.value = 1
-  selectedRows.value = []
-  await loadData()
-  ElMessage.success(`已清空 ${count} 条问题`)
 }
 
 const handleAdd = () => {
@@ -1066,17 +1111,30 @@ const handleSubmit = async () => {
 
 const handleDelete = async (id) => {
   const userId = 'default_user'
-  // 同步删除后端
+  mutationLoading.value = true
   try {
-    await fetch(`${API_BASE_URL}/api/questions/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/questions/${id}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': userId }
+      headers: { 'x-user-id': userId },
     })
+    let data = {}
+    try {
+      data = await res.json()
+    } catch {
+      /* ignore */
+    }
+    if (!res.ok) {
+      ElMessage.error(data.error || '删除失败')
+      return
+    }
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
+    ElMessage.success('删除成功')
   } catch (e) {
-    console.warn('从后端删除失败:', e)
+    console.warn(e)
+    ElMessage.error('删除失败，请检查网络')
+  } finally {
+    mutationLoading.value = false
   }
-  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
-  ElMessage.success('删除成功')
 }
 
 // ===================== GEO 问题生成 =====================

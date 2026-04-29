@@ -1,23 +1,16 @@
 import express from 'express';
 import { analyzeWebsite } from '../services/websiteAnalyzer.js';
-import 'dotenv/config';
 
 const router = express.Router();
 
-// POST /api/website-analyze - 网站分析
+// POST /api/website-analyze - 网站结构/SEO 静态分析（不调用大模型 API）
 router.post('/website-analyze', async (req, res) => {
   try {
-    const { url, apiKey } = req.body;
-    
+    const { url } = req.body || {};
     if (!url) {
       return res.status(400).json({ error: '请提供网址' });
     }
-
-    if (!apiKey) {
-      return res.status(400).json({ error: '缺少 API Key' });
-    }
-
-    const result = await analyzeWebsite(url, apiKey);
+    const result = await analyzeWebsite(url);
     res.json({ success: true, ...result });
   } catch (err) {
     console.error('网站分析失败:', err.message);
