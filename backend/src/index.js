@@ -33,7 +33,7 @@ const pool = new Pool({
   options: PG_CONNECTION_OPTIONS,
 });
 
-const BUILD_VERSION = 'v2026032901';
+const BUILD_VERSION = 'v2026043001';
 
 // 初始化数据库表 + sys_dict 与关键词类型英文 key 迁移
 initDB()
