@@ -44,6 +44,6 @@ export function computeAiHealthScore({
     ? brandMentionRate / industryMentionRate
     : 0;
   const r = Math.max(0, mentionToIndustry);
-  const raw = v * 0.4 + ir * 0.6 - n * v - n * r;
+  const raw = v * 0.4 + ir * 0.6 - n * v - ((n * r)*100);
   return clamp100(raw);
 }
