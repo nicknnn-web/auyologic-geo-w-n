@@ -102,10 +102,10 @@ router.post('/geo-brand/tasks', async (req, res) => {
         error: '请至少选择一个用于体检的大模型连接（connectionIds 必填）',
       });
     }
-    if (connectionIds.length > 10) {
+    if (connectionIds.length > 6) {
       return res.status(400).json({
         success: false,
-        error: '一次体检最多选择 10 个模型',
+        error: '一次体检最多选择 6 个模型',
       });
     }
 

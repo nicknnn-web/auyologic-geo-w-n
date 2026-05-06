@@ -17,7 +17,8 @@
  *   competitorMentions[]
  *   sentimentWordCloud[]（仅含词库词在分词统计中的实际命中次数>0；count=次数，weight=count/hitMax 供着色）
  *   sourceData[]
- *   diagnosticSuggestions[]
+ *   diagnosticSuggestions[]（仅综合语境矩阵，无模型数据时为空数组）
+ *   matrixContext：综合语境矩阵（16 档）摘要
  *   rawData{}
  */
 
@@ -29,6 +30,11 @@ import {
   sentimentPolarityFromLexicon,
 } from '../services/sentimentLexiconService.js';
 import { computeAiHealthScore } from '../utils/aiHealthScore.js';
+import {
+  aggregateMatrixContextFromModels,
+  matrixContextPayload,
+  buildMatrixContextDiagnosticItem,
+} from '../utils/contextMatrix.js';
 
 const router = Router();
 
@@ -101,143 +107,6 @@ const CREDIBLE_SOURCE_HINTS = ['官网', '媒体', '百科', '认证', '官方',
 function isCredibleSource(sourceType) {
   if (!sourceType || sourceType === '无') return false;
   return CREDIBLE_SOURCE_HINTS.some((h) => String(sourceType).includes(h));
-}
-
-// ─────────────────────────────────────────────
-// 硬规则诊断
-// ─────────────────────────────────────────────
-function buildDiagnostics({
-  interceptRate, blindModelCount, totalModelCount,
-  negativeRatio, negativeRiskLevel,
-  authorityScore, competitorLoseCount, totalChecks,
-}) {
-  const suggestions = [];
-  let seq = 1;
-
-  // 盲区：有盲区模型
-  if (totalModelCount > 0 && blindModelCount >= totalModelCount) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'rose',
-      title: `大模型盲区预警：全部 ${totalModelCount} 个模型在开放式提问中均未提及品牌`,
-      diagnosis: '在开放式提问场景下，所有参与检测的大模型回答中均未出现品牌相关内容，品牌认知盲区严重。',
-      suggestions: [
-        '针对小红书、知乎及垂直行业媒体增加结构化评测与场景化案例内容',
-        '统一品牌实体与产品命名表述，减少多别名造成的检索稀释',
-      ],
-    });
-  } else if (blindModelCount > 0) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'orange',
-      title: `存在盲区模型（${blindModelCount}/${totalModelCount} 个模型在开放式提问中不可见）`,
-      diagnosis: `有 ${blindModelCount} 个大模型在所有开放式提问中均未提及品牌，说明在该类问法下品牌认知存在明显缺口。`,
-      suggestions: [
-        '针对盲区模型类型的训练语料特征，补充对应的官方内容与案例',
-        '提高品牌在 AI 训练语料中的正面曝光密度',
-      ],
-    });
-  }
-
-  // 竞品拦截
-  if (competitorLoseCount >= 5) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'orange',
-      title: '竞品拦截风险：对比问题中竞品占优',
-      diagnosis: `在对比类问题中，AI 有 ${competitorLoseCount} 次明确推荐竞品，可能分流本品牌的决策心智份额。`,
-      suggestions: [
-        '梳理高转化场景下的官方话术与权威背书素材，提升首位推荐概率',
-        '对高频竞品对比词布局差异化卖点与可验证数据',
-      ],
-    });
-  }
-
-  // 负面关联度
-  if (negativeRatio >= 0.3) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'rose',
-      title: `负面关联度超高风险（${(negativeRatio * 100).toFixed(1)}%）`,
-      diagnosis: '超过 30% 的 AI 回答中出现品牌负面内容，严重影响用户信任感与决策转化。',
-      suggestions: [
-        '立即启动舆情监控与正向事实库建设，优先澄清高频负面词',
-        '在权威媒体、官网等高权重渠道主动发布正面内容',
-        '考虑寻求专业公关支持进行危机修复',
-      ],
-    });
-  } else if (negativeRatio >= 0.2) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'rose',
-      title: `负面关联度高风险（${(negativeRatio * 100).toFixed(1)}%，等级：${negativeRiskLevel}）`,
-      diagnosis: '20%-30% 的回答含品牌负面内容，需重点关注并加强正面信源投放。',
-      suggestions: [
-        '建立舆情关键词监控机制，在公开渠道主动澄清高频误解点',
-        '增加官方渠道的权威正面内容，稀释负面信源权重',
-      ],
-    });
-  } else if (negativeRatio >= 0.1) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'orange',
-      title: `负面关联度低风险（${(negativeRatio * 100).toFixed(1)}%）`,
-      diagnosis: '10%-20% 的回答含品牌负面内容，建议持续监控并适当加强正向内容布局。',
-      suggestions: [
-        '持续监控负面词汇变化，定期复盘 AI 回答中的负面描述来源',
-      ],
-    });
-  } else if (negativeRatio > 0) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'orange',
-      title: `负面关联度亚健康（${(negativeRatio * 100).toFixed(1)}%）`,
-      diagnosis: '存在少量负面内容，处于潜在风险区间，建议定期监测。',
-      suggestions: ['定期复盘 AI 回答，关注负面词汇是否扩散'],
-    });
-  }
-
-  // 信源权威
-  if (authorityScore < 30 && totalChecks > 0) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'rose',
-      title: `信源权威性低（可信信源占比 ${authorityScore}%）`,
-      diagnosis: 'AI 回答引用的信源中，权威媒体/官网占比偏低，可能导致内容可信度存疑。',
-      suggestions: [
-        '在官网、百科、权威媒体等高权重平台建立完整品牌内容',
-        '输出经过专业认证的产品评测与案例研究',
-      ],
-    });
-  }
-
-  // 良好状态
-  if (interceptRate >= 70 && blindModelCount === 0 && negativeRatio < 0.1) {
-    suggestions.push({
-      id: String(seq++),
-      accent: 'blue',
-      title: `品牌整体表现良好（命中率 ${interceptRate}%，无盲区模型），继续保持`,
-      diagnosis: '当前各项指标均处于健康或良好区间，建议保持内容投放与监测节奏。',
-      suggestions: [
-        '保持现有 GEO 检测频率，定期复盘各平台摘要用语变化',
-        '探索新兴 AI 平台的内容布局机会',
-      ],
-    });
-  }
-
-  if (suggestions.length === 0 && totalChecks > 0) {
-    suggestions.push({
-      id: '1',
-      accent: 'rose',
-      title: '基线健康：维持内容投放与监测节奏',
-      diagnosis: '当前各项指标未突破高风险阈值，整体处于可维持区间。',
-      suggestions: [
-        '保持现有 GEO 检测频率，并定期复盘各平台摘要用语变化',
-      ],
-    });
-  }
-
-  return suggestions;
 }
 
 // ─────────────────────────────────────────────
@@ -740,12 +609,16 @@ router.get('/geo-health-report', async (req, res) => {
     // ── 7. 首模型 AI 健康分（与 modelVisibilityCards[0].healthScore 一致，兼容旧字段 healthScore）──
     const healthScore = modelVisibilityCards[0]?.healthScore ?? 0;
 
-    // ── 8. 诊断 ──
-    const diagnosticSuggestions = buildDiagnostics({
-      interceptRate, blindIndex, negativeRatio, negativeRiskLevel,
-      authorityScore, competitorLoseCount, totalChecks,
-      blindModelCount, totalModelCount,
+    // ── 7b. 智能诊断：仅综合语境矩阵（16 档），不含旧版硬规则 ──
+    const matrixAgg = aggregateMatrixContextFromModels({
+      visibilityScores: modelVisibilityCards.map((c) => c.score),
+      interceptRate,
+      negativeRatio,
     });
+    const matrixContext = matrixContextPayload(matrixAgg);
+    const matrixDiagItem = buildMatrixContextDiagnosticItem(matrixAgg);
+
+    const diagnosticSuggestions = matrixDiagItem ? [matrixDiagItem] : [];
 
     res.json({
       success: true,
@@ -778,6 +651,7 @@ router.get('/geo-health-report', async (req, res) => {
       sentimentWordCloud,
       sourceData,
       diagnosticSuggestions,
+      matrixContext,
       lossTriggerTags: [],
       rawData: {
         taskId,
@@ -975,6 +849,7 @@ function emptyReport({ brandName, brandDomain }) {
     sentimentWordCloud: [],
     sourceData: [],
     diagnosticSuggestions: [],
+    matrixContext: null,
     lossTriggerTags: [],
     rawData: { taskId: null, totalChecks: 0 },
   };

@@ -892,7 +892,7 @@
         </div>
         <div class="mp-header__text">
           <span class="mp-header__title">选择体检模型</span>
-          <p class="mp-header__sub">同一题目会对每个已选模型各探针一次，用于多模型对比，选择多模型探针时间会相对增长 请耐心等候...</p>
+          <p class="mp-header__sub">同一题目会对每个已选模型各探针一次，用于多模型对比；<strong>最多可选 6 个模型</strong>，选择多模型探针时间会相对增长，请耐心等候…</p>
         </div>
       </div>
     </template>
@@ -926,7 +926,7 @@
             size="small"
             @change="toggleSelectAll"
           >
-            全选 · 共 {{ modelPickerList.length }} 个
+            全选 · 共 {{ modelPickerList.length }} 个（最多 {{ MAX_HEALTH_PROBE_MODELS }} 个）
           </el-checkbox>
         </div>
         <div
@@ -934,7 +934,11 @@
           role="region"
           aria-label="探针模型列表"
         >
-          <el-checkbox-group v-model="pickedConnectionIds" class="mp-check-group">
+          <el-checkbox-group
+            v-model="pickedConnectionIds"
+            class="mp-check-group"
+            @change="onProbeModelsChange"
+          >
           <div
             v-for="m in modelPickerList"
             :key="m.id"
@@ -1036,27 +1040,49 @@ import {
 import draggable from 'vuedraggable'
 
 // ===== 体检模型选择弹窗状态 =====
+/** 生成体检报告时探针模型勾选上限（与后端 geo-brand/tasks 一致） */
+const MAX_HEALTH_PROBE_MODELS = 6
 const modelPickerVisible = ref(false)
 const modelPickerLoading = ref(false)
 const modelPickerList = ref([])
 const pickedConnectionIds = ref([])
+const pickedConnectionIdsSnapshot = ref([])
 const pickedAnalysisId = ref(null)
 
-const isAllPicked = computed(() =>
-  modelPickerList.value.length > 0 &&
-  pickedConnectionIds.value.length === modelPickerList.value.length
-)
+const syncProbePickSnapshot = () => {
+  pickedConnectionIdsSnapshot.value = [...pickedConnectionIds.value]
+}
+
+const onProbeModelsChange = (val) => {
+  if (val.length > MAX_HEALTH_PROBE_MODELS) {
+    pickedConnectionIds.value = [...pickedConnectionIdsSnapshot.value]
+    ElMessage.warning(`最多选择 ${MAX_HEALTH_PROBE_MODELS} 个模型`)
+    return
+  }
+  pickedConnectionIdsSnapshot.value = [...val]
+}
+
+const isAllPicked = computed(() => {
+  const n = modelPickerList.value.length
+  return (
+    n > 0 &&
+    pickedConnectionIds.value.length === n &&
+    n <= MAX_HEALTH_PROBE_MODELS
+  )
+})
 const isIndeterminate = computed(() =>
-  pickedConnectionIds.value.length > 0 &&
-  pickedConnectionIds.value.length < modelPickerList.value.length
+  pickedConnectionIds.value.length > 0 && !isAllPicked.value
 )
 
 const toggleSelectAll = (val) => {
   if (val) {
-    pickedConnectionIds.value = modelPickerList.value.map((m) => m.id)
+    pickedConnectionIds.value = modelPickerList.value
+      .map((m) => m.id)
+      .slice(0, MAX_HEALTH_PROBE_MODELS)
   } else {
     pickedConnectionIds.value = []
   }
+  syncProbePickSnapshot()
 }
 
 const goToAiConnections = () => {
@@ -1077,10 +1103,12 @@ const fetchAvailableModels = async () => {
     const okIds = modelPickerList.value
       .filter((m) => m.lastTestStatus === 'ok')
       .map((m) => m.id)
-    pickedConnectionIds.value = okIds.length
+    const rawPick = okIds.length
       ? okIds
       : modelPickerList.value.map((m) => m.id)
+    pickedConnectionIds.value = rawPick.slice(0, MAX_HEALTH_PROBE_MODELS)
     pickedAnalysisId.value = null
+    syncProbePickSnapshot()
   } catch (e) {
     ElMessage.error(e.message || '加载可用模型失败')
     modelPickerList.value = []
@@ -1101,7 +1129,7 @@ const confirmModelPicker = async () => {
   }
   modelPickerVisible.value = false
   await submitHealthReportTask({
-    connectionIds: pickedConnectionIds.value.slice(),
+    connectionIds: pickedConnectionIds.value.slice(0, MAX_HEALTH_PROBE_MODELS),
     analysisConnectionId: pickedAnalysisId.value || undefined,
   })
 }
@@ -2039,6 +2067,8 @@ watch(competitorMentions, () => {
 const lossTriggerTags = ref([])
 const sentimentWordCloud = ref([])
 const diagnosticSuggestions = ref([])
+/** 综合语境矩阵 API 摘要（matrixContext） */
+const matrixContext = ref(null)
 
 const suggestionOverrides = ref({})
 const suggestionEditingKey = ref(null)
@@ -2498,6 +2528,7 @@ const loadHealthReport = async () => {
     suggestionOverrides.value = {}
     suggestionEditingKey.value = null
     diagnosticSuggestions.value = Array.isArray(data.diagnosticSuggestions) ? data.diagnosticSuggestions : []
+    matrixContext.value = data.matrixContext ?? null
 
     // 填充信源权威
     if (data.sourceData) sourceData.value = data.sourceData
@@ -4591,7 +4622,9 @@ onUnmounted(() => {
   font-weight: 700;
   color: #fff;
 }
-
+.diagnosis-num.num-blue {
+  background: rgba(12, 12, 243, 0.62);
+}
 .diagnosis-num.num-rose {
   background: #ec6b9a;
 }
