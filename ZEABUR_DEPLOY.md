@@ -3,7 +3,7 @@
 ## 第一步：推送代码到 GitHub
 
 ```powershell
-cd "D:\workbuddy\Auyologic geo project"
+cd "D:\workbuddy\projects\Auyologic geo project"
 git add backend/src/index.js backend/src/routes/ backend/zeabur.json zeabur.json zeabur.toml zeabur-deploy.json Dockerfile.backend nginx.conf
 git commit -m "feat: 修复数据持久化 + Zeabur配置"
 git push origin main
