@@ -13,3 +13,4 @@ backend/node_modules/
 backend/_test_db.cjs
 backend/_init_db.cjs
 backend/_backend_output.log
+MinIO.txt
