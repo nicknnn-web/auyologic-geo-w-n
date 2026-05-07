@@ -3,7 +3,8 @@
  *
  * 维护说明：
  * - 抽题数量：改 config/geoBrandTaskConfig.js 里的 GEO_HEALTH_QUESTIONS_PER_TYPE
- * - 抽样类型：resolveGeoHealthKeywordBuckets 读 sys_dict keyword_type 全部 data_key，与 questions.keyword_type 匹配
+ * - 抽样类型：resolveGeoHealthKeywordBuckets 读 sys_dict keyword_type 全部 data_key，与 questions.keyword_type 匹配；
+ *   每类仅抽本类 + 已审核 + 当前用户，绝不跨类型凑数（避免 question_type 与题干语义不一致）
  * - 探针模型列表：来自 geo_health_task.connection_ids（创建任务时由前端传入 connectionIds），不再依赖环境变量
  * - Prompt 默认文案改 DEFAULT_SYSTEM_PROMPT / buildDefaultUserPrompt；也可在接口里传自定义覆盖
  * - 解析 JSON、入库文章的逻辑在 probeOneQuestionWithModel，与 AI 调用分离
@@ -63,10 +64,10 @@ function md5(s) {
 }
 
 /**
- * 从已审核问题库随机抽取：按 keyword_type（单值或 IN）、extraAnd；不按 user_id、不按「关键词」过滤。
+ * 从已审核问题库随机抽取：按 keyword_type（单值或 IN）、extraAnd；可选 userId（与 COALESCE 空 user_id→default_user 对齐）。
  * keywordTypesIn 与 keywordType 二选一；优先 keywordTypesIn。
  */
-export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn, extraAnd = '', limit }) {
+export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn, extraAnd = '', limit, userId = null }) {
   const params = [];
   let i = 1;
   let sql = `
@@ -74,6 +75,12 @@ export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn,
     FROM questions q
     WHERE q.status = '已审核'
   `;
+  if (userId != null && String(userId).trim() !== '') {
+    const uid = String(userId).trim();
+    sql += ` AND COALESCE(NULLIF(trim(q.user_id), ''), 'default_user') = $${i}`;
+    params.push(uid);
+    i += 1;
+  }
   if (keywordTypesIn && keywordTypesIn.length > 0) {
     const ph = keywordTypesIn.map((_, idx) => `$${i + idx}`).join(', ');
     sql += ` AND q.keyword_type IN (${ph})`;
@@ -91,42 +98,6 @@ export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn,
   params.push(limit);
   const { rows } = await pool.query(sql, params);
   return rows;
-}
-
-/** 抽不够时在 allowedKeys（字典 keyword_type 全部 data_key）之间补量 */
-async function fillToLimit(pool, { initialRows, limit, allowedKeys }) {
-  const out = [...initialRows];
-  const taken = new Set(out.map((r) => r.id));
-
-  const tryAdd = (rows) => {
-    for (const r of rows) {
-      if (taken.has(r.id)) continue;
-      out.push(r);
-      taken.add(r.id);
-      if (out.length >= limit) return true;
-    }
-    return false;
-  };
-
-  if (out.length >= limit) return out.slice(0, limit);
-  if (!allowedKeys || allowedKeys.length === 0) return out.slice(0, limit);
-
-  for (const kt of allowedKeys) {
-    const more = await pickApprovedQuestions(pool, {
-      keywordType: kt,
-      extraAnd: '',
-      limit: limit * 2,
-    });
-    if (tryAdd(more)) return out.slice(0, limit);
-  }
-
-  const loose = await pickApprovedQuestions(pool, {
-    keywordTypesIn: allowedKeys,
-    extraAnd: '',
-    limit: limit * 3,
-  });
-  tryAdd(loose);
-  return out.slice(0, limit);
 }
 
 /**
@@ -226,7 +197,7 @@ async function validateConnectionIdsForUser(pool, userId, ids) {
 }
 
 export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, analysisConnectionId }) {
-  const { buckets, allowedKeys } = await resolveGeoHealthKeywordBuckets(pool);
+  const { buckets } = await resolveGeoHealthKeywordBuckets(pool);
   if (!buckets.length) {
     throw new Error('字典 keyword_type 无启用项（sys_dict 中 dict_type=keyword_type 为空），无法抽题');
   }
@@ -259,12 +230,12 @@ export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, a
   const perType = GEO_HEALTH_QUESTIONS_PER_TYPE;
   const pickedSummary = [];
   for (const bucket of buckets) {
-    let rows = await pickApprovedQuestions(pool, {
+    const rows = await pickApprovedQuestions(pool, {
       keywordType: bucket.keywordType,
       extraAnd: bucket.extraAnd,
       limit: perType,
+      userId,
     });
-    rows = await fillToLimit(pool, { initialRows: rows, limit: perType, allowedKeys });
 
     const batch = rows.map((r) => ({
       sourceQuestionId: r.id,
@@ -290,6 +261,13 @@ export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, a
       );
       total += rows.length;
     }
+  }
+
+  if (total === 0) {
+    await pool.query(`DELETE FROM geo_health_task WHERE id = $1`, [taskId]);
+    throw new Error(
+      '当前账号下没有可用的「已审核」拓展问题（按关键词类型匹配）。请先在「拓展问题」中审核题目后再发起品牌体检。'
+    );
   }
 
   console.log(

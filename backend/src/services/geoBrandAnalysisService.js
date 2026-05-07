@@ -16,10 +16,8 @@
  *   sourceType      主要信源类型（由 AI 根据回答内容动态判断，如"官网""知乎""小红书"等）
  *   sentimentKeywords     语义情绪精炼词（string[]，模型可选输出；词云统计用 answer_tokens 服务端分词）
  *
- * category 由 question_type 在代码侧映射，不让 AI 判断：
- *   brand / enterprise → "brand"
- *   compare            → "compare"
- *   price / product / scenario / 其它 → "open"
+ * category 由 question_type + sys_dict.keyword_type 的 data_value 在代码侧映射，不让 AI 判断。
+ * 优先读字典文案（与后台「系统字典」一致）；无文案时再按标准 data_key 01–06 兜底。
  */
 
 import { createAiClientByConnectionId } from './aiClientFactory.js';
@@ -34,18 +32,42 @@ import {
 // category 映射（代码侧确定，不依赖 AI）
 // ─────────────────────────────────────────────
 
-const BRAND_TYPES = new Set(['brand', 'enterprise', '品牌词', '企业词']);
-const COMPARE_TYPES = new Set(['compare', '对比词']);
+/** 无字典文案时：与 index.js ensureSysDictAndMigrate 默认 keyword_type 键位语义一致 */
+const STANDARD_KEY_CATEGORY = {
+  '01': 'brand',
+  '02': 'open',
+  '03': 'open',
+  '04': 'brand',
+  '05': 'compare',
+  '06': 'open',
+};
+
+const LEGACY_BRAND = new Set(['brand', 'enterprise', '品牌词', '企业词', '品牌', '企业']);
+const LEGACY_COMPARE = new Set(['compare', '对比词', '对比']);
 
 /**
- * 将 question_type（sys_dict data_key）映射到分析 category。
- * @param {string} questionType
+ * 将 question_type（sys_dict data_key）+ 字典 data_value 映射到分析 category。
+ * @param {string} questionType data_key，如 01、02
+ * @param {string} [dictDataValue] sys_dict.data_value，如「核心词」「对比词」
  * @returns {'brand'|'compare'|'open'}
  */
-export function inferCategory(questionType) {
-  const t = String(questionType || '').toLowerCase().trim();
-  if (BRAND_TYPES.has(t)) return 'brand';
-  if (COMPARE_TYPES.has(t)) return 'compare';
+export function inferCategory(questionType, dictDataValue) {
+  const key = String(questionType ?? '').trim();
+  const label = String(dictDataValue ?? '').trim();
+
+  if (label) {
+    const s = label.replace(/\s+/g, '');
+    if (/(对比|竞品)/.test(s)) return 'compare';
+    if (/(品牌|核心)词/.test(s) || s === '品牌' || s === '核心') return 'brand';
+    if (s.includes('企业词')) return 'brand';
+    if (s.includes('品牌') || s.includes('核心')) return 'brand';
+    return 'open';
+  }
+
+  if (STANDARD_KEY_CATEGORY[key]) return STANDARD_KEY_CATEGORY[key];
+
+  if (LEGACY_BRAND.has(key) || LEGACY_BRAND.has(key.toLowerCase())) return 'brand';
+  if (LEGACY_COMPARE.has(key) || LEGACY_COMPARE.has(key.toLowerCase())) return 'compare';
   return 'open';
 }
 
@@ -58,7 +80,7 @@ import {
   ANALYSIS_SYSTEM_PROMPT,
   buildAnalysisPrompt,
 } from '../prompts/geoHealthAnalysis.js';
-import { loadSentimentLexiconForPrompt } from './sentimentLexiconService.js';
+import { extractProbeAnswerText, loadSentimentLexiconForPrompt } from './sentimentLexiconService.js';
 import { segmentAnswerText } from './answerTokenizer.js';
 export { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt };
 
@@ -103,11 +125,16 @@ export async function analyzeOneAnswer(
        ga.error_text   AS answer_error,
        gq.question,
        gq.question_type,
+       COALESCE(d.data_value, '') AS keyword_type_label,
        gq.source_question_id,
        gt.user_id      AS task_user_id
      FROM geo_health_answer ga
      JOIN geo_health_question gq ON gq.id = ga.question_id
      JOIN geo_health_task gt ON gt.id = ga.task_id
+     LEFT JOIN sys_dict d
+       ON d.dict_type = 'keyword_type'
+      AND d.data_key = gq.question_type
+      AND COALESCE(d.enabled, true) = true
      WHERE ga.id = $1 AND ga.task_id = $2`,
     [answerId, taskId]
   );
@@ -135,11 +162,9 @@ export async function analyzeOneAnswer(
     return { skipped: false, answerId, error: 'probe_failed' };
   }
 
-  // 从 raw_json 提取回答文本
+  // 从 raw_json 提取回答文本（与词云「原文统计」同一入口）
   const rawJson = row.raw_json || {};
-  const answerText =
-    String(rawJson.content || rawJson.answer || '').trim() ||
-    String(rawJson.parsed?.answer || '').trim();
+  const answerText = extractProbeAnswerText(rawJson);
 
   if (!answerText) {
     await upsertAnalysis(pool, {
@@ -163,7 +188,7 @@ export async function analyzeOneAnswer(
     throw new Error('brand 为空，请先在「企业设置」中配置品牌名称');
   }
 
-  const category = inferCategory(row.question_type);
+  const category = inferCategory(row.question_type, row.keyword_type_label);
   const taskUserId = String(row.task_user_id || 'default_user').trim() || 'default_user';
   const lexicon = sentimentLexicon || (await loadSentimentLexiconForPrompt(pool, taskUserId));
   const prompt = buildAnalysisPrompt({

@@ -1,6 +1,8 @@
 /**
  * GET /api/geo-health-report
- * GET /api/geo-health-report/competitor?taskId=&name=
+ * GET /api/geo-health-report/sentiment-sources?taskId=&page=&pageSize=&q=
+ * GET /api/geo-health-report/source-articles?taskId=&page=&pageSize=&q=
+ * GET /api/geo-health-report/task-qa?taskId=
  *
  * 从 geo_health_analysis 聚合品牌体检报告所需全部指标。
  * 若当前用户尚无分析数据，返回 success:true 但各指标为零（前端走"暂无数据"分支）。
@@ -11,11 +13,13 @@
  * 响应字段与前端 GEOHealthReport.vue 的 loadHealthReport 完全对应：
  *   brandName / brandDomain / checkTime / healthScore（= modelVisibilityCards[0].healthScore，按大模型；非全模型平均）
  *   modelVisibilityCards[].healthScore 每模型独立
+ *   openMentionTotal（开放式分析条数，题×模型）/ openQuestionCount（inferCategory=open 的题目数，与字典 data_value 一致）
  *   kpiDenominator / interceptRate / blindIndex / negativeRate / authorityScore
  *   modelVisibilityCards[]
  *   intentPaths[] / platforms[] / matrixData{}
+ *   keywordTypeLabels{}（data_key → data_value，与 sys_dict.keyword_type 同步，供竞品详情等展示）
  *   competitorMentions[]
- *   sentimentWordCloud[]（仅含词库词在分词统计中的实际命中次数>0；count=次数，weight=count/hitMax 供着色）
+ *   sentimentWordCloud[]（词库词在探针回答原文中的非重叠出现次数>0；count=次数，weight=count/hitMax 供着色）
  *   sourceData[]
  *   diagnosticSuggestions[]（仅综合语境矩阵，无模型数据时为空数组）
  *   matrixContext：综合语境矩阵（16 档）摘要
@@ -26,8 +30,10 @@ import { Router } from 'express';
 import pool from '../db.js';
 import { SOURCE_CATEGORY, SOURCE_CATEGORY_LABEL } from '../services/sourceClassifier.js';
 import {
+  aggregateLexiconHitsFromProbeAnswers,
+  buildSentimentSourceDetailRows,
+  extractProbeAnswerText,
   loadSentimentLexiconPolarityRules,
-  sentimentPolarityFromLexicon,
 } from '../services/sentimentLexiconService.js';
 import { computeAiHealthScore } from '../utils/aiHealthScore.js';
 import {
@@ -35,8 +41,54 @@ import {
   matrixContextPayload,
   buildMatrixContextDiagnosticItem,
 } from '../utils/contextMatrix.js';
+import { inferCategory } from '../services/geoBrandAnalysisService.js';
+
+/** 库中尚无 keyword_type 字典时的兜底行（与 index.js 种子一致） */
+const FALLBACK_KEYWORD_TYPE_ROWS = [
+  { data_key: '01', data_value: '品牌词', sort_order: 10 },
+  { data_key: '02', data_value: '产品词', sort_order: 20 },
+  { data_key: '03', data_value: '场景词', sort_order: 30 },
+  { data_key: '04', data_value: '企业词', sort_order: 40 },
+  { data_key: '05', data_value: '对比词', sort_order: 50 },
+  { data_key: '06', data_value: '价格词', sort_order: 60 },
+];
+
+function buildIntentPathsFromDictRows(rows) {
+  const src = rows && rows.length ? rows : FALLBACK_KEYWORD_TYPE_ROWS;
+  const list = src.map((row) => {
+    const key = String(row.data_key ?? '').trim();
+    const dv = String(row.data_value ?? '').trim() || key;
+    const so = Number(row.sort_order);
+    return {
+      key,
+      label: dv,
+      type: dv,
+      category: inferCategory(key, dv),
+      sortOrder: Number.isFinite(so) ? so : 0,
+    };
+  });
+  return list.sort((a, b) => a.sortOrder - b.sortOrder || String(a.key).localeCompare(String(b.key)));
+}
+
+function keywordTypeLabelRecord(rows) {
+  const src = rows && rows.length ? rows : FALLBACK_KEYWORD_TYPE_ROWS;
+  const m = {};
+  for (const row of src) {
+    const k = String(row.data_key ?? '').trim();
+    if (!k) continue;
+    m[k] = String(row.data_value ?? '').trim() || k;
+  }
+  return m;
+}
 
 const router = Router();
+
+/** geo_health_article.source_category → 报告用中文标签 */
+function sourceCategoryLabelZh(cat) {
+  const k = String(cat ?? '').trim();
+  if (!k) return '未分类';
+  return SOURCE_CATEGORY_LABEL[k] || k;
+}
 
 // ─────────────────────────────────────────────
 // 已知模型的展示配置（model_name → 显示信息）
@@ -74,22 +126,7 @@ function logoExtrasFor(logoMap, modelName) {
   return logoMap.get(String(modelName || '').trim()) || { iconUrl: null, iconBgColor: null };
 }
 
-/**
- * keyword_type data_key 展示/归类配置
- * - label 与 type 用于矩阵左侧行头
- * - category 用于选择单元格计算规则：brand / compare / open
- * - sortOrder 决定行排序
- * 与 sys_dict.keyword_type 的 data_key 一一对应
- */
-const KEYWORD_TYPE_MAP = {
-  '01': { label: '核心词', type: '品牌词',   category: 'brand',   sortOrder: 1 },
-  '03': { label: '场景词', type: '需求/场景', category: 'open',    sortOrder: 2 },
-  '02': { label: '对比词', type: '竞品对比',  category: 'compare', sortOrder: 3 },
-  '04': { label: '功能词', type: '产品功能',  category: 'open',    sortOrder: 4 },
-  '05': { label: '价格词', type: '决策/价格', category: 'open',    sortOrder: 5 },
-};
-
-/** 单元格最终状态枚举，对应前端样式 & 文案 */
+// 矩阵单元格状态说明（对应前端样式与文案）
 // - 绿色高亮：industry_first / precise_hit / brand_win
 // - 蓝色安全：head_tier
 // - 黄色提醒：weak_awareness / info_bias / tie
@@ -258,6 +295,15 @@ router.get('/geo-health-report', async (req, res) => {
     const taskId = taskRes.rows[0].task_id;
     const checkTime = taskRes.rows[0].check_time;
 
+    const kwDictRes = await pool.query(
+      `SELECT data_key, data_value, sort_order
+       FROM sys_dict
+       WHERE dict_type = 'keyword_type' AND COALESCE(enabled, true) = true
+       ORDER BY sort_order ASC NULLS LAST, data_key ASC`
+    );
+    const keywordTypeDictRows = kwDictRes.rows;
+    const keywordTypeLabels = keywordTypeLabelRecord(keywordTypeDictRows);
+
     // ── 1. 各模型可见度得分 ──
     const mvRes = await pool.query(
       `SELECT model_name,
@@ -317,6 +363,8 @@ router.get('/geo-health-report', async (req, res) => {
     const totalChecks   = kpiAllRes.rows[0].total;
 
     // 2a-ext. 品牌提及率 vs 行业品牌提及率（仅开放式提问）
+    //   指标A/B 分母 open_total：分析成功条数（题×模型）
+    //   open_question_count：与 inferCategory(question_type, sys_dict.data_value) === 'open' 一致
     //   指标A：客户品牌行业提及率 = visibility='visible' 的开放式题数 / 开放式总题数
     //   指标B：行业品牌提及率（基准线）= (提到本品牌 OR 提到任意竞品) 的开放式题数 / 开放式总题数
     const mentionRateRes = await pool.query(
@@ -331,6 +379,19 @@ router.get('/geo-health-report', async (req, res) => {
        WHERE task_id = $1 AND error_text IS NULL AND category = 'open'`,
       [taskId]
     );
+    const openQListRes = await pool.query(
+      `SELECT gq.id, gq.question_type, COALESCE(d.data_value, '') AS data_value
+       FROM geo_health_question gq
+       LEFT JOIN sys_dict d
+         ON d.dict_type = 'keyword_type'
+        AND d.data_key = gq.question_type
+        AND COALESCE(d.enabled, true) = true
+       WHERE gq.task_id = $1`,
+      [taskId]
+    );
+    const openQuestionCount = openQListRes.rows.filter(
+      (r) => inferCategory(r.question_type, r.data_value) === 'open'
+    ).length;
     const openMentionTotal       = mentionRateRes.rows[0].open_total || 0;
     const brandMentionCount      = mentionRateRes.rows[0].brand_mention_count || 0;
     const industryMentionCount   = mentionRateRes.rows[0].industry_mention_count || 0;
@@ -442,8 +503,7 @@ router.get('/geo-health-report', async (req, res) => {
       : 0;
 
     // ── 3. 矩阵（question_type × model）──
-    //   按 keyword_type 分 5 行（核心词/场景词/对比词/功能词/价格词）
-    //   每个单元格从 geo_health_analysis 取全部明细行，按 category 选对应规则计算
+    //   行集来自 sys_dict.keyword_type（启用项），文案与排序与字典一致；单元格规则由 inferCategory 得到的 category 决定
     const matrixDetailRes = await pool.query(
       `SELECT question_type, model_name, category,
               position, brand_status, compare_status, has_negative
@@ -461,10 +521,8 @@ router.get('/geo-health-report', async (req, res) => {
       buckets.get(k).push(r);
     }
 
-    // 构建 intentPaths（固定 5 行：核心词/场景词/对比词/功能词/价格词，无数据也保留行）
-    const intentPaths = Object.entries(KEYWORD_TYPE_MAP)
-      .map(([key, cfg]) => ({ key, ...cfg }))
-      .sort((a, b) => a.sortOrder - b.sortOrder);
+    // 构建 intentPaths（与字典同步；无字典行时用代码兜底）
+    const intentPaths = buildIntentPathsFromDictRows(keywordTypeDictRows);
 
     // 生成矩阵
     const matrixData = {};
@@ -510,36 +568,15 @@ router.get('/geo-health-report', async (req, res) => {
       barTone: 'primary',
     }));
 
-    // ── 5. 词云：优先 answer_tokens（回答正文服务端分词），旧数据回退 sentiment_keywords ──
-    const kwRes = await pool.query(
-      `SELECT kw AS name, COUNT(*)::int AS value
-       FROM geo_health_analysis,
-            jsonb_array_elements_text(
-              CASE
-                WHEN answer_tokens IS NOT NULL
-                  AND jsonb_typeof(answer_tokens) = 'array'
-                  AND jsonb_array_length(answer_tokens) > 0
-                THEN answer_tokens
-                ELSE COALESCE(sentiment_keywords, '[]'::jsonb)
-              END
-            ) AS kw
-       WHERE task_id = $1 AND error_text IS NULL
-         AND jsonb_array_length(
-           CASE
-             WHEN answer_tokens IS NOT NULL
-               AND jsonb_typeof(answer_tokens) = 'array'
-               AND jsonb_array_length(answer_tokens) > 0
-             THEN answer_tokens
-             ELSE COALESCE(sentiment_keywords, '[]'::jsonb)
-           END
-         ) > 0
-       GROUP BY kw
-       ORDER BY value DESC
-       LIMIT 80`,
+    // ── 5. 词云：在每条探针「回答原文」中统计词库词的非重叠出现次数（与 answer_tokens 分词解耦）──
+    const answerForCloudRes = await pool.query(
+      `SELECT ga.raw_json
+       FROM geo_health_analysis a
+       INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
+       WHERE a.task_id = $1 AND a.error_text IS NULL`,
       [taskId]
     );
 
-    // 词云：仅返回在分词/旧摘要聚合中实际命中次数>0的词库词；不出现无数据词，避免误导。
     const lexPolarityRules = await loadSentimentLexiconPolarityRules(pool, userId);
     const lexEntries = [
       ...lexPolarityRules.negative.map((k) => ({ keyword: k, polarity: 'negative' })),
@@ -547,19 +584,7 @@ router.get('/geo-health-report', async (req, res) => {
       ...lexPolarityRules.neutral.map((k) => ({ keyword: k, polarity: 'neutral' })),
     ];
 
-    const lexHitCount = new Map();
-    for (const r of kwRes.rows) {
-      for (const e of lexEntries) {
-        if (sentimentPolarityFromLexicon(r.name, {
-          negative: e.polarity === 'negative' ? [e.keyword] : [],
-          positive: e.polarity === 'positive' ? [e.keyword] : [],
-          neutral: e.polarity === 'neutral' ? [e.keyword] : [],
-        }) === e.polarity) {
-          lexHitCount.set(e.keyword, (lexHitCount.get(e.keyword) || 0) + (r.value || 0));
-          break; // 一个分词只计入第一个命中的词库词，避免重复加权
-        }
-      }
-    }
+    const lexHitCount = aggregateLexiconHitsFromProbeAnswers(answerForCloudRes.rows, lexEntries);
 
     const hitPositive = [...lexHitCount.values()].filter((v) => v > 0);
     const hitMax = hitPositive.length ? Math.max(...hitPositive, 1) : 1;
@@ -643,6 +668,8 @@ router.get('/geo-health-report', async (req, res) => {
       brandMentionRate,
       industryMentionRate,
       openMentionTotal,
+      openQuestionCount,
+      keywordTypeLabels,
       modelVisibilityCards,
       intentPaths,
       platforms,
@@ -662,6 +689,232 @@ router.get('/geo-health-report', async (req, res) => {
   } catch (err) {
     console.error('[geo-health-report]', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 词云来源明细：每条「探针回答原文 × 词库词」命中一行，支持分页与内容模糊筛选（q）
+ */
+router.get('/geo-health-report/sentiment-sources', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.query.taskId ?? ''), 10);
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize ?? '10'), 10) || 10));
+    const q = String(req.query.q ?? '').trim();
+
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId 查询参数' });
+    }
+
+    const own = await pool.query(
+      `SELECT 1 FROM geo_health_task t
+       WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
+         AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)`,
+      [taskId, userId]
+    );
+    if (!own.rows.length) {
+      return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
+    }
+
+    const answerRes = await pool.query(
+      `SELECT a.task_id, a.question_id, ga.raw_json
+       FROM geo_health_analysis a
+       INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
+       WHERE a.task_id = $1 AND a.error_text IS NULL
+       ORDER BY a.question_id ASC, a.id ASC`,
+      [taskId]
+    );
+
+    const lexPolarityRules = await loadSentimentLexiconPolarityRules(pool, userId);
+    const lexEntries = [
+      ...lexPolarityRules.negative.map((k) => ({ keyword: k, polarity: 'negative' })),
+      ...lexPolarityRules.positive.map((k) => ({ keyword: k, polarity: 'positive' })),
+      ...lexPolarityRules.neutral.map((k) => ({ keyword: k, polarity: 'neutral' })),
+    ];
+
+    const allRows = buildSentimentSourceDetailRows(answerRes.rows, lexEntries);
+
+    let filtered = allRows;
+    if (q) {
+      const ql = q.toLowerCase();
+      filtered = allRows.filter((r) => {
+        const hay = `${r.taskId} ${r.questionId} ${r.answerText} ${r.keyword}`.toLowerCase();
+        return hay.includes(ql);
+      });
+    }
+
+    const total = filtered.length;
+    const start = (page - 1) * pageSize;
+    const list = filtered.slice(start, start + pageSize);
+
+    return res.json({
+      success: true,
+      list,
+      total,
+      page,
+      pageSize,
+    });
+  } catch (err) {
+    console.error('[geo-health-report/sentiment-sources]', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 底层信源溯源穿透：每条入库信源一行，支持分页与内容模糊筛选（q）
+ */
+router.get('/geo-health-report/source-articles', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.query.taskId ?? ''), 10);
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize ?? '10'), 10) || 10));
+    const q = String(req.query.q ?? '').trim();
+
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId 查询参数' });
+    }
+
+    const own = await pool.query(
+      `SELECT 1 FROM geo_health_task t
+       WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
+         AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)`,
+      [taskId, userId]
+    );
+    if (!own.rows.length) {
+      return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
+    }
+
+    const artRes = await pool.query(
+      `SELECT ga.url, ga.title, ga.source_category,
+              COALESCE(NULLIF(trim(gq.question), ''), '') AS question_text
+       FROM geo_health_article ga
+       LEFT JOIN geo_health_question gq
+         ON gq.id = ga.question_id AND gq.task_id = ga.task_id
+       WHERE ga.task_id = $1
+       ORDER BY ga.question_id ASC, ga.url ASC`,
+      [taskId]
+    );
+
+    const allRows = artRes.rows.map((r) => {
+      const categoryLabel = sourceCategoryLabelZh(r.source_category);
+      const questionText = String(r.question_text || '').trim() || '—';
+      return {
+        url: r.url || '',
+        title: r.title || '',
+        sourceCategory: String(r.source_category || '').trim(),
+        categoryLabel,
+        questionText,
+      };
+    });
+
+    let filtered = allRows;
+    if (q) {
+      const ql = q.toLowerCase();
+      filtered = allRows.filter((r) => {
+        const hay = `${r.url} ${r.title} ${r.categoryLabel} ${r.questionText}`.toLowerCase();
+        return hay.includes(ql);
+      });
+    }
+
+    const total = filtered.length;
+    const start = (page - 1) * pageSize;
+    const list = filtered.slice(start, start + pageSize);
+
+    return res.json({
+      success: true,
+      list,
+      total,
+      page,
+      pageSize,
+    });
+  } catch (err) {
+    console.error('[geo-health-report/source-articles]', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 本次任务全部「题目 × 模型」探针结果：题干 + 回答原文（与二次分析取数口径一致）
+ */
+router.get('/geo-health-report/task-qa', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.query.taskId ?? ''), 10);
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId 查询参数' });
+    }
+
+    const own = await pool.query(
+      `SELECT 1 FROM geo_health_task t
+       WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
+         AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)`,
+      [taskId, userId]
+    );
+    if (!own.rows.length) {
+      return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
+    }
+
+    const qRes = await pool.query(
+      `SELECT gq.id AS question_id,
+              gq.question,
+              gq.question_type,
+              COALESCE(NULLIF(trim(d.data_value), ''), gq.question_type) AS question_type_label,
+              ga.model_name,
+              ga.raw_json,
+              ga.error_text
+       FROM geo_health_question gq
+       LEFT JOIN sys_dict d
+         ON d.dict_type = 'keyword_type'
+        AND d.data_key = gq.question_type
+        AND COALESCE(d.enabled, true) = true
+       LEFT JOIN geo_health_answer ga
+         ON ga.question_id = gq.id AND ga.task_id = gq.task_id
+       WHERE gq.task_id = $1
+       ORDER BY gq.id ASC, ga.model_name ASC NULLS LAST`,
+      [taskId]
+    );
+
+    const idOrder = [];
+    const seen = new Set();
+    for (const r of qRes.rows) {
+      const qid = r.question_id;
+      if (!seen.has(qid)) {
+        seen.add(qid);
+        idOrder.push(qid);
+      }
+    }
+    const idToIndex = new Map(idOrder.map((id, i) => [id, i + 1]));
+
+    const rows = [];
+    const modelSet = new Set();
+    for (const r of qRes.rows) {
+      const modelName = r.model_name != null ? String(r.model_name).trim() : '';
+      if (modelName) modelSet.add(modelName);
+      rows.push({
+        questionIndex: idToIndex.get(r.question_id) || 0,
+        questionId: r.question_id,
+        question: String(r.question || '').trim(),
+        questionType: String(r.question_type || '').trim(),
+        questionTypeLabel: String(r.question_type_label || r.question_type || '').trim(),
+        modelName,
+        answerText: modelName ? extractProbeAnswerText(r.raw_json) : '',
+        errorText: r.error_text ? String(r.error_text).trim() : '',
+      });
+    }
+
+    const modelNames = [...modelSet].sort((a, b) => a.localeCompare(b));
+
+    return res.json({
+      success: true,
+      taskId,
+      modelNames,
+      rows,
+    });
+  } catch (err) {
+    console.error('[geo-health-report/task-qa]', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -841,6 +1094,8 @@ function emptyReport({ brandName, brandDomain }) {
     brandMentionRate: 0,
     industryMentionRate: 0,
     openMentionTotal: 0,
+    openQuestionCount: 0,
+    keywordTypeLabels: {},
     modelVisibilityCards: [],
     intentPaths: [],
     platforms: [],

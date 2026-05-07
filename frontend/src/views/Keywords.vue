@@ -22,6 +22,9 @@
         <el-button type="danger" class="ml-0" :disabled="selectedKeywords.length === 0" @click="handleBatchDelete">
           批量删除 ({{ selectedKeywords.length }})
         </el-button>
+        <el-button type="danger" plain class="ml-0" :disabled="loading" @click="handleClearAll">
+          清空全部
+        </el-button>
         <el-button type="primary" class="ml-0" @click="handleAdd">
           <el-icon class="mr-1"><Plus /></el-icon>
           添加词
@@ -44,7 +47,7 @@
       <el-table-column prop="keyword" label="关键词" />
       <el-table-column prop="type" label="类型" width="120">
         <template #default="{ row }">
-          <el-tag :type="getTypeColor(row.type)" @click="cycleType(row)" style="cursor:pointer">
+          <el-tag :type="getTypeColor(row.type)">
             {{ keywordTypeLabel(row.type) }}
           </el-tag>
         </template>
@@ -55,9 +58,14 @@
       <el-table-column label="操作" width="150" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-          <el-popconfirm title="确定删除吗?" @confirm="handleDelete(row.id)">
+          <el-popconfirm
+            title="确定删除该关键词吗？"
+            confirm-button-text="删除"
+            cancel-button-text="取消"
+            @confirm="() => handleDelete(row.id)"
+          >
             <template #reference>
-              <el-button link type="danger" size="small">删除</el-button>
+              <el-button link type="danger" size="small" @click.stop>删除</el-button>
             </template>
           </el-popconfirm>
         </template>
@@ -101,13 +109,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   fetchDictList,
   normalizeKeywordTypeKey,
-  keywordTypeKeysOrdered,
   KEYWORD_TYPE_DEFAULT_OPTIONS
 } from '../utils/sysDict.js'
 import { unwrapListPayload, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
@@ -115,6 +122,14 @@ import { formatZhCnDateTime } from '../utils/dateTime.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
+
+const readJsonSafe = async (res) => {
+  try {
+    return await res.json()
+  } catch {
+    return {}
+  }
+}
 
 const router = useRouter()
 
@@ -135,7 +150,6 @@ const isEdit = ref(false)
 const form = ref({ keyword: '', type: '' })
 
 const keywordTypeOptions = ref([])
-const keywordTypeKeys = computed(() => keywordTypeKeysOrdered(keywordTypeOptions.value))
 
 const KEYWORD_TYPE_FALLBACK_LABEL = {
   '01': '品牌词',
@@ -214,26 +228,6 @@ const formatDate = (dateStr) => {
   return formatZhCnDateTime(dateStr)
 }
 
-const cycleType = async (row) => {
-  const typeOrder = keywordTypeKeys.value
-  if (!typeOrder.length) return
-  const current = normalizeKeywordTypeKey(row.type)
-  let currentIndex = typeOrder.indexOf(current)
-  if (currentIndex < 0) currentIndex = -1
-  const nextIndex = (currentIndex + 1) % typeOrder.length
-  const newType = typeOrder[nextIndex]
-  const userId = 'default_user'
-  try {
-    await fetch(`${API_BASE_URL}/api/keywords/${row.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
-      body: JSON.stringify({ type: newType })
-    })
-    await loadData()
-  } catch { /* silent */ }
-  ElMessage.success('类型已更新')
-}
-
 const handleSelectionChange = (selection) => {
   selectedKeywords.value = selection.map(s => {
     return tableData.value.find(t => t.id === s.id)
@@ -264,26 +258,90 @@ const handleEdit = (row) => {
 }
 
 const handleDelete = async (id) => {
+  if (id == null || id === '') {
+    ElMessage.error('无法删除：缺少记录 ID')
+    return
+  }
   const userId = 'default_user'
   try {
-    await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } })
-  } catch { /* silent */ }
-  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
-  ElMessage.success('删除成功')
+    const res = await fetch(`${API_BASE_URL}/api/keywords/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': userId },
+    })
+    const data = await readJsonSafe(res)
+    if (!res.ok) {
+      ElMessage.error(data.error || `删除失败（${res.status}）`)
+      return
+    }
+    ElMessage.success('删除成功')
+    selectedKeywords.value = []
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
+  } catch {
+    ElMessage.error('删除失败，请检查网络')
+  }
 }
 
 const handleBatchDelete = async () => {
   if (selectedKeywords.value.length === 0) return
   const userId = 'default_user'
-  const ids = selectedKeywords.value.map(r => r.id)
-  for (const id of ids) {
-    try {
-      await fetch(`${API_BASE_URL}/api/keywords/${id}`, { method: 'DELETE', headers: { 'x-user-id': userId } })
-    } catch { /* silent */ }
+  const ids = selectedKeywords.value.map((r) => r.id).filter((x) => x != null && x !== '')
+  if (ids.length === 0) {
+    ElMessage.warning('所选记录无效')
+    return
   }
-  await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
-  ElMessage.success(`已删除 ${ids.length} 条记录`)
-  selectedKeywords.value = []
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/keywords/batch-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      body: JSON.stringify({ ids }),
+    })
+    const data = await readJsonSafe(res)
+    if (!res.ok || !data.ok) {
+      ElMessage.error(data.error || '批量删除失败')
+      return
+    }
+    const n = Number(data.deletedCount) || 0
+    ElMessage.success(n > 0 ? `已删除 ${n} 条` : '没有可删除的记录')
+    selectedKeywords.value = []
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
+  } catch {
+    ElMessage.error('批量删除失败，请检查网络')
+  }
+}
+
+const handleClearAll = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将删除关键词库中的全部关键词（含当前列表筛选条件之外的所有词），且不可恢复。确定继续？',
+      '清空全部',
+      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  const userId = 'default_user'
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/keywords/delete-all`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+    })
+    const data = await readJsonSafe(res)
+    if (!res.ok || !data.ok) {
+      ElMessage.error(data.error || '清空失败')
+      return
+    }
+    const n = Number(data.deletedCount) || 0
+    if (n === 0) {
+      ElMessage.info('当前没有关键词')
+    } else {
+      ElMessage.success(`已清空 ${n} 条关键词`)
+    }
+    page.value = 1
+    selectedKeywords.value = []
+    await loadData()
+  } catch {
+    ElMessage.error('清空失败，请检查网络')
+  }
 }
 
 const handleSubmit = async () => {

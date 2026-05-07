@@ -680,6 +680,46 @@ app.post('/api/questions/delete-matching', async (req, res) => {
   }
 })
 
+const KEYWORDS_BATCH_DELETE_MAX = 20000
+/** 关键词：批量删除（须注册在通用 `/api/keywords/:id` 之前） */
+app.post('/api/keywords/batch-delete', async (req, res) => {
+  try {
+    await ensureTable('keywords')
+    const raw = req.body?.ids
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: '请提供非空 ids 数组' })
+    }
+    const ids = [
+      ...new Set(
+        raw
+          .map((x) => parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ]
+    if (ids.length === 0) return res.status(400).json({ error: 'ids 中无有效正整数' })
+    if (ids.length > KEYWORDS_BATCH_DELETE_MAX) {
+      return res.status(400).json({ error: `单次最多删除 ${KEYWORDS_BATCH_DELETE_MAX} 条` })
+    }
+    const r = await pool.query(`DELETE FROM keywords WHERE id = ANY($1::int[]) RETURNING id`, [ids])
+    res.json({ ok: true, deletedCount: r.rowCount })
+  } catch (err) {
+    console.error('keywords batch-delete:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/** 关键词：清空全部（确认由前端完成） */
+app.post('/api/keywords/delete-all', async (req, res) => {
+  try {
+    await ensureTable('keywords')
+    const r = await pool.query(`DELETE FROM keywords RETURNING id`)
+    res.json({ ok: true, deletedCount: r.rowCount })
+  } catch (err) {
+    console.error('keywords delete-all:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 tables.forEach(table => {
   const routePath = `/api/${table}`;
   const hyphenPath = `/api/${table.replace(/_/g, '-')}`;

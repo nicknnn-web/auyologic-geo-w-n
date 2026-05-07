@@ -325,7 +325,7 @@
               <span class="mention-rate-title">品牌提及率 vs 行业基准线</span>
               <span class="mention-rate-tag">MENTION RATE</span>
             </div>
-            <span class="mention-rate-scope">仅开放式提问（场景词 / 功能词 / 价格词）· 共 {{ openMentionTotal }} 题</span>
+            <span class="mention-rate-scope">仅开放式提问（场景词 / 功能词 / 价格词）· 共 {{ openQuestionCount }} 题</span>
           </div>
 
           <div class="mention-rate-rows">
@@ -517,7 +517,7 @@
                         v-for="qt in (selectedCompetitor.questionTypes || [])"
                         :key="qt"
                         class="competitor-detail-tag tag-question"
-                      >{{ QUESTION_TYPE_LABEL[qt] || qt }}</span>
+                      >{{ questionTypeLabelMap[qt] || qt }}</span>
                       <span v-if="!(selectedCompetitor.questionTypes || []).length" class="comp-no-data">—</span>
                     </div>
                   </div>
@@ -630,9 +630,21 @@
       <!-- ===== 区块4：AI 语义情绪（词云）===== -->
       <div class="section-emotion">
         <div class="section-title-row sentiment-head-row">
-          <div class="section-title-row">
-            <h2 class="section-title">AI 语义情绪关联</h2>
-            <span class="section-tag">SENTIMENT ANALYSIS</span>
+          <div class="sentiment-head-left">
+            <div class="section-title-row">
+              <h2 class="section-title">AI 语义情绪关联</h2>
+              <span class="section-tag">SENTIMENT ANALYSIS</span>
+            </div>
+            <el-button
+              v-if="reportTaskId"
+              type="primary"
+              link
+              size="small"
+              class="sentiment-source-detail-btn"
+              @click="openSentimentSourceDialog"
+            >
+              来源明细
+            </el-button>
           </div>
 
           <div class="sentiment-legend-inline">
@@ -651,7 +663,7 @@
           <template #default>
 
         <div v-if="!sentimentWordCloud.length" class="sentiment-cloud-empty sentiment-cloud-empty-standalone">
-          本任务分词结果中尚未命中任何情感词库词。完成检测与答案分析后自动统计；仅展示有出现次数的词；可在「情感词管理」中调整词表后重新跑分析。
+          本任务回答原文中尚未命中任何情感词库词。完成检测与答案分析后自动统计；仅展示有出现次数的词；可在「情感词管理」中调整词表后重新跑分析。若有数据可点击「来源明细」查看每条回答与词库词的对应次数。
         </div>
         <div v-else class="sentiment-cloud-card">
           <div
@@ -671,9 +683,23 @@
       </div>
       <!-- ===== 区块4：信源权威穿透 ===== -->
       <div class="section-authority">
-        <div class="section-title-row">
-          <h2 class="section-title">底层信源溯源穿透</h2>
-          <span class="section-tag">SOURCE TRACEABILITY</span>
+        <div class="section-title-row sentiment-head-row">
+          <div class="sentiment-head-left">
+            <div class="section-title-row">
+              <h2 class="section-title">底层信源溯源穿透</h2>
+              <span class="section-tag">SOURCE TRACEABILITY</span>
+            </div>
+            <el-button
+              v-if="reportTaskId"
+              type="primary"
+              link
+              size="small"
+              class="sentiment-source-detail-btn"
+              @click="openSourceArticleDialog"
+            >
+              来源明细
+            </el-button>
+          </div>
         </div>
 
         <el-skeleton :loading="loading" animated>
@@ -865,6 +891,14 @@
         <el-button size="large" @click="goBack" plain>
           <el-icon class="mr-1"><ArrowLeft /></el-icon>返回
         </el-button>
+        <el-button
+          v-if="reportTaskId"
+          size="large"
+          plain
+          @click="openTaskQaDialog"
+        >
+          <el-icon class="mr-1"><Document /></el-icon>提问与回答
+        </el-button>
         <el-button size="large" @click="exportReport" type="primary">
           <el-icon class="mr-1"><Download /></el-icon>导出报告
         </el-button>
@@ -1023,6 +1057,230 @@
       </div>
     </template>
   </el-dialog>
+
+  <!-- 词云来源：探针回答原文 × 词库词命中明细 -->
+  <el-dialog
+    v-model="sentimentSourceDialogVisible"
+    class="sentiment-source-dialog"
+    
+    align-center
+    destroy-on-close
+    title="词云数据来源明细"
+    @open="onSentimentSourceDialogOpen"
+  >
+    <div class="sentiment-source-dialog-body-inner">
+      <div class="sentiment-source-toolbar">
+        <el-input
+          v-model="sentimentSourceSearch"
+          clearable
+          placeholder="模糊搜索：任务 id、问题 id、回答原文、情绪词…"
+          class="sentiment-source-search"
+          @clear="onSentimentSourceSearchCommit"
+          @keyup.enter="onSentimentSourceSearchCommit"
+        />
+        <el-button type="primary" @click="onSentimentSourceSearchCommit">搜索</el-button>
+      </div>
+      <div class="sentiment-source-table-scroll">
+        <el-table
+          v-loading="sentimentSourceLoading"
+          :data="sentimentSourceList"
+          stripe
+          size="small"
+          class="sentiment-source-table"
+          table-layout="fixed"
+          style="width: 100%"
+          empty-text="暂无命中记录（或当前筛选无结果）"
+        >
+          <el-table-column prop="taskId" label="任务 id" width="68" align="center" />
+          <el-table-column prop="questionId" label="问题 id" width="76" align="center" />
+          <el-table-column label="回答原文" min-width="120">
+        <template #default="{ row }">
+          <el-tooltip
+            placement="top-start"
+            :show-after="320"
+            :max-width="520"
+            effect="dark"
+            popper-class="sentiment-answer-tooltip-popper"
+          >
+            <template #content>
+              <div class="sent-tooltip-body">
+                <template
+                  v-for="(part, idx) in splitAnswerHighlightParts(row.answerText, row.keyword)"
+                  :key="`tip-${row.questionId}-${row.keyword}-${idx}`"
+                >
+                  <mark v-if="part.type === 'hit'" class="sent-lex-hit sent-lex-hit--tooltip">{{ part.value }}</mark>
+                  <span v-else>{{ part.value }}</span>
+                </template>
+              </div>
+            </template>
+            <div class="answer-text-cell answer-text-cell--clip">
+              <template
+                v-for="(part, idx) in splitAnswerHighlightParts(row.answerText, row.keyword)"
+                :key="`cell-${row.questionId}-${row.keyword}-${idx}`"
+              >
+                <mark v-if="part.type === 'hit'" class="sent-lex-hit">{{ part.value }}</mark>
+                <span v-else>{{ part.value }}</span>
+              </template>
+            </div>
+          </el-tooltip>
+        </template>
+      </el-table-column>
+      <el-table-column label="用于切分的情绪词汇" width="128" align="center">
+        <template #default="{ row }">
+          <span class="sentiment-keyword-pill" :title="row.keyword">{{ row.keyword }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="切分出的数量" width="88" align="center">
+        <template #default="{ row }">
+          <span class="sentiment-count-badge">{{ row.count }}</span>
+        </template>
+      </el-table-column>
+      </el-table>
+      </div>
+      <div class="sentiment-source-pagination">
+        <el-pagination
+          :current-page="sentimentSourcePage"
+          :page-size="sentimentSourcePageSize"
+          :total="sentimentSourceTotal"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          small
+          background
+          @current-change="onSentimentSourcePageChange"
+          @size-change="onSentimentSourcePageSizeChange"
+        />
+      </div>
+    </div>
+  </el-dialog>
+
+  <!-- 底层信源：入库 URL × 分类 × 对应探针问题 -->
+  <el-dialog
+    v-model="sourceArticleDialogVisible"
+    class="sentiment-source-dialog"
+    align-center
+    destroy-on-close
+    title="信源来源明细"
+    @open="onSourceArticleDialogOpen"
+  >
+    <div class="sentiment-source-dialog-body-inner">
+      <div class="sentiment-source-toolbar">
+        <el-input
+          v-model="sourceArticleSearch"
+          clearable
+          placeholder="模糊搜索：URL、类型标签、来源问题、标题…"
+          class="sentiment-source-search"
+          @clear="onSourceArticleSearchCommit"
+          @keyup.enter="onSourceArticleSearchCommit"
+        />
+        <el-button type="primary" @click="onSourceArticleSearchCommit">搜索</el-button>
+      </div>
+      <div class="sentiment-source-table-scroll">
+        <el-table
+          v-loading="sourceArticleLoading"
+          :data="sourceArticleList"
+          stripe
+          size="small"
+          class="sentiment-source-table"
+          table-layout="fixed"
+          style="width: 100%"
+          empty-text="暂无信源记录（或当前筛选无结果）"
+        >
+          <el-table-column label="来源 URL" min-width="200">
+            <template #default="{ row }">
+              <template v-if="isHttpUrl(row.url)">
+                <el-link
+                  type="primary"
+                  :href="row.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="source-article-url-link"
+                >
+                  {{ row.url }}
+                </el-link>
+              </template>
+              <span v-else class="source-article-url-plain" :title="row.url">{{ row.url || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="被归类的类型标签" width="132" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" :type="sourceCategoryTagType(row.sourceCategory)" effect="light">
+                {{ row.categoryLabel }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="questionText" label="来源问题" min-width="160" show-overflow-tooltip />
+        </el-table>
+      </div>
+      <div class="sentiment-source-pagination">
+        <el-pagination
+          :current-page="sourceArticlePage"
+          :page-size="sourceArticlePageSize"
+          :total="sourceArticleTotal"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          small
+          background
+          @current-change="onSourceArticlePageChange"
+          @size-change="onSourceArticlePageSizeChange"
+        />
+      </div>
+    </div>
+  </el-dialog>
+
+  <el-dialog
+    v-model="taskQaDialogVisible"
+    class="sentiment-source-dialog task-qa-dialog"
+    align-center
+    destroy-on-close
+    title="本次任务提问与回答"
+    @open="onTaskQaDialogOpen"
+  >
+    <div class="task-qa-dialog-body">
+      <div class="task-qa-toolbar">
+        <span class="task-qa-hint">按模型分栏查看；导出为 Excel，每个模型单独工作表（含题干与回答原文）。</span>
+        <el-button type="primary" :disabled="!taskQaRows.length" @click="exportTaskQaToXlsx">
+          <el-icon class="mr-1"><Download /></el-icon>导出 Excel
+        </el-button>
+      </div>
+      <el-alert
+        v-if="taskQaPendingQuestions.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="task-qa-alert"
+        :title="`有 ${taskQaPendingQuestions.length} 道题尚未写入探针回答（可能失败或未跑完）`"
+      />
+      <div v-loading="taskQaLoading" class="task-qa-tabs-wrap">
+        <el-tabs v-if="taskQaModelNames.length" v-model="taskQaActiveModel" type="card" class="task-qa-tabs">
+          <el-tab-pane
+            v-for="m in taskQaModelNames"
+            :key="m"
+            :label="taskQaModelTabLabel(m)"
+            :name="m"
+          >
+            <div class="sentiment-source-table-scroll task-qa-table-scroll">
+              <el-table
+                :data="taskQaRowsForModel(m)"
+                stripe
+                size="small"
+                class="sentiment-source-table"
+                table-layout="fixed"
+                style="width: 100%"
+                empty-text="暂无该模型数据"
+              >
+                <el-table-column prop="questionIndex" label="序号" width="56" align="center" />
+                <el-table-column prop="questionTypeLabel" label="问题类型" width="100" show-overflow-tooltip />
+                <el-table-column prop="question" label="问题原文" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="answerText" label="回答原文" min-width="220" show-overflow-tooltip />
+                <el-table-column prop="errorText" label="探针错误" width="120" show-overflow-tooltip />
+              </el-table>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+        <el-empty v-else-if="!taskQaLoading" description="暂无探针回答数据" />
+      </div>
+    </div>
+  </el-dialog>
 </div>
 </template>
 
@@ -1038,6 +1296,8 @@ import {
   MagicStick, Loading, Rank
 } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
+import { KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import * as XLSX from 'xlsx'
 
 // ===== 体检模型选择弹窗状态 =====
 /** 生成体检报告时探针模型勾选上限（与后端 geo-brand/tasks 一致） */
@@ -1466,6 +1726,8 @@ const kpiDenominator = ref('open_only')
 const brandMentionRate = ref(0)
 const industryMentionRate = ref(0)
 const openMentionTotal = ref(0)
+/** 本次任务：inferCategory=open 的题目数（与副标题「共 N 题」及后端 openQuestionCount 一致） */
+const openQuestionCount = ref(0)
 
 /** 本卡 AI 语境状态文案（getBrandStatus；exposure/penalty 与工具类中 exposurePenaltyFromKpi 一致） */
 const aiContextForModel = (m) =>
@@ -1635,16 +1897,31 @@ const platforms = ref([
 ])
 
 /**
- * 默认 5 行（在无数据时占位；有数据时由后端覆盖）
- * key 对齐 sys_dict.keyword_type 的 data_key
+ * 默认矩阵行（骨架；接口返回 intentPaths / keywordTypeLabels 后以服务端 + sys_dict 为准）
+ * category 与后端「无字典文案时」标准 data_key 语义一致
  */
-const intentPaths = ref([
-  { key: '01', label: '核心词', type: '品牌词',   category: 'brand' },
-  { key: '03', label: '场景词', type: '需求/场景', category: 'open' },
-  { key: '02', label: '对比词', type: '竞品对比',  category: 'compare' },
-  { key: '04', label: '功能词', type: '产品功能',  category: 'open' },
-  { key: '05', label: '价格词', type: '决策/价格', category: 'open' },
-])
+const DEFAULT_INTENT_CATEGORY_BY_KEY = {
+  '01': 'brand',
+  '02': 'open',
+  '03': 'open',
+  '04': 'brand',
+  '05': 'compare',
+  '06': 'open',
+}
+
+const intentPaths = ref(
+  KEYWORD_TYPE_DEFAULT_OPTIONS.map((o) => ({
+    key: o.dataKey,
+    label: o.dataValue,
+    type: o.dataValue,
+    category: DEFAULT_INTENT_CATEGORY_BY_KEY[o.dataKey] || 'open',
+  }))
+)
+
+/** data_key → 展示名（竞品详情等）；加载报告后与接口 keywordTypeLabels 合并 */
+const questionTypeLabelMap = ref(
+  Object.fromEntries(KEYWORD_TYPE_DEFAULT_OPTIONS.map((o) => [o.dataKey, o.dataValue]))
+)
 
 const matrixData = ref({})
 
@@ -1783,10 +2060,6 @@ const competitorAdvantage = computed(() => {
 })
 
 // ===== 竞品帕累托图 =====
-const QUESTION_TYPE_LABEL = {
-  '01': '核心词', '02': '对比词', '03': '场景词', '04': '功能词', '05': '价格词',
-}
-
 const MODEL_NAME_LABEL = {
   'deepseek-chat':     'DeepSeek',
   'deepseek-reasoner': 'DeepSeek R1',
@@ -1798,6 +2071,146 @@ const MODEL_NAME_LABEL = {
   'glm-4-flash':       'GLM Flash',
   'gpt-4o-mini':       'GPT-4o mini',
   'gpt-4o':            'GPT-4o',
+}
+
+function taskQaModelTabLabel(m) {
+  return MODEL_NAME_LABEL[String(m)] || String(m || '')
+}
+
+const taskQaDialogVisible = ref(false)
+const taskQaLoading = ref(false)
+const taskQaRows = ref([])
+const taskQaModelNames = ref([])
+const taskQaActiveModel = ref('')
+
+const taskQaPendingQuestions = computed(() => {
+  const out = []
+  const seen = new Set()
+  for (const r of taskQaRows.value) {
+    if (r.modelName) continue
+    const qid = r.questionId
+    if (qid == null || seen.has(qid)) continue
+    seen.add(qid)
+    out.push(r)
+  }
+  return out
+})
+
+function taskQaRowsForModel(m) {
+  const mm = String(m || '')
+  return taskQaRows.value
+    .filter((r) => String(r.modelName || '') === mm)
+    .sort((a, b) => (a.questionIndex || 0) - (b.questionIndex || 0))
+}
+
+async function loadTaskQaData() {
+  const tid = reportTaskId.value
+  if (tid == null) return
+  taskQaLoading.value = true
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/geo-health-report/task-qa?taskId=${encodeURIComponent(String(tid))}`,
+      { headers: { 'x-user-id': 'default_user' } }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    if (!data.success) throw new Error(data.error || '加载失败')
+    taskQaRows.value = Array.isArray(data.rows) ? data.rows : []
+    taskQaModelNames.value = Array.isArray(data.modelNames) ? data.modelNames : []
+    if (taskQaModelNames.value.length) {
+      if (!taskQaModelNames.value.includes(taskQaActiveModel.value)) {
+        taskQaActiveModel.value = taskQaModelNames.value[0]
+      }
+    } else {
+      taskQaActiveModel.value = ''
+    }
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载提问与回答失败：' + (e.message || String(e)))
+    taskQaRows.value = []
+    taskQaModelNames.value = []
+    taskQaActiveModel.value = ''
+  } finally {
+    taskQaLoading.value = false
+  }
+}
+
+function openTaskQaDialog() {
+  if (!reportTaskId.value) {
+    ElMessage.warning('缺少任务 ID')
+    return
+  }
+  taskQaDialogVisible.value = true
+}
+
+function onTaskQaDialogOpen() {
+  taskQaActiveModel.value = ''
+  loadTaskQaData()
+}
+
+function exportTaskQaToXlsx() {
+  if (!taskQaRows.value.length) {
+    ElMessage.warning('暂无数据')
+    return
+  }
+  const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
+  const wb = XLSX.utils.book_new()
+  const used = new Set()
+  const sanitize = (raw) => {
+    let s = String(raw || '模型')
+      .replace(/[\[\]:*?/\\]/g, '_')
+      .trim()
+      .slice(0, 31)
+    return s || '模型'
+  }
+  const allocName = (base) => {
+    let n = sanitize(base)
+    let i = 1
+    while (used.has(n)) {
+      n = sanitize(`${String(base).slice(0, 22)}_${i++}`)
+    }
+    used.add(n)
+    return n
+  }
+  for (const model of taskQaModelNames.value) {
+    const subset = taskQaRowsForModel(model)
+    const sheetName = allocName(taskQaModelTabLabel(model))
+    const aoa = [
+      ['序号', '问题类型', '问题原文', '回答原文', '探针错误'],
+      ...subset.map((r) => [
+        r.questionIndex,
+        r.questionTypeLabel || r.questionType || '',
+        r.question || '',
+        r.answerText || '',
+        r.errorText || '',
+      ]),
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 6 }, { wch: 14 }, { wch: 48 }, { wch: 72 }, { wch: 26 }]
+    XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  }
+  if (taskQaPendingQuestions.value.length) {
+    const sheetName = allocName('未探针题目')
+    const aoa = [
+      ['序号', '问题类型', '问题原文', '说明'],
+      ...taskQaPendingQuestions.value.map((r) => [
+        r.questionIndex,
+        r.questionTypeLabel || r.questionType || '',
+        r.question || '',
+        '该题无探针回答记录',
+      ]),
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 6 }, { wch: 14 }, { wch: 56 }, { wch: 24 }]
+    XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  }
+  if (!wb.SheetNames.length) {
+    ElMessage.warning('没有可导出的工作表')
+    return
+  }
+  const fn = `品牌体检问答_task${reportTaskId.value}_${stamp}.xlsx`
+  XLSX.writeFile(wb, fn)
+  ElMessage.success('已导出 ' + fn)
 }
 
 const competitorParetoChartDom = ref(null)
@@ -1998,6 +2411,193 @@ const syncCompetitorParetoChart = () => {
 const competitorMentions = ref([])
 /** 当前报告对应的 geo_health_task.id（用于按需拉竞品详情） */
 const reportTaskId = ref(null)
+
+/** 词云来源明细弹窗 */
+const sentimentSourceDialogVisible = ref(false)
+const sentimentSourceLoading = ref(false)
+const sentimentSourceList = ref([])
+const sentimentSourceTotal = ref(0)
+const sentimentSourcePage = ref(1)
+const sentimentSourcePageSize = ref(10)
+const sentimentSourceSearch = ref('')
+
+async function loadSentimentSources() {
+  const tid = reportTaskId.value
+  if (tid == null) return
+  sentimentSourceLoading.value = true
+  try {
+    const params = new URLSearchParams({
+      taskId: String(tid),
+      page: String(sentimentSourcePage.value),
+      pageSize: String(sentimentSourcePageSize.value),
+    })
+    const q = sentimentSourceSearch.value.trim()
+    if (q) params.set('q', q)
+    const res = await fetch(
+      `${API_BASE_URL}/api/geo-health-report/sentiment-sources?${params.toString()}`,
+      { headers: { 'x-user-id': 'default_user' } }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    if (!data.success) throw new Error(data.error || '加载失败')
+    sentimentSourceList.value = Array.isArray(data.list) ? data.list : []
+    sentimentSourceTotal.value = data.total ?? 0
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载词云来源失败：' + (e.message || String(e)))
+    sentimentSourceList.value = []
+    sentimentSourceTotal.value = 0
+  } finally {
+    sentimentSourceLoading.value = false
+  }
+}
+
+function openSentimentSourceDialog() {
+  if (!reportTaskId.value) {
+    ElMessage.warning('缺少任务 ID')
+    return
+  }
+  sentimentSourceDialogVisible.value = true
+}
+
+function onSentimentSourceDialogOpen() {
+  sentimentSourcePage.value = 1
+  sentimentSourceSearch.value = ''
+  loadSentimentSources()
+}
+
+function onSentimentSourceSearchCommit() {
+  sentimentSourcePage.value = 1
+  loadSentimentSources()
+}
+
+function onSentimentSourcePageChange(p) {
+  sentimentSourcePage.value = p
+  loadSentimentSources()
+}
+
+function onSentimentSourcePageSizeChange(sz) {
+  sentimentSourcePageSize.value = sz
+  sentimentSourcePage.value = 1
+  loadSentimentSources()
+}
+
+/** 仅 http(s) 在前端展示为可点击外链（hash: 等占位不当作链接） */
+function isHttpUrl(u) {
+  return /^https?:\/\//i.test(String(u ?? '').trim())
+}
+
+function sourceCategoryTagType(sourceCategory) {
+  const k = String(sourceCategory ?? '').trim()
+  if (k === 'authority_media') return 'success'
+  if (k === 'industry_vertical') return 'info'
+  if (k === 'official_media') return 'warning'
+  if (k === 'ugc_community') return 'danger'
+  return ''
+}
+
+/** 信源入库明细弹窗（与词云来源明细同一套分页 / 搜索交互） */
+const sourceArticleDialogVisible = ref(false)
+const sourceArticleLoading = ref(false)
+const sourceArticleList = ref([])
+const sourceArticleTotal = ref(0)
+const sourceArticlePage = ref(1)
+const sourceArticlePageSize = ref(10)
+const sourceArticleSearch = ref('')
+
+async function loadSourceArticles() {
+  const tid = reportTaskId.value
+  if (tid == null) return
+  sourceArticleLoading.value = true
+  try {
+    const params = new URLSearchParams({
+      taskId: String(tid),
+      page: String(sourceArticlePage.value),
+      pageSize: String(sourceArticlePageSize.value),
+    })
+    const q = sourceArticleSearch.value.trim()
+    if (q) params.set('q', q)
+    const res = await fetch(
+      `${API_BASE_URL}/api/geo-health-report/source-articles?${params.toString()}`,
+      { headers: { 'x-user-id': 'default_user' } }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+    if (!data.success) throw new Error(data.error || '加载失败')
+    sourceArticleList.value = Array.isArray(data.list) ? data.list : []
+    sourceArticleTotal.value = data.total ?? 0
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载信源明细失败：' + (e.message || String(e)))
+    sourceArticleList.value = []
+    sourceArticleTotal.value = 0
+  } finally {
+    sourceArticleLoading.value = false
+  }
+}
+
+function openSourceArticleDialog() {
+  if (!reportTaskId.value) {
+    ElMessage.warning('缺少任务 ID')
+    return
+  }
+  sourceArticleDialogVisible.value = true
+}
+
+function onSourceArticleDialogOpen() {
+  sourceArticlePage.value = 1
+  sourceArticleSearch.value = ''
+  loadSourceArticles()
+}
+
+function onSourceArticleSearchCommit() {
+  sourceArticlePage.value = 1
+  loadSourceArticles()
+}
+
+function onSourceArticlePageChange(p) {
+  sourceArticlePage.value = p
+  loadSourceArticles()
+}
+
+function onSourceArticlePageSizeChange(sz) {
+  sourceArticlePageSize.value = sz
+  sourceArticlePage.value = 1
+  loadSourceArticles()
+}
+
+/**
+ * 与后端 countLexiconPhraseInText 一致：词库含拉丁字母则大小写不敏感；非重叠分段，供原文高亮。
+ */
+function splitAnswerHighlightParts(answerText, keyword) {
+  const text = String(answerText ?? '')
+  const needle = String(keyword ?? '').trim()
+  if (!needle) return [{ type: 'text', value: text }]
+  const useCi = /[a-z]/i.test(needle)
+  const pat = useCi ? needle.toLowerCase() : needle
+  const parts = []
+  let pos = 0
+  while (pos <= text.length) {
+    let foundAt = -1
+    if (useCi) {
+      const sub = text.slice(pos).toLowerCase()
+      const rel = sub.indexOf(pat)
+      foundAt = rel === -1 ? -1 : pos + rel
+    } else {
+      foundAt = text.indexOf(needle, pos)
+    }
+    if (foundAt === -1) {
+      if (pos < text.length) parts.push({ type: 'text', value: text.slice(pos) })
+      break
+    }
+    if (foundAt > pos) parts.push({ type: 'text', value: text.slice(pos, foundAt) })
+    const segLen = needle.length
+    parts.push({ type: 'hit', value: text.slice(foundAt, foundAt + segLen) })
+    pos = foundAt + segLen
+  }
+  return parts.length ? parts : [{ type: 'text', value: text }]
+}
+
 const competitorDetailLoading = ref(false)
 let competitorDetailAbortController = null
 
@@ -2325,7 +2925,7 @@ const sentimentSummary = computed(() => {
   const pos = list.filter((w) => w.polarity === 'positive').length
   const neg = list.filter((w) => w.polarity === 'negative').length
   const neu = list.length - pos - neg
-  return `词云基于检测摘要：正面词约 ${pos} 个、中性 ${neu} 个、负面/警示 ${neg} 个；建议结合「智能诊断」优先处理负面触发场景。`
+  return `词云基于探针回答原文：按词库词在原文中的非重叠出现次数统计；正面约 ${pos} 个、中性 ${neu} 个、负面/警示 ${neg} 个；建议结合「智能诊断」优先处理负面触发场景。`
 })
 
 /** 与右侧「(pct%)」一致：占全部竞品提及次数合计的比例 */
@@ -2515,6 +3115,13 @@ const loadHealthReport = async () => {
     brandMentionRate.value    = data.brandMentionRate    ?? 0
     industryMentionRate.value = data.industryMentionRate ?? 0
     openMentionTotal.value    = data.openMentionTotal    ?? 0
+    openQuestionCount.value   = data.openQuestionCount   ?? 0
+    if (data.keywordTypeLabels && typeof data.keywordTypeLabels === 'object') {
+      questionTypeLabelMap.value = {
+        ...questionTypeLabelMap.value,
+        ...data.keywordTypeLabels,
+      }
+    }
 
     // 填充矩阵
     if (data.matrixData) matrixData.value = data.matrixData
@@ -4479,6 +5086,17 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
+.sentiment-head-left {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.sentiment-source-detail-btn {
+  padding-left: 0;
+}
+
 .sentiment-title-group {
   display: flex;
   flex-direction: column;
@@ -4540,6 +5158,261 @@ onUnmounted(() => {
   width: 100%;
   height: min(320px, 42vw);
   min-height: 240px;
+}
+
+.sentiment-source-dialog :deep(.el-dialog) {
+  width: min(860px, calc(100vw - 20px)) !important;
+  max-width: calc(100vw - 12px);
+  max-height: min(88vh, calc(100dvh - 20px));
+  margin: 4vh auto !important;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.12);
+  box-sizing: border-box;
+}
+
+.sentiment-source-dialog :deep(.el-dialog__header) {
+  flex-shrink: 0;
+  padding: 14px 16px 12px;
+  margin-right: 0;
+  border-bottom: 1px solid #ebeef5;
+  background: linear-gradient(180deg, #fafbfc 0%, #fff 100%);
+}
+
+.sentiment-source-dialog :deep(.el-dialog__title) {
+  font-size: 15px;
+  font-weight: 700;
+  color: #303133;
+  letter-spacing: 0.02em;
+}
+
+.sentiment-source-dialog :deep(.el-dialog__body) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px 12px 12px;
+  background: #f9fafb;
+  box-sizing: border-box;
+}
+
+.sentiment-source-dialog-body-inner {
+  display: flex;
+  flex-direction: column;
+  max-height: min(calc(88vh - 120px), calc(100dvh - 140px));
+  min-height: 0;
+  gap: 0;
+}
+
+.sentiment-source-table-scroll {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 10px;
+}
+
+.sentiment-source-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.sentiment-source-toolbar .sentiment-source-search {
+  flex: 1;
+  min-width: min(200px, 100%);
+}
+
+.sentiment-source-search :deep(.el-input__wrapper) {
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px #e4e7ed inset;
+}
+
+.sentiment-source-search :deep(.el-input__wrapper):hover {
+  box-shadow: 0 0 0 1px #c0c4cc inset;
+}
+
+.sentiment-source-table {
+  width: 100%;
+}
+
+.sentiment-source-table :deep(.el-table) {
+  --el-table-border-color: #e8eaed;
+  --el-table-header-bg-color: transparent;
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 12px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.sentiment-source-table :deep(table) {
+  table-layout: fixed;
+  width: 100% !important;
+}
+
+.sentiment-source-table :deep(.el-table__inner-wrapper::before) {
+  display: none;
+}
+
+.sentiment-source-table :deep(.el-table__header-wrapper th.el-table__cell) {
+  background: linear-gradient(180deg, #f4f6f9 0%, #eceff4 100%);
+  color: #606266;
+  font-weight: 600;
+  font-size: 11px;
+  padding: 8px 6px;
+  border-bottom: 1px solid #e4e7ed;
+}
+
+.sentiment-source-table :deep(.el-table__body .el-table__cell) {
+  padding: 8px 6px;
+  vertical-align: top;
+}
+
+.sentiment-source-table :deep(.el-table__row--striped td) {
+  background: #fafbfd !important;
+}
+
+.sentiment-source-table :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background-color: #f0f7ff !important;
+}
+
+.answer-text-cell {
+  line-height: 1.5;
+  color: #303133;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.answer-text-cell--clip {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: default;
+}
+
+.sent-lex-hit {
+  display: inline;
+  margin: 0 1px;
+  padding: 1px 5px 2px;
+  border-radius: 5px;
+  font-weight: 600;
+  color: #5c4300;
+  background: linear-gradient(105deg, #ffe9a3 0%, #ffd54f 45%, #ffca28 100%);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.sentiment-keyword-pill {
+  display: inline-block;
+  max-width: 112px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #5c6bc0;
+  background: linear-gradient(135deg, rgba(92, 107, 192, 0.12), rgba(126, 87, 194, 0.1));
+  border: 1px solid rgba(92, 107, 192, 0.28);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.sentiment-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #1565c0;
+  background: rgba(25, 118, 210, 0.1);
+  border: 1px solid rgba(25, 118, 210, 0.22);
+}
+
+.sentiment-source-pagination {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 4px;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.sentiment-source-pagination :deep(.el-pagination) {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 6px;
+  width: 100%;
+}
+
+/* 信源明细：长 URL 换行，避免撑破表格 */
+.source-article-url-link {
+  word-break: break-all;
+  white-space: normal;
+  line-height: 1.45;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.source-article-url-plain {
+  font-size: 12px;
+  color: #606266;
+  word-break: break-all;
+  line-height: 1.45;
+}
+
+.task-qa-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.task-qa-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.task-qa-hint {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
+  flex: 1;
+  min-width: 200px;
+}
+
+.task-qa-alert {
+  margin: 0;
+}
+
+.task-qa-tabs-wrap {
+  min-height: 200px;
+}
+
+.task-qa-tabs :deep(.el-tabs__header) {
+  margin-bottom: 8px;
+}
+
+.task-qa-table-scroll {
+  max-height: min(52vh, 520px);
 }
 
 .sentiment-summary-below {
@@ -5171,5 +6044,24 @@ onUnmounted(() => {
   word-break: break-word;
   display: block;
   box-sizing: border-box;
+}
+
+/* 词云来源：悬停全文（挂载 body） */
+.sentiment-answer-tooltip-popper {
+  max-width: min(520px, calc(100vw - 24px)) !important;
+}
+.sentiment-answer-tooltip-popper .sent-tooltip-body {
+  line-height: 1.65;
+  font-size: 13px;
+  color: #eceff1;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.sentiment-answer-tooltip-popper .sent-lex-hit--tooltip {
+  color: #4a3700;
+  background: linear-gradient(105deg, #ffe082 0%, #ffca28 100%);
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-weight: 700;
 }
 </style>

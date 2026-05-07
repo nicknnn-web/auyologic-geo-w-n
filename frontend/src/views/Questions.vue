@@ -56,6 +56,17 @@
           清空全部
         </el-button>
         <el-button
+          type="primary"
+          plain
+          class="ml-0"
+          :loading="exportQuestionsLoading"
+          :disabled="total === 0 || listLoading || mutationLoading"
+          @click="handleExportQuestions"
+        >
+          <el-icon class="mr-1"><Download /></el-icon>
+          导出列表
+        </el-button>
+        <el-button
           type="warning"
           class="ml-0"
           :disabled="mutationLoading"
@@ -106,7 +117,7 @@
       </el-table-column>
       <el-table-column prop="keywordType" label="关键词类型" width="120">
         <template #default="{ row }">
-          <el-tag :type="getTypeColor(row.keywordType)" @click.stop="cycleKeywordType(row)" style="cursor:pointer">
+          <el-tag :type="getTypeColor(row.keywordType)">
             {{ keywordTypeLabel(row.keywordType) }}
           </el-tag>
         </template>
@@ -231,7 +242,7 @@
     >
       <div class="flex items-center mb-2" style="gap:8px;flex-wrap:wrap;">
         <span class="text-sm text-gray-500">
-          共 {{ generatedQuestions.length }} 条，按类型分组排序，勾选后点「确定入库」保存到问题库
+          共 {{ generatedQuestions.length }} 条，按类型分组排序；<strong>点击问题内容可修改</strong>，勾选后点「确定入库」保存到问题库
         </span>
         <span class="ml-auto text-sm" style="color:#409eff;">
           已选 {{ geoSelectedGenerated.length }} / {{ generatedQuestions.length }}
@@ -267,7 +278,30 @@
             <el-tag :type="getTypeColor(row.typeKey)">{{ keywordTypeLabel(row.typeKey) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="question" label="问题内容" />
+        <el-table-column label="问题内容" min-width="320">
+          <template #default="{ row }">
+            <div class="geo-q-edit-cell">
+              <textarea
+                v-if="geoQuestionEditingId === row.id"
+                ref="geoQuestionEditInputRef"
+                v-model="geoQuestionEditDraft"
+                class="geo-q-edit-textarea"
+                rows="2"
+                @blur="commitGeoQuestionEdit"
+                @keydown.escape.prevent="cancelGeoQuestionEdit"
+              />
+              <span
+                v-else
+                class="geo-q-edit-text"
+                role="button"
+                tabindex="0"
+                title="点击编辑"
+                @click="startGeoQuestionEdit(row)"
+                @keydown.enter.prevent="startGeoQuestionEdit(row)"
+              >{{ row.question }}</span>
+            </div>
+          </template>
+        </el-table-column>
       </el-table>
       <template #footer>
         <el-button @click="geoResultDialogVisible = false" :disabled="geoSaving">取消</el-button>
@@ -286,11 +320,10 @@
 import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, MagicStick, SortUp, SortDown, Rank, Delete, Promotion } from '@element-plus/icons-vue'
+import { Plus, MagicStick, SortUp, SortDown, Rank, Delete, Promotion, Download } from '@element-plus/icons-vue'
 import {
   fetchDictList,
   normalizeKeywordTypeKey,
-  keywordTypeKeysOrdered,
   KEYWORD_TYPE_DEFAULT_OPTIONS
 } from '../utils/sysDict.js'
 import {
@@ -301,7 +334,12 @@ import {
 } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
-import { buildBusinessTermsPrompt, buildGeoQuestionPrompt } from '../prompts/index.js'
+import {
+  buildBusinessTermsPrompt,
+  buildGeoQuestionPrompt,
+  buildGeoKeywordAnchoredPrompt,
+} from '../prompts/index.js'
+import * as XLSX from 'xlsx'
 
 const route = useRoute()
 const router = useRouter()
@@ -350,9 +388,9 @@ const form = ref({ question: '', keywordType: '' })
 const filterKeywordType = ref('')
 const filterStatus = ref('')
 const selectedRows = ref([])
+const exportQuestionsLoading = ref(false)
 
 const keywordTypeOptions = ref([])
-const keywordTypeKeys = computed(() => keywordTypeKeysOrdered(keywordTypeOptions.value))
 
 const KEYWORD_TYPE_FALLBACK_LABEL = {
   '01': '品牌词',
@@ -379,7 +417,6 @@ const loadKeywordTypeDict = async () => {
   keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
 }
 
-// 加载数据（服务端分页 + 筛选；已审核总数由接口 approvedTotal 提供）
 const loadData = async () => {
   const userId = 'default_user'
   listLoading.value = true
@@ -410,6 +447,55 @@ const loadData = async () => {
     ElMessage.error('加载问题列表失败，请检查网络')
   } finally {
     listLoading.value = false
+  }
+}
+
+const buildQuestionsListExportUrl = (p, ps) => {
+  const qs = new URLSearchParams({
+    page: String(p),
+    pageSize: String(ps),
+  })
+  if (filterKeywordType.value) qs.set('keywordType', filterKeywordType.value)
+  if (filterStatus.value) qs.set('status', filterStatus.value)
+  return `${API_BASE_URL}/api/questions?${qs}`
+}
+
+const handleExportQuestions = async () => {
+  exportQuestionsLoading.value = true
+  try {
+    const userId = 'default_user'
+    const rows = await fetchAllPages(buildQuestionsListExportUrl, {
+      pageSize: 100,
+      maxPages: 200,
+      fetchOptions: { headers: { 'x-user-id': userId } },
+    })
+    if (!rows.length) {
+      ElMessage.warning('当前筛选下没有可导出的数据')
+      return
+    }
+    const aoa = [
+      ['序号', '问题内容', '关键词类型', '来源关键词', '状态', '创建时间'],
+      ...rows.map((row, i) => [
+        i + 1,
+        row.question || '',
+        keywordTypeLabel(row.keywordType),
+        row.sourceKeyword || '',
+        row.status || '',
+        formatDate(row.createdAt),
+      ]),
+    ]
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [{ wch: 6 }, { wch: 56 }, { wch: 14 }, { wch: 16 }, { wch: 10 }, { wch: 20 }]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, '拓展问题')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-')
+    XLSX.writeFile(wb, `拓展问题_${stamp}.xlsx`)
+    ElMessage.success(`已导出 ${rows.length} 条`)
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('导出失败：' + (e.message || String(e)))
+  } finally {
+    exportQuestionsLoading.value = false
   }
 }
 
@@ -453,7 +539,6 @@ const analyzeEnterpriseProfileForQuestions = async (name, industry, description)
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
         prompt,
         temperature: 0.3,
         max_tokens: 300
@@ -488,182 +573,239 @@ const getEnterpriseSettings = () => {
   }
 }
 
-// 从企业描述中提取核心业务词（如SEO、GEO、数字化营销等专业术语）
-// 这些词是企业自己描述的核心业务，生成问题时必须纳入考虑
-const extractCoreBusinessWordsForQuestions = (description) => {
-  if (!description) return []
-
-  const coreWords = []
-
-  // 常见业务词根（包含SEO、GEO等专业术语）
-  const businessPatterns = [
-    // SEO/GEO相关
-    'SEO', 'GEO', '搜索优化', '搜索引擎优化', '谷歌优化', '百度优化',
-    // 数字化营销
-    '数字化', '数字化营销', '营销', '品牌营销', '内容营销', '社交媒体营销',
-    '广告投放', 'SEM', '信息流', '竞价', '投放',
-    // 技术服务
-    '软件开发', '小程序', 'APP开发', '网站开发', '系统开发', 'API',
-    'SaaS', '云服务', '云计算', 'AI', '人工智能', '大数据', '数据分析',
-    // 电商
-    '电商', '跨境电商', 'Shopify', '独立站', '亚马逊', '跨境出海',
-    // 其他专业术语
-    '企业服务', 'B2B', 'B2C', 'SaaS平台', '管理系统', 'CRM', 'ERP',
-    '品牌策划', '文案', '创意', '设计', 'VI', 'logo', '视觉设计'
-  ]
-
-  // 检查描述中是否包含这些业务词
-  const descUpper = description.toUpperCase()
-  businessPatterns.forEach(pattern => {
-    if (descUpper.includes(pattern.toUpperCase())) {
-      coreWords.push(pattern)
+/** 解析 AI 返回中的 JSON（含 ```json 围栏）— GEO 弹窗与关键词批量生成共用 */
+const extractGeoJson = (text) => {
+  const raw = String(text || '').trim()
+  if (!raw) return null
+  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const candidate = fenceMatch ? fenceMatch[1].trim() : raw
+  try {
+    return JSON.parse(candidate)
+  } catch {
+    const s = candidate.indexOf('{')
+    const e = candidate.lastIndexOf('}')
+    if (s >= 0 && e > s) {
+      try { return JSON.parse(candidate.slice(s, e + 1)) } catch { return null }
     }
-  })
-
-  return coreWords
-}
-
-// 构建企业上下文（给 AI 用的企业画像）
-// 关键改进：明确提取并传递企业描述中的核心业务词 + 搜索结果
-const buildEnterpriseContext = (searchKeywords = []) => {
-  const enterprise = getEnterpriseSettings()
-  const name = enterprise.name || '未设置'
-  const industry = enterprise.industry || '未设置'
-  const description = enterprise.description || '未设置'
-  const targetAudience = enterprise.targetAudience || '未设置'
-
-  // 【关键改进】从企业描述中提取核心业务词
-  const coreBusinessWords = extractCoreBusinessWordsForQuestions(description)
-  const coreBusinessWordsStr = coreBusinessWords.length > 0
-    ? `\n【核心业务词】（企业描述中明确提到的业务，必须在生成的问题中体现）：${coreBusinessWords.join('、')}`
-    : ''
-
-  // 【新增】加入Web搜索识别的企业业务关键词
-  const searchKeywordsStr = searchKeywords && searchKeywords.length > 0
-    ? `\n【搜索识别业务】（通过搜索识别出的企业业务范围）：${searchKeywords.join('、')}`
-    : ''
-
-  // 业务范围根据行业默认
-  const businessScopeMap = {
-    '科技/互联网': '提供软件开发、互联网服务、技术解决方案',
-    '消费品/零售': '生产和销售消费品，提供零售服务',
-    '金融/保险': '提供金融理财、保险服务',
-    '医疗/健康': '提供医疗、健康管理服务',
-    '教育/培训': '提供教育培训服务',
-    '制造业': '从事产品制造和生产',
-    '房地产/建筑': '房地产开发和建筑服务',
-    '传媒/文化': '提供媒体、文化创意服务',
-    '其他': '提供专业服务'
+    return null
   }
-  const businessScope = businessScopeMap[industry] || '提供专业服务'
-
-  return `【企业背景】
-企业名称：${name}
-所属行业：${industry}
-品牌描述：${description}
-目标受众：${targetAudience}
-业务范围：${businessScope}${coreBusinessWordsStr}${searchKeywordsStr}
-
-请基于以上企业信息生成问题，问题要符合该企业的业务范围。生成的问题中必须体现【核心业务词】和【搜索识别业务】中提到的业务。`
 }
 
-// 根据关键词类型生成对应的 prompt（加入企业上下文 + 去重 + 真实搜索行为）
-const generatePrompt = (keyword, type, enterpriseContext, existingQuestions = []) => {
-  // 构建已有问题约束
-  const existingConstraint = existingQuestions.length > 0
-    ? `\n已有类似问题（请生成不同角度的，不要重复）：
-${existingQuestions.join('、')}`
-    : ''
+/** 从数据库 users（default_user）读取企业信息，对应 GET /api/settings */
+const fetchEnterpriseSettingsFromDb = async () => {
+  const res = await fetch(`${API_BASE_URL}/api/settings`)
+  if (!res.ok) return null
+  return res.json()
+}
 
-  // 真实用户搜索特点约束
-  const searchBehaviorConstraint = `
-\n\n真实用户搜索行为特点（必须遵守）：
-- 口语化、碎片化（如"xxx怎么样"、"xxx好用吗"）
-- 带情绪（如"xxx坑不坑"、"xxx值不值"）
-- 决策导向（如"xxx和xxx哪个好"、"xxx推荐"）
-- 问题简短（不超过20字）
-- 禁止写成正式提问（如"请分析xxx的优缺点"）`
+// deepseek 返回的 type → questions.keyword_type（data_key）：优先按当前 sys_dict 文案匹配，失败再用下列兜底（与库内 keyword_type 一致，价格词为 05）
+const GEO_TYPE_TO_ZH = {
+  brand: '品牌',
+  product: '产品',
+  scenario: '场景',
+  enterprise: '企业',
+  price: '价格',
+}
+const GEO_TYPE_FALLBACK_KEY = {
+  brand: '01',
+  product: '02',
+  scenario: '03',
+  enterprise: '04',
+  price: '05',
+}
 
-  const k = normalizeKeywordTypeKey(type) || '02'
-  const typePrompts = {
-    '01': `请基于以下企业背景，针对品牌"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+const resolveGeoTypeToDictKey = (geoType) => {
+  const t = String(geoType || '').toLowerCase().trim()
+  const zh = GEO_TYPE_TO_ZH[t]
+  if (zh) {
+    const row = keywordTypeOptions.value.find((x) => String(x.dataValue || '').includes(zh))
+    if (row?.dataKey) return row.dataKey
+  }
+  return GEO_TYPE_FALLBACK_KEY[t] || '02'
+}
 
-要求：
-- 生成5个不同角度的问题
-- 每个不超过20字
-- 侧重：品牌口碑、对比推荐、用户体验
-直接输出问题列表，每行一个，不要编号。`,
+/** 将模型返回的 sourceKeyword 与库内词对齐，避免轻微差异导致整批被丢弃 */
+const resolveKeywordEntryFromAiRow = (skRaw, questionText, keywordEntries) => {
+  const sk = String(skRaw || '')
+    .trim()
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+  const q = String(questionText || '').trim()
+  if (!keywordEntries.length) return null
 
-    '02': `请基于以下企业背景，针对产品/服务"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
+  let entry = keywordEntries.find((e) => e.keyword === sk)
+  if (entry) return { entry, sourceKeyword: entry.keyword }
 
-要求：
-- 生成5个不同角度的问题
-- 每个不超过20字
-- 侧重：产品性能、选购决策、真实体验
-直接输出问题列表，每行一个，不要编号。`,
+  const norm = (s) =>
+    String(s || '')
+      .trim()
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, '')
 
-    '03': `请基于以下企业背景，针对使用场景"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
-
-要求：
-- 生成5个不同角度的问题
-- 每个不超过20字
-- 侧重：场景需求、痛点解决、用户决策
-直接输出问题列表，每行一个，不要编号。`,
-
-    '04': `请基于以下企业背景，针对企业/公司"${keyword}"生成用户真实会搜索的问题。${enterpriseContext}${existingConstraint}${searchBehaviorConstraint}
-
-要求：
-- 生成5个不同角度的问题
-- 每个不超过20字
-- 侧重：公司口碑、行业评价、实力对比、专业程度
-- 注意：公司名可能包含"科技"、"集团"等后缀，生成问题时要自然融入，不能写成"XX这个牌子"、"XX牌子怎么样"
-直接输出问题列表，每行一个，不要编号。`
+  const nsk = norm(sk)
+  if (nsk) {
+    entry = keywordEntries.find((e) => norm(e.keyword) === nsk)
+    if (entry) return { entry, sourceKeyword: entry.keyword }
   }
 
-  return typePrompts[k] || typePrompts['02']
+  const byLen = [...keywordEntries].sort((a, b) => b.keyword.length - a.keyword.length)
+  entry = byLen.find((e) => e.keyword && q.includes(e.keyword))
+  if (entry) return { entry, sourceKeyword: entry.keyword }
+
+  if (sk) {
+    entry = byLen.find(
+      (e) =>
+        e.keyword &&
+        (sk.includes(e.keyword) || e.keyword.includes(sk)) &&
+        Math.abs(sk.length - e.keyword.length) <= 6
+    )
+    if (entry) return { entry, sourceKeyword: entry.keyword }
+  }
+
+  return null
 }
 
-// 调用 AI 代理生成问题（加入企业上下文 + 搜索结果 + 去重）
-const generateQuestionsFromAI = async (keyword, type, searchKeywords = []) => {
+/**
+ * 关键词库批量生成：使用 prompts/geoQuestionGenerate.js 的 GEO 约束 + 关键词锚点（JSON）。
+ * 企业信息不完整时返回 null（已提示用户）。
+ */
+const generateKeywordBatchFromGeoPrompt = async (keywords, searchKeywords = []) => {
+  const local = getEnterpriseSettings()
+  let brand = String(local.name || '').trim()
+  let product = String(local.description || '').trim()
+  let targetCustomer = String(local.targetAudience || '').trim()
+  try {
+    const row = await fetchEnterpriseSettingsFromDb()
+    if (row) {
+      brand = String(row.company_name ?? brand).trim() || brand
+      product = String(row.description ?? product).trim() || product
+      targetCustomer = String(row.target_audience ?? row.targetAudience ?? targetCustomer).trim() || targetCustomer
+    }
+  } catch (e) {
+    console.warn('[关键词生成] 读取企业信息失败，使用本地缓存', e)
+  }
+
+  if (!brand || !product || !targetCustomer) {
+    ElMessage.warning(
+      '请先在「企业信息」中填写品牌名称、品牌描述（作为产品/服务说明）和目标受众，再生成问题'
+    )
+    return null
+  }
+
+  const keywordEntries = keywords
+    .map((kw) => ({
+      keyword: String(kw.keyword || '').trim(),
+      typeKey: normalizeKeywordTypeKey(kw.type) || '02',
+    }))
+    .filter((e) => e.keyword)
+
+  if (keywordEntries.length === 0) return []
+
+  const n = keywordEntries.length
+  const questionsPerKeyword = n > 14 ? Math.max(3, Math.floor(70 / n)) : 5
+
   const userId = 'default_user'
-  const allForDedupe = await fetchAllPages(
-    (p, ps) => `${API_BASE_URL}/api/questions?page=${p}&pageSize=${ps}`,
-    { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
-  )
-  const existingQuestions = allForDedupe
-    .filter((q) => q.sourceKeyword === keyword)
-    .map((q) => q.question)
+  let dedupeBlock = ''
+  try {
+    const allForDedupe = await fetchAllPages(
+      (p, ps) => `${API_BASE_URL}/api/questions?page=${p}&pageSize=${ps}`,
+      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+    )
+    const chunks = []
+    for (const { keyword } of keywordEntries) {
+      const existing = allForDedupe
+        .filter((q) => q.sourceKeyword === keyword)
+        .map((q) => q.question)
+        .filter(Boolean)
+      if (existing.length) {
+        chunks.push(`「${keyword}」已有：${existing.slice(0, 12).join('；')}`)
+      }
+    }
+    if (chunks.length) {
+      dedupeBlock = '\n【去重】勿重复或仅微调下列已有问题：\n' + chunks.join('\n')
+    }
+  } catch (e) {
+    console.warn('[关键词生成] 拉取已有问题失败，跳过去重提示', e)
+  }
 
-  // 先读取企业信息，构建上下文
-  const enterpriseContext = buildEnterpriseContext(searchKeywords)
-  const prompt = generatePrompt(keyword, type, enterpriseContext, existingQuestions)
+  const extraHints = [searchKeywords?.length ? `搜索辅助识别的业务词：${searchKeywords.join('、')}` : '', dedupeBlock]
+    .filter(Boolean)
+    .join('')
+
+  const prompt = buildGeoKeywordAnchoredPrompt({
+    brand,
+    product,
+    targetCustomer,
+    keywordEntries,
+    questionsPerKeyword,
+    extraBusinessHints: extraHints,
+  })
 
   const response = await fetch(AI_PROXY_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'deepseek-chat',
       prompt,
-      temperature: 0.7,
-      max_tokens: 500
-    })
+      temperature: 0.65,
+      max_tokens: 8192,
+    }),
   })
 
-  if (!response.ok) {
-    throw new Error(`API请求失败: ${response.status}`)
+  let data
+  try {
+    data = await response.json()
+  } catch {
+    data = {}
   }
 
-  const data = await response.json()
-  const content = data.content || ''
+  if (!response.ok) {
+    const serverMsg = String(data?.error || data?.message || '').trim()
+    throw new Error(serverMsg || `AI 请求失败（HTTP ${response.status}）`)
+  }
 
-  // 解析返回的问题列表
-  const questions = content
-    .split('\n')
-    .map(q => q.trim())
-    .filter(q => q.length > 0 && q.length <= 30)
-    .slice(0, 5) // 最多5个问题
+  const rawContent = String(data?.content ?? '').trim()
+  if (!rawContent) {
+    throw new Error(String(data?.error || '').trim() || 'AI 返回内容为空')
+  }
 
-  return questions
+  const parsed = extractGeoJson(rawContent)
+  const list = Array.isArray(parsed?.questions) ? parsed.questions : null
+
+  if (!parsed || list === null) {
+    console.warn('[关键词生成] JSON 解析失败，返回片段:', rawContent.slice(0, 240))
+    throw new Error(
+      '模型返回无法解析为合法 JSON（常见于一次生成的关键词过多、输出被截断）。请减少选中关键词数量后重试。'
+    )
+  }
+
+  const out = []
+  const seenQ = new Set()
+  for (const item of list) {
+    const q = String(item?.question || '').trim()
+    if (!q || seenQ.has(q)) continue
+    const skRaw = String(item?.sourceKeyword || '').trim()
+    const resolved = resolveKeywordEntryFromAiRow(skRaw, q, keywordEntries)
+    if (!resolved) continue
+    const { entry, sourceKeyword } = resolved
+    seenQ.add(q)
+    out.push({
+      question: q,
+      keywordType: normalizeKeywordTypeKey(entry.typeKey) || '02',
+      sourceKeyword,
+    })
+  }
+
+  if (out.length === 0 && list.length > 0) {
+    throw new Error(
+      '模型返回的问题未能与关键词对齐（sourceKeyword 与库内不一致，且正文未包含对应关键词）。请重试生成。'
+    )
+  }
+
+  if (out.length === 0) {
+    throw new Error('模型未返回任何问题条目，请稍后重试或检查大模型连接。')
+  }
+
+  return out
 }
 
 // 根据原问题生成1-5个替代表述（不硬凑，质量优先）
@@ -684,7 +826,6 @@ const generateParaphrasesFromAI = async (originalQuestion) => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'deepseek-chat',
       prompt,
       temperature: 0.7,
       max_tokens: 400
@@ -839,53 +980,65 @@ const handleAIExpand = async () => {
   let failCount = 0
 
   try {
-    // 为每个关键词生成问题（每个最多等15秒，超时跳过）
-    for (const kw of keywords) {
+    searchStatusText.value = '📝 正在按 GEO 规则批量生成问题…'
+    let batchItems
+    try {
+      batchItems = await Promise.race([
+        generateKeywordBatchFromGeoPrompt(keywords, searchKeywords),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('批量生成超时')), 120000)),
+      ])
+    } catch (error) {
+      console.error('关键词批量生成失败:', error)
+      if (route.query.keywordIds) {
+        router.replace({ path: '/questions' })
+      }
+      const msg = String(error?.message || '')
+      ElMessage.error(
+        msg.includes('超时')
+          ? '生成超时，请减少选中关键词数量后重试'
+          : msg || '生成失败，请检查网络或API配置'
+      )
+      return
+    }
+
+    if (batchItems === null) {
+      if (route.query.keywordIds) {
+        router.replace({ path: '/questions' })
+      }
+      return
+    }
+
+    if (batchItems.length === 0) {
+      if (route.query.keywordIds) {
+        router.replace({ path: '/questions' })
+      }
+      ElMessage.error('未能解析到有效问题，请稍后重试')
+      return
+    }
+
+    const userId = 'default_user'
+    for (const item of batchItems) {
       try {
-        const questions = await Promise.race([
-          generateQuestionsFromAI(
-            kw.keyword,
-            normalizeKeywordTypeKey(kw.type) || '02',
-            searchKeywords
-          ),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('单关键词生成超时')), 15000))
-        ])
-
-        if (questions.length === 0) {
+        const res = await fetch(`${API_BASE_URL}/api/questions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-id': userId,
+          },
+          body: JSON.stringify({
+            question: item.question,
+            keywordType: item.keywordType,
+            sourceKeyword: item.sourceKeyword,
+            status: '待审核',
+          }),
+        })
+        if (res.ok) {
+          successCount++
+        } else {
           failCount++
-          continue
         }
-
-        for (const q of questions) {
-          const newQuestion = {
-            question: q,
-            keywordType: normalizeKeywordTypeKey(kw.type) || '02',
-            sourceKeyword: kw.keyword,
-            status: '待审核'
-          }
-
-          const userId = 'default_user'
-          try {
-            const res = await fetch(`${API_BASE_URL}/api/questions`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-user-id': userId
-              },
-              body: JSON.stringify(newQuestion)
-            })
-            if (res.ok) {
-              successCount++
-            } else {
-              failCount++
-            }
-          } catch (e) {
-            console.warn('保存问题失败:', e)
-            failCount++
-          }
-        }
-      } catch (error) {
-        console.error(`生成关键词"${kw.keyword}"的问题失败:`, error)
+      } catch (e) {
+        console.warn('保存问题失败:', e)
         failCount++
       }
     }
@@ -897,10 +1050,9 @@ const handleAIExpand = async () => {
 
     if (successCount > 0) {
       ElMessage.success(`成功生成 ${successCount} 个问题${failCount > 0 ? `，${failCount} 个失败` : ''}`)
-      // 刷新列表，确保显示所有问题（包括之前生成的）
       await loadData()
     } else {
-      ElMessage.error('生成问题失败，请检查网络或API配置')
+      ElMessage.error('问题未能入库，请检查网络或API配置')
     }
   } finally {
     isLoading.value = false
@@ -931,35 +1083,6 @@ const cycleStatus = async (row) => {
   row.status = newStatus
   await loadData()
   ElMessage.success('状态已更新')
-}
-
-const cycleKeywordType = async (row) => {
-  const typeOrder = keywordTypeKeys.value
-  if (!typeOrder.length) return
-  const current = normalizeKeywordTypeKey(row.keywordType)
-  let currentIndex = typeOrder.indexOf(current)
-  if (currentIndex < 0) currentIndex = -1
-  const nextIndex = (currentIndex + 1) % typeOrder.length
-  const newType = typeOrder[nextIndex]
-
-  const userId = 'default_user'
-  // 同步到后端
-  try {
-    await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': userId
-      },
-      body: JSON.stringify({ keywordType: newType })
-    })
-  } catch (e) {
-    console.warn('同步到后端失败:', e)
-  }
-
-  row.keywordType = newType
-  await loadData()
-  ElMessage.success('关键词类型已更新')
 }
 
 const handleSelectionChange = (selection) => {
@@ -1149,6 +1272,43 @@ const generatedQuestions = ref([])
 const geoSelectedGenerated = ref([])
 const geoSaving = ref(false)
 
+/** GEO 结果表：问题内容点击编辑（对齐品牌体检报告「优化建议」交互） */
+const geoQuestionEditingId = ref(null)
+const geoQuestionEditDraft = ref('')
+const geoQuestionEditInputRef = ref(null)
+
+const commitGeoQuestionEdit = () => {
+  const id = geoQuestionEditingId.value
+  if (!id) return
+  const row = generatedQuestions.value.find((r) => r.id === id)
+  const next = String(geoQuestionEditDraft.value || '').trim()
+  if (row) {
+    if (!next) {
+      ElMessage.warning('问题内容不能为空')
+      geoQuestionEditDraft.value = String(row.question || '')
+    } else {
+      row.question = next
+    }
+  }
+  geoQuestionEditingId.value = null
+}
+
+const cancelGeoQuestionEdit = () => {
+  geoQuestionEditingId.value = null
+}
+
+const startGeoQuestionEdit = async (row) => {
+  if (geoQuestionEditingId.value != null) {
+    commitGeoQuestionEdit()
+  }
+  geoQuestionEditingId.value = row.id
+  geoQuestionEditDraft.value = String(row.question || '')
+  await nextTick()
+  const el = geoQuestionEditInputRef.value
+  if (el && typeof el.focus === 'function') el.focus()
+  if (el && typeof el.select === 'function') el.select()
+}
+
 // 生成问题按 typeKey 分组（用于「批量勾选某类型」按钮）
 const generatedGroups = computed(() => {
   const map = new Map()
@@ -1160,39 +1320,6 @@ const generatedGroups = computed(() => {
   }
   return Array.from(map.values())
 })
-
-// deepseek 返回的 type 到字典 keyword_type 的映射
-const GEO_TYPE_TO_ZH = {
-  brand: '品牌',
-  product: '产品',
-  scenario: '场景',
-  enterprise: '企业',
-  price: '价格',
-}
-const GEO_TYPE_FALLBACK_KEY = {
-  brand: '01',
-  product: '02',
-  scenario: '03',
-  enterprise: '04',
-  price: '06',
-}
-
-const resolveGeoTypeToDictKey = (geoType) => {
-  const t = String(geoType || '').toLowerCase().trim()
-  const zh = GEO_TYPE_TO_ZH[t]
-  if (zh) {
-    const row = keywordTypeOptions.value.find((x) => String(x.dataValue || '').includes(zh))
-    if (row?.dataKey) return row.dataKey
-  }
-  return GEO_TYPE_FALLBACK_KEY[t] || '02'
-}
-
-/** 从数据库 users（default_user）读取企业信息，对应 GET /api/settings */
-const fetchEnterpriseSettingsFromDb = async () => {
-  const res = await fetch(`${API_BASE_URL}/api/settings`)
-  if (!res.ok) return null
-  return res.json()
-}
 
 const openGeoDialog = async () => {
   geoDialogVisible.value = true
@@ -1232,23 +1359,6 @@ const openGeoDialog = async () => {
 // buildGeoPrompt 已迁至 frontend/src/prompts/geoQuestionGenerate.js（buildGeoQuestionPrompt）
 const buildGeoPrompt = buildGeoQuestionPrompt
 
-const extractGeoJson = (text) => {
-  const raw = String(text || '').trim()
-  if (!raw) return null
-  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  const candidate = fenceMatch ? fenceMatch[1].trim() : raw
-  try {
-    return JSON.parse(candidate)
-  } catch {
-    const s = candidate.indexOf('{')
-    const e = candidate.lastIndexOf('}')
-    if (s >= 0 && e > s) {
-      try { return JSON.parse(candidate.slice(s, e + 1)) } catch { return null }
-    }
-    return null
-  }
-}
-
 const submitGeoGenerate = async () => {
   const brand = (geoForm.value.brand || '').trim()
   const product = (geoForm.value.product || '').trim()
@@ -1262,6 +1372,7 @@ const submitGeoGenerate = async () => {
   // 开始新一轮生成前，先彻底清空上一次的内存数据与 el-table 选择集
   generatedQuestions.value = []
   geoSelectedGenerated.value = []
+  geoQuestionEditingId.value = null
   if (geoResultTableRef.value) {
     try { geoResultTableRef.value.clearSelection() } catch {}
   }
@@ -1271,7 +1382,6 @@ const submitGeoGenerate = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
         prompt,
         temperature: 0.7,
         max_tokens: 6000,
@@ -1332,6 +1442,7 @@ const onGeoSelectionChange = (sel) => {
 }
 
 const onGeoResultDialogClosed = () => {
+  geoQuestionEditingId.value = null
   if (geoResultTableRef.value) {
     try { geoResultTableRef.value.clearSelection() } catch {}
   }
@@ -1370,7 +1481,7 @@ const saveGeoSelected = async () => {
   try {
     for (const item of list) {
       const payload = {
-        question: item.question,
+        question: String(item.question || '').trim(),
         keywordType: item.typeKey,
         sourceKeyword,
         status: '待审核',
@@ -1404,5 +1515,41 @@ const saveGeoSelected = async () => {
 <style scoped>
 .filter-actions :deep(.el-button + .el-button) {
   margin-left: 0 !important;
+}
+
+.geo-q-edit-cell {
+  width: 100%;
+}
+.geo-q-edit-text {
+  display: block;
+  line-height: 1.55;
+  cursor: pointer;
+  color: #303133;
+  word-break: break-word;
+  min-height: 1.5em;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 6px;
+  outline: none;
+}
+.geo-q-edit-text:hover {
+  background: #f5f7fa;
+}
+.geo-q-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+  min-height: 48px;
+  color: #303133;
+}
+.geo-q-edit-textarea:focus {
+  border-color: #409eff;
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(64, 158, 255, 0.2);
 }
 </style>

@@ -184,7 +184,7 @@
               </div>
               <!-- 关键词分组 -->
               <div v-else class="kw-groups">
-                <div v-for="group in kwGroups" :key="group.type" class="kw-group">
+                <div v-for="group in kwGroups" :key="group.typeKey" class="kw-group">
                   <div class="kw-group-header">
                     <span class="kw-group-name">{{ group.type }}</span>
                     <el-checkbox
@@ -196,7 +196,7 @@
                   <div class="kw-chips">
                     <div
                       v-for="kw in group.items"
-                      :key="kw.text"
+                      :key="group.typeKey + '-' + kw.text"
                       class="kw-chip"
                       :class="{ selected: kw.selected }"
                       @click="kw.selected = !kw.selected"
@@ -281,6 +281,11 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
 import { buildCoreKeywordsPrompt } from '../prompts/index.js'
+import {
+  fetchDictList,
+  normalizeKeywordTypeKey,
+  KEYWORD_TYPE_DEFAULT_OPTIONS,
+} from '../utils/sysDict.js'
 
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
@@ -303,8 +308,24 @@ const kwSearching = ref(false)
 const kwSearchingText = ref('')
 const kwDialogVisible = ref(false)
 const kwGroups = ref([])
+/** 与关键词管理、拓展问题一致：来自 sys_dict keyword_type */
+const keywordTypeRows = ref([...KEYWORD_TYPE_DEFAULT_OPTIONS])
 
 const getUserId = () => 'default_user'
+
+const loadKeywordTypeDict = async () => {
+  try {
+    const list = await fetchDictList('keyword_type')
+    const mapped = list.map((r) => ({
+      dataKey: r.dataKey ?? r.data_key,
+      dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+      sortOrder: r.sortOrder ?? r.sort_order ?? 0,
+    }))
+    keywordTypeRows.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+  } catch {
+    keywordTypeRows.value = [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+  }
+}
 
 const loadData = async () => {
   try {
@@ -326,7 +347,10 @@ const loadData = async () => {
   }
 }
 
-onMounted(() => loadData())
+onMounted(async () => {
+  await loadData()
+  await loadKeywordTypeDict()
+})
 
 const triggerAutoSave = () => {
   clearTimeout(autoSaveTimer)
@@ -402,6 +426,92 @@ const STOP_WORDS = new Set([
   '就', '便', '则', '却', '并', '且', '或', '并', '且'
 ])
 
+/** 过滤从正文硬切出的碎片词、半句话（如「合唱团是」「上海中高」） */
+const isValidKeywordCandidate = (raw) => {
+  const s = String(raw || '').trim()
+  if (s.length < 2 || s.length > 24) return false
+  if (STOP_WORDS.has(s)) return false
+  const coreChars = (s.match(/[\u4e00-\u9fa5a-zA-Z0-9]/g) || []).length
+  if (coreChars < Math.min(s.length, 4) * 0.55) return false
+  if (/[的是了的在与被将及吗呢吧啊嘛]$/.test(s)) return false
+  if (/^(的是在了有和与为以被将该此其某这那之一及几第每很最更)/.test(s)) return false
+  if (/中高$|初小$|年级$/.test(s) && s.length <= 6) return false
+  if (s.endsWith('是') && s.length <= 5) return false
+  if (/(.)\1{3,}/.test(s)) return false
+  if (/^[啊呀哦嗯哼诶]+$/.test(s)) return false
+  return true
+}
+
+const sanitizeKeywords = (arr) => {
+  const out = []
+  const seen = new Set()
+  for (const x of arr || []) {
+    const w = String(x || '').trim()
+    if (!isValidKeywordCandidate(w)) continue
+    if (seen.has(w)) continue
+    seen.add(w)
+    out.push(w)
+  }
+  return out
+}
+
+/** 按标点切句后取短语，避免全文中滑动 2–4 字窗口产生垃圾词 */
+const extractPhrasesFromDescription = (text) => {
+  if (!text) return []
+  const parts = text.split(/[,，。;；\n、]+/).map((p) => p.trim()).filter(Boolean)
+  const out = []
+  for (const seg of parts) {
+    let t = seg.replace(/^[\d\s\-—–·.、（）()\[\]【】"'「」]+|[\s\-—–·.、（）()\[\]【】"'」]+$/g, '').trim()
+    if (t.length < 2 || t.length > 14) continue
+    if (t.length > 10) t = t.slice(0, 10)
+    if (isValidKeywordCandidate(t)) out.push(t)
+  }
+  return [...new Set(out)]
+}
+
+// 构建对比/竞品检索词（字典 对比词）
+const buildContrastKeywords = (name, industry, categoryWords) => {
+  const keywords = new Set()
+  if (name && name.length >= 2 && name.length <= 10) {
+    keywords.add(`${name}对比`)
+    keywords.add(`${name}和竞品`)
+    keywords.add(`${name}哪家好`)
+    keywords.add(`${name}选哪家`)
+    ;['哪个好', '区别', '平替', '替代品', '同行对比', '二选一'].forEach((t) => {
+      keywords.add(`${name}${t}`)
+    })
+  }
+  if (categoryWords && categoryWords[0] && categoryWords[0].length >= 2) {
+    const c = categoryWords[0]
+    keywords.add(`${c}哪个好`)
+    keywords.add(`${c}对比`)
+  }
+  if (industry && industry.length >= 2 && industry.length <= 8) {
+    keywords.add(`${industry}公司排名`)
+  }
+  return [...keywords]
+}
+
+// 构建价格/预算类检索词（字典 价格词）
+const buildPriceKeywords = (name, industry, categoryWords) => {
+  const keywords = new Set([
+    '性价比', '报价', '收费标准', '多少钱', '价位', '预算', '价格', '年费', '月费', '优惠信息', '折扣', '平价', '高端款',
+  ])
+  if (name && name.length >= 2 && name.length <= 10) {
+    keywords.add(`${name}价格`)
+    keywords.add(`${name}多少钱`)
+    keywords.add(`${name}收费标准`)
+  }
+  if (categoryWords && categoryWords[0] && categoryWords[0].length >= 2) {
+    keywords.add(`${categoryWords[0]}价格`)
+    keywords.add(`${categoryWords[0]}报价`)
+  }
+  if (industry && industry.length >= 2 && industry.length <= 8) {
+    keywords.add(`${industry}报价`)
+  }
+  return [...keywords]
+}
+
 // 行业关键词词库 - 根据行业生成相关词汇
 const INDUSTRY_KEYWORDS = {
   '科技/互联网': {
@@ -454,18 +564,6 @@ const INDUSTRY_KEYWORDS = {
   }
 }
 
-// 从文本中提取有效关键词（排除停用词）
-const extractKeywords = (text) => {
-  if (!text) return []
-  
-  // 提取2-4个字符的中文词
-  const matches = text.match(/[\u4e00-\u9fa5]{2,4}/g) || []
-  
-  // 过滤停用词和重复
-  const filtered = matches.filter(w => !STOP_WORDS.has(w))
-  return [...new Set(filtered)]
-}
-
 // 构建品牌核心词（关键词：品牌名 + 品类核心词 + 品牌相关词）
 // 侧重：用户搜索品牌时用的词
 const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [], searchKeywords = []) => {
@@ -510,8 +608,8 @@ const buildBrandKeywords = (name, industry, categoryWords, coreBusinessWords = [
 }
 
 // 构建场景需求词（关键词：使用场景 + 痛点问题 + 需求词）
-// 侧重：用户描述使用场景/问题时的搜索词
-const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [], coreBusinessWords = [], searchKeywords = []) => {
+// 侧重：用户描述使用场景/问题时的搜索词（不再使用全文 2–4 字滑动窗口，避免碎片词）
+const buildScenarioKeywords = (name, industry, scenarioWords, extractedPhrases = [], coreBusinessWords = [], searchKeywords = []) => {
   const keywords = new Set()
   
   // 1. 场景词（取前5个，差异化核心）
@@ -523,10 +621,10 @@ const buildScenarioKeywords = (name, industry, scenarioWords, extractedWords = [
     })
   }
   
-  // 2. 从描述中提取的场景相关词（取前4个）
-  if (extractedWords && extractedWords.length > 0) {
-    extractedWords.slice(0, 4).forEach(w => {
-      if (w.length >= 2 && w.length <= 6) {
+  // 2. 从简介按标点切出的短语（已过滤）
+  if (extractedPhrases && extractedPhrases.length > 0) {
+    extractedPhrases.slice(0, 5).forEach((w) => {
+      if (w.length >= 2 && w.length <= 10) {
         keywords.add(w)
       }
     })
@@ -680,14 +778,8 @@ const extractCoreBusinessWords = (description) => {
   
   // 额外提取2-4字的中文业务词（包含特定关键词根的）
   const chinesePatterns = description.match(/[\u4e00-\u9fa5]{2,4}/g) || []
-  const additionalWords = chinesePatterns.filter(w => 
-    !STOP_WORDS.has(w) && 
-    (w.includes('优化') || w.includes('推广') || w.includes('营销') || 
-     w.includes('运营') || w.includes('引流') || w.includes('获客') ||
-     w.includes('转化') || w.includes('流量') || w.includes('排名') ||
-     w.includes('出海') || w.includes('跨境') || w.includes('独立'))
-  )
-  
+  const additionalWords = chinesePatterns.filter((w) => isValidKeywordCandidate(w))
+
   // 【关键修复】如果描述中包含 GEO 或 SEO，强制添加相关词
   if (descUpper.includes('GEO')) {
     coreWords.push('GEO', '谷歌优化', 'Google优化')
@@ -712,24 +804,25 @@ const analyzeEnterpriseProfile = async (name, industry, description) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
         prompt,
         temperature: 0.3,
-        max_tokens: 500
-      })
+        max_tokens: 500,
+      }),
     })
-    
+
     if (!response.ok) return null
-    
+
     const data = await response.json()
     const content = data.content || ''
-    
-    // 解析关键词（每行一个）
-    const keywords = content
-      .split('\n')
-      .map(l => l.trim().replace(/^[0-9a-zA-Z.。、]+/, '').trim())
-      .filter(l => l.length >= 2 && l.length <= 10)
-    
+
+    // 解析关键词（每行一个），并过滤碎片词
+    const keywords = sanitizeKeywords(
+      content
+        .split('\n')
+        .map((l) => l.trim().replace(/^[0-9a-zA-Z.。、\-]+/, '').trim())
+        .filter((l) => l.length >= 2 && l.length <= 16)
+    )
+
     return keywords.length > 0 ? keywords : null
   } catch (error) {
     console.error('AI分析企业画像失败:', error)
@@ -737,52 +830,91 @@ const analyzeEnterpriseProfile = async (name, industry, description) => {
   }
 }
 
-// 关键词生成算法 - 基于奥呦GEO三类关键词体系
-// 1. 品牌核心词：用户搜索品牌时用的词（品牌名、口碑、排行榜等）
-// 2. 场景需求词：用户描述使用场景/问题的词（替代方案、解决问题）
-// 3. 产品决策词：用户在决策阶段搜索的词（对比、评测、价格）
-// 关键改进：必须从企业描述中提取核心业务词（如GEO、SEO）并纳入生成范围
-// 第二步改进：加入Web搜索提取的企业业务关键词
+// 关键词生成：按 sys_dict keyword_type 分组（品牌/产品/场景/企业/对比/价格等）
 const buildKeywordGroups = (f, searchKeywords = []) => {
   const name = f.name?.trim() || ''
   const industry = f.industry?.trim() || '其他'
   const description = f.description?.trim() || ''
-  
-  // 从描述中提取有效关键词
-  const extractedWords = extractKeywords(description)
-  
-  // 【关键改进】从企业描述中提取核心业务词（如GEO、SEO、数字化营销等）
-  // 这些是企业自己描述的业务，必须纳入关键词生成范围
+
+  const skSafe = sanitizeKeywords(searchKeywords || [])
+  const extractedPhrases = extractPhrasesFromDescription(description)
   const coreBusinessWords = extractCoreBusinessWords(description)
-  
-  // 获取行业词库
+
   const industryData = INDUSTRY_KEYWORDS[industry] || INDUSTRY_KEYWORDS['其他']
   const productDecisionWords = industryData.productDecision || []
   const scenarioWords = industryData.scenario || []
   const categoryWords = industryData.category || []
-  
-  // 【修复】三类关键词使用差异化来源，减少重叠
-  // 品牌核心词：品牌名 + 品类词 + 核心业务词
-  // 场景需求词：场景词 + 提取词 + 核心业务词
-  // 产品决策词：决策词 + 品类词 + 核心业务词
-  const brandKeywords = buildBrandKeywords(name, industry, categoryWords, coreBusinessWords, searchKeywords)
-  const scenarioKeywords = buildScenarioKeywords(name, industry, scenarioWords, extractedWords, coreBusinessWords, searchKeywords)
-  const productDecisionKeywords = buildProductDecisionKeywords(name, industry, productDecisionWords, categoryWords, coreBusinessWords, searchKeywords)
-  const enterpriseKeywords = buildEnterpriseKeywords(name, industry, searchKeywords)
-  
-  // 构建返回格式（每类独立去重，不再跨类去重）
-  const makeGroup = (keywords, type) => ({
-    type,
-    items: keywords.slice(0, 15).map(kw => ({ text: kw, selected: false })),
-    get selectedCount() { return this.items.filter(i => i.selected).length }
-  })
-  
-  return [
-    makeGroup(brandKeywords, '品牌核心词'),
-    makeGroup(scenarioKeywords, '场景需求词'),
-    makeGroup(productDecisionKeywords, '产品决策词'),
-    makeGroup(enterpriseKeywords, '企业词')
-  ]
+
+  const rows = [...(keywordTypeRows.value?.length ? keywordTypeRows.value : KEYWORD_TYPE_DEFAULT_OPTIONS)].sort(
+    (a, b) => (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0)
+  )
+
+  const makeGroup = (keywords, typeKey, typeLabel) => {
+    const list = sanitizeKeywords(keywords).slice(0, 15)
+    if (!list.length) return null
+    const tk = normalizeKeywordTypeKey(typeKey) || String(typeKey)
+    return {
+      typeKey: tk,
+      type: typeLabel || tk,
+      items: list.map((kw) => ({ text: kw, selected: false })),
+      get selectedCount() {
+        return this.items.filter((i) => i.selected).length
+      },
+    }
+  }
+
+  const groups = []
+  for (const row of rows) {
+    const rawKey = row.dataKey ?? row.data_key
+    const tk = normalizeKeywordTypeKey(rawKey) || String(rawKey)
+    const label = String(row.dataValue ?? row.data_value ?? rawKey ?? tk)
+
+    let kws = []
+    switch (tk) {
+      case '01':
+        kws = buildBrandKeywords(name, industry, categoryWords, coreBusinessWords, skSafe)
+        break
+      case '02':
+        kws = buildProductDecisionKeywords(
+          name,
+          industry,
+          productDecisionWords,
+          categoryWords,
+          coreBusinessWords,
+          skSafe
+        )
+        break
+      case '03':
+        kws = buildScenarioKeywords(name, industry, scenarioWords, extractedPhrases, coreBusinessWords, skSafe)
+        break
+      case '04':
+        kws = buildEnterpriseKeywords(name, industry, skSafe)
+        break
+      case '05':
+        if (label.includes('价格')) {
+          kws = buildPriceKeywords(name, industry, categoryWords)
+        } else {
+          kws = buildContrastKeywords(name, industry, categoryWords)
+        }
+        break
+      case '06':
+        kws = buildPriceKeywords(name, industry, categoryWords)
+        break
+      default:
+        kws = buildProductDecisionKeywords(
+          name,
+          industry,
+          productDecisionWords,
+          categoryWords,
+          coreBusinessWords,
+          skSafe
+        )
+    }
+    const g = makeGroup(kws, tk, label)
+    if (g) groups.push(g)
+  }
+
+  return groups
 }
 
 const handleGenerateKeywords = async () => {
@@ -872,21 +1004,12 @@ const confirmKeywords = async () => {
     }
   })
   
-  // 映射类型简称（用于存储）
-  const typeMap = {
-    '品牌核心词': '01',
-    '场景需求词': '03',
-    '产品决策词': '02',
-    '企业词': '04'
-  }
-  
   let count = 0
-  let errorCount = 0
-  
+
   for (const kw of uniqueSelected) {
-    const group = kwGroups.value.find(g => g.items.includes(kw))
-    const keywordType = group ? (typeMap[group.type] || group.type) : '01'
-    
+    const group = kwGroups.value.find((g) => g.items.includes(kw))
+    const keywordType = group?.typeKey ? normalizeKeywordTypeKey(group.typeKey) || group.typeKey : '02'
+
     // 同时写入后端 API 和 localStorage
     try {
       const res = await fetch(`${API_BASE_URL}/api/keywords`, {
