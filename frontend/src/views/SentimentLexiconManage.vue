@@ -5,7 +5,7 @@
         <div class="text-lg font-bold">情感词管理</div>
         <div class="text-sm text-gray-500 mt-1">
           配置 AI 语义情绪判定口径，写入品牌体检「答案分析」Prompt；分三档：正面优势、中性描述、负面警示。
-          修改后对新执行的分析生效，已入库的历史分析可重新跑任务分析以刷新。
+          每个关键词<strong>最多 4 个字</strong>（与报告词云 AI 短语上限一致）。修改后对新执行的分析生效，已入库的历史分析可重新跑任务分析以刷新。
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-2">
@@ -72,7 +72,12 @@
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑关键词' : '新增关键词'" width="480px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="关键词" prop="keyword">
-          <el-input v-model="form.keyword" placeholder="如：性价比高、翻车、避雷" maxlength="128" show-word-limit />
+          <el-input
+            v-model="form.keyword"
+            placeholder="2～4 字为宜，如：翻车、避雷、好评"
+            maxlength="4"
+            show-word-limit
+          />
         </el-form-item>
         <el-form-item label="层级" prop="tier">
           <el-select v-model="form.tier" class="w-full">
@@ -161,8 +166,22 @@ const isEdit = ref(false)
 const formRef = ref(null)
 const form = ref({ id: null, keyword: '', tier: 'positive', sortOrder: 0 })
 
+const MAX_KW = 4
+
 const rules = {
-  keyword: [{ required: true, message: '请输入关键词', trigger: 'blur' }],
+  keyword: [
+    { required: true, message: '请输入关键词', trigger: 'blur' },
+    {
+      validator: (_r, v, cb) => {
+        const s = String(v || '').trim()
+        const n = [...s].length
+        if (n < 1) cb(new Error('请输入关键词'))
+        else if (n > MAX_KW) cb(new Error(`最多 ${MAX_KW} 个字`))
+        else cb()
+      },
+      trigger: 'blur',
+    },
+  ],
   tier: [{ required: true, message: '请选择层级', trigger: 'change' }],
 }
 

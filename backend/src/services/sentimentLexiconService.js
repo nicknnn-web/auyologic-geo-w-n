@@ -2,6 +2,18 @@
  * 情感词库：供品牌体检「答案分析」Prompt 注入，统一 hasNegative / sentimentKeywords 口径。
  */
 
+/** 情感词与词云短语允许的最大 Unicode 码点数（产品：最多四字） */
+export const SENTIMENT_KEYWORD_MAX_CODEPOINTS = 4;
+
+export function sentimentKeywordCodePointLength(s) {
+  return [...String(s || '').trim()].length;
+}
+
+export function isSentimentKeywordLengthValid(s) {
+  const n = sentimentKeywordCodePointLength(s);
+  return n >= 1 && n <= SENTIMENT_KEYWORD_MAX_CODEPOINTS;
+}
+
 /**
  * @param {import('pg').Pool} pool
  * @param {string} userId
@@ -29,7 +41,7 @@ export async function loadSentimentLexiconForPrompt(pool, userId) {
   const out = { positive: [], neutral: [], negative: [] };
   for (const r of rows || []) {
     const k = String(r.keyword || '').trim();
-    if (!k) continue;
+    if (!k || !isSentimentKeywordLengthValid(k)) continue;
     const t = String(r.tier || '').toLowerCase();
     if (t === 'positive') out.positive.push(k);
     else if (t === 'neutral') out.neutral.push(k);

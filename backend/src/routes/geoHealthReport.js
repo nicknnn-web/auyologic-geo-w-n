@@ -4,7 +4,7 @@
  * GET /api/geo-health-report/source-articles?taskId=&page=&pageSize=&q=
  * GET /api/geo-health-report/task-qa?taskId=
  *
- * 从 geo_health_analysis 聚合品牌体检报告所需全部指标。
+ * 从 geo_health_analysis 聚合品牌体检报告所需全部指标；命中 geo_task_cache 且指纹未变时直接返回快照（极快）。
  * 若当前用户尚无分析数据，返回 success:true 但各指标为零（前端走"暂无数据"分支）。
  *
  * 竞品：主接口的 competitorMentions 仅含帕累托摘要；点击柱后由前端请求
@@ -19,7 +19,7 @@
  *   intentPaths[] / platforms[] / matrixData{}
  *   keywordTypeLabels{}（data_key → data_value，与 sys_dict.keyword_type 同步，供竞品详情等展示）
  *   competitorMentions[]
- *   sentimentWordCloud[]（词库词在探针回答原文中的非重叠出现次数>0；count=次数，weight=count/hitMax 供着色）
+ *   sentimentWordCloud[]（词库 + 可选 AI 从原文抽取的三类情感短语，非重叠计数合并、重合不双计；count、weight 同上；source 可选 lexicon|ai）
  *   sourceData[]
  *   diagnosticSuggestions[]（仅综合语境矩阵，无模型数据时为空数组）
  *   matrixContext：综合语境矩阵（16 档）摘要
@@ -42,6 +42,15 @@ import {
   buildMatrixContextDiagnosticItem,
 } from '../utils/contextMatrix.js';
 import { inferCategory } from '../services/geoBrandAnalysisService.js';
+import {
+  buildSentimentWordCloudMerged,
+  mergeLexiconAndAiWordCloud,
+} from '../services/sentimentWordCloudAiService.js';
+import {
+  computeGeoTaskCacheFingerprints,
+  getGeoTaskReportCache,
+  upsertGeoTaskReportCache,
+} from '../services/geoTaskCacheService.js';
 
 /** 库中尚无 keyword_type 字典时的兜底行（与 index.js 种子一致） */
 const FALLBACK_KEYWORD_TYPE_ROWS = [
@@ -259,12 +268,15 @@ router.get('/geo-health-report', async (req, res) => {
 
     // 企业信息
     const enterpriseRes = await pool.query(
-      `SELECT company_name, website, industry FROM users WHERE user_id = $1 LIMIT 1`,
+      `SELECT company_name, website, industry, description, target_audience FROM users WHERE user_id = $1 LIMIT 1`,
       [userId]
     );
     const enterprise = enterpriseRes.rows[0] || {};
     const brandName = String(enterprise.company_name || '品牌').trim();
     const brandDomain = String(enterprise.website || '').trim();
+    const industry = String(enterprise.industry || '').trim();
+    const brandDescription = String(enterprise.description || '').trim();
+    const targetAudience = String(enterprise.target_audience || '').trim();
     /** 与 geo_health_task.keyword 比对用（创建任务时写入的企业名称）；空字符串与库内空 keyword 对齐 */
     const brandKey = brandName.slice(0, 500);
 
@@ -294,6 +306,12 @@ router.get('/geo-health-report', async (req, res) => {
 
     const taskId = taskRes.rows[0].task_id;
     const checkTime = taskRes.rows[0].check_time;
+
+    const cacheFps = await computeGeoTaskCacheFingerprints(pool, taskId, userId);
+    const cachedPayload = await getGeoTaskReportCache(pool, taskId, userId, cacheFps);
+    if (cachedPayload) {
+      return res.json(cachedPayload);
+    }
 
     const kwDictRes = await pool.query(
       `SELECT data_key, data_value, sort_order
@@ -568,9 +586,9 @@ router.get('/geo-health-report', async (req, res) => {
       barTone: 'primary',
     }));
 
-    // ── 5. 词云：在每条探针「回答原文」中统计词库词的非重叠出现次数（与 answer_tokens 分词解耦）──
+    // ── 5. 词云：词库非重叠计数 + 可选 AI 从原文抽三类短语（合并、本任务已命中词库词与 AI 同 key 不双计）──
     const answerForCloudRes = await pool.query(
-      `SELECT ga.raw_json
+      `SELECT a.id AS analysis_id, ga.raw_json
        FROM geo_health_analysis a
        INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
        WHERE a.task_id = $1 AND a.error_text IS NULL`,
@@ -586,20 +604,26 @@ router.get('/geo-health-report', async (req, res) => {
 
     const lexHitCount = aggregateLexiconHitsFromProbeAnswers(answerForCloudRes.rows, lexEntries);
 
-    const hitPositive = [...lexHitCount.values()].filter((v) => v > 0);
-    const hitMax = hitPositive.length ? Math.max(...hitPositive, 1) : 1;
-    const sentimentWordCloud = lexEntries
-      .map((e) => {
-        const count = lexHitCount.get(e.keyword) || 0;
-        if (count <= 0) return null;
-        return {
-          text: e.keyword,
-          count,
-          polarity: e.polarity,
-          weight: count / hitMax,
-        };
-      })
-      .filter(Boolean);
+    let sentimentWordCloud;
+    try {
+      sentimentWordCloud = await buildSentimentWordCloudMerged(pool, userId, {
+        brandName,
+        industry,
+        brandDescription,
+        targetAudience,
+        answerRows: answerForCloudRes.rows,
+        lexEntries,
+        lexHitCount,
+      });
+    } catch (wcErr) {
+      console.error('[geo-health-report] 词云 AI 合并失败，回退为仅词库:', wcErr);
+      sentimentWordCloud = mergeLexiconAndAiWordCloud({
+        lexEntries,
+        lexHitCount,
+        answerRows: answerForCloudRes.rows,
+        aiRows: [],
+      });
+    }
 
     // ── 6. 信源（geo_health_article.source_category 四分类聚合，与探针 Prompt 枚举一致）──
     const srcArtRes = await pool.query(
@@ -645,7 +669,7 @@ router.get('/geo-health-report', async (req, res) => {
 
     const diagnosticSuggestions = matrixDiagItem ? [matrixDiagItem] : [];
 
-    res.json({
+    const payload = {
       success: true,
       brandName,
       brandDomain,
@@ -685,7 +709,18 @@ router.get('/geo-health-report', async (req, res) => {
         totalChecks,
         kpiDenominator,
       },
+    };
+
+    await upsertGeoTaskReportCache(pool, {
+      taskId,
+      userId,
+      analysisFp: cacheFps.analysisFp,
+      articleFp: cacheFps.articleFp,
+      lexiconFp: cacheFps.lexiconFp,
+      payload,
     });
+
+    res.json(payload);
   } catch (err) {
     console.error('[geo-health-report]', err);
     res.status(500).json({ success: false, error: err.message });

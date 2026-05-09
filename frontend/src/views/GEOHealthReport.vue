@@ -2925,7 +2925,7 @@ const sentimentSummary = computed(() => {
   const pos = list.filter((w) => w.polarity === 'positive').length
   const neg = list.filter((w) => w.polarity === 'negative').length
   const neu = list.length - pos - neg
-  return `词云基于探针回答原文：按词库词在原文中的非重叠出现次数统计；正面约 ${pos} 个、中性 ${neu} 个、负面/警示 ${neg} 个；建议结合「智能诊断」优先处理负面触发场景。`
+  return `词云基于探针回答原文：词库词与（若已配置大模型）AI 抽取的正/中/负短语合并统计，非重叠计数且与词库重合者不双计；正面约 ${pos} 个、中性 ${neu} 个、负面/警示 ${neg} 个；建议结合「智能诊断」优先处理负面触发场景。`
 })
 
 /** 与右侧「(pct%)」一致：占全部竞品提及次数合计的比例 */

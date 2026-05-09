@@ -5,6 +5,10 @@
 import { Router } from 'express';
 import pool from '../db.js';
 import { parsePagination, pagedResponse } from '../pagination.js';
+import {
+  isSentimentKeywordLengthValid,
+  SENTIMENT_KEYWORD_MAX_CODEPOINTS,
+} from '../services/sentimentLexiconService.js';
 
 const router = Router();
 
@@ -87,6 +91,12 @@ router.post('/sentiment-lexicon', async (req, res) => {
     const keyword = normKeyword(req.body?.keyword);
     const tier = String(req.body?.tier || '').toLowerCase();
     if (!keyword) return res.status(400).json({ success: false, error: 'keyword 不能为空' });
+    if (!isSentimentKeywordLengthValid(keyword)) {
+      return res.status(400).json({
+        success: false,
+        error: `关键词须为 1～${SENTIMENT_KEYWORD_MAX_CODEPOINTS} 个字（含英文按字符计，与词云一致）`,
+      });
+    }
     if (!['positive', 'neutral', 'negative'].includes(tier)) {
       return res.status(400).json({ success: false, error: 'tier 须为 positive | neutral | negative' });
     }
@@ -127,6 +137,12 @@ router.put('/sentiment-lexicon/:id', async (req, res) => {
     let n = 1;
     if (keyword !== null) {
       if (!keyword) return res.status(400).json({ success: false, error: 'keyword 不能为空' });
+      if (!isSentimentKeywordLengthValid(keyword)) {
+        return res.status(400).json({
+          success: false,
+          error: `关键词须为 1～${SENTIMENT_KEYWORD_MAX_CODEPOINTS} 个字（含英文按字符计，与词云一致）`,
+        });
+      }
       sets.push(`keyword = $${n++}`);
       vals.push(keyword);
     }
