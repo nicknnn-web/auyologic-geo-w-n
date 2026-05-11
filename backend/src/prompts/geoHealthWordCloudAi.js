@@ -270,21 +270,24 @@ neutral 要尽量少。
 
 ---
 
-## 【语义归一化规则】
+## 【语义小类归组（同一条回答内）】
 
-含义接近时：
+在同一 answer 的 phrases 数组中，将**含义相近、可视为同一认知簇**的短语归为一组：
+* 避免不明意义的单字切分。
+* 指定一个 **主词**：≤4 字、须为该条回答 text 中的**连续子串**，且必须在本条 phrases 中**至少出现一次**（可单独占一条 phrase）。
+* **成员**短语：填写 **clusterHead** 为主词在原文中的**字面**（与主词那条 phrase 完全一致），表示挂在该主词下。
+* **主词**条目：不要带 clusterHead 字段（或省略）。
+* **成员**条目：须带 clusterHead；phrase 与 clusterHead 不得相同。
+* 同一簇内 **polarity 必须与主词一致**。
+* 无法判断归属的短语单独输出，不要填 clusterHead。
 
-只保留“最核心、最短、最有品牌价值”的表达。
+禁止跨 answer 填 clusterHead（仅依据当前条 text）。
 
-例如：
-可靠性 → 可靠
-非常稳定 → 稳定
-比较专业 → 专业
-行业权威 → 权威
-性价比很高 → 划算
+---
 
+## 【语义归一化（簇内）】
 
-禁止同义重复输出。
+含义接近时，主词优先选更短、更有品牌信号的表达；成员可为更口语的同义子串，但须逐字来自原文。
 
 ---
 
@@ -369,7 +372,11 @@ negative
 
 ## 【输出格式示例】
 
-{ "items": [ { "answerId": "string", "phrases": [ { "phrase": "string", "polarity": "positive" } ] } ] }
+{ "items": [ { "answerId": "string", "phrases": [ { "phrase": "准确", "polarity": "positive" }, { "phrase": "很准", "polarity": "positive", "clusterHead": "准确" } ] } ] }
+
+说明：clusterHead 仅成员需要；主词条目不要带 clusterHead。
+
+---
 `;
 
 const DEFAULT_BRIEF_MAX = 1500;

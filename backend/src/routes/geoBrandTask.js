@@ -3,6 +3,7 @@
  *
  * GET    /api/geo-brand/config            当前抽题量、并发等（只读，便于联调）
  * POST   /api/geo-brand/tasks             创建任务 + 抽样 + 立即返回；后台分批跑探针
+ * DELETE /api/geo-brand/tasks/:id         中止未完成：删除任务及级联数据
  * GET    /api/geo-brand/tasks/:id         查询任务基本信息
  * GET    /api/geo-brand/tasks/:id/progress 轮询进度（总数/成功/失败/待处理）
  * GET    /api/geo-brand/tasks/:id/questions  列出任务下的题目
@@ -140,6 +141,11 @@ router.post('/geo-brand/tasks', async (req, res) => {
     setImmediate(async () => {
       try {
         await runAllProbesForTask(pool, taskId);
+        const alive = await pool.query(`SELECT id FROM geo_health_task WHERE id = $1`, [taskId]);
+        if (!alive.rows.length) {
+          console.log(`[geo-brand] taskId=${taskId} 已删除，跳过分析`);
+          return;
+        }
         console.log(`[geo-brand] taskId=${taskId} 探针完成，开始分析阶段`);
         await runAllAnalysisForTask(pool, taskId);
         console.log(`[geo-brand] taskId=${taskId} 分析完成`);
@@ -169,6 +175,44 @@ router.get('/geo-brand/tasks/:id/progress', async (req, res) => {
     res.json({ success: true, ...progress });
   } catch (e) {
     console.error('geo-brand GET /tasks/:id/progress:', e);
+    res.status(500).json({ success: false, error: e.message || String(e) });
+  }
+});
+
+/**
+ * 中止生成：删除未终局任务（completed / failed 不可删），级联删除题目、探针答案、分析、文章、词云等。
+ */
+router.delete('/geo-brand/tasks/:id', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const taskId = Number(req.params.id);
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '无效任务 id' });
+    }
+    const del = await pool.query(
+      `DELETE FROM geo_health_task
+       WHERE id = $1 AND user_id = $2
+         AND status NOT IN ('completed', 'failed')
+       RETURNING id`,
+      [taskId, userId]
+    );
+    if (del.rows.length === 0) {
+      const chk = await pool.query(`SELECT id, status FROM geo_health_task WHERE id = $1 AND user_id = $2`, [
+        taskId,
+        userId,
+      ]);
+      if (chk.rows.length === 0) {
+        return res.status(404).json({ success: false, error: '任务不存在' });
+      }
+      return res.status(400).json({
+        success: false,
+        error: '仅可中止未完成的任务；当前任务已结束',
+        status: chk.rows[0].status,
+      });
+    }
+    res.json({ success: true, deletedTaskId: del.rows[0].id });
+  } catch (e) {
+    console.error('geo-brand DELETE /tasks/:id:', e);
     res.status(500).json({ success: false, error: e.message || String(e) });
   }
 });

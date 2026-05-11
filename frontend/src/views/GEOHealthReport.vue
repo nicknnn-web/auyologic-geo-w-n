@@ -13,16 +13,29 @@
           <h3>暂无体检数据</h3>
           <p>请填写品牌信息后，再生成品牌 AI 健康体检报告</p>
         </div>
-        <el-button
+        <div class="no-data-actions">
+          <el-button
             size="small"
             type="primary"
             :loading="generating || loading"
             :disabled="generating || loading"
             @click="generateHealthReport"
-        >
-          <el-icon><MagicStick /></el-icon>
-          {{ generating ? generatingText : '生成体检报告' }}
-        </el-button>
+          >
+            <el-icon><MagicStick /></el-icon>
+            {{ generating ? generatingText : '生成体检报告' }}
+          </el-button>
+          <el-button
+            v-if="generating && activeTaskId"
+            size="small"
+            type="danger"
+            plain
+            :loading="abortingTask"
+            :disabled="loading"
+            @click="abortGeneratingTask"
+          >
+            中止生成
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -63,16 +76,29 @@
           </template>
           <template v-else>检测时间：{{ checkTime }}</template>
         </div>
-        <el-button
-          size="small"
-          type="primary"
-          :loading="generating || loading"
-          :disabled="generating || loading"
-          @click="generateHealthReport"
-        >
-          <el-icon><MagicStick /></el-icon>
-          {{ generating ? generatingText : '生成体检报告' }}
-        </el-button>
+        <div class="nav-gen-actions">
+          <el-button
+            size="small"
+            type="primary"
+            :loading="generating || loading"
+            :disabled="generating || loading"
+            @click="generateHealthReport"
+          >
+            <el-icon><MagicStick /></el-icon>
+            {{ generating ? generatingText : '生成体检报告' }}
+          </el-button>
+          <el-button
+            v-if="generating && activeTaskId"
+            size="small"
+            type="danger"
+            plain
+            :loading="abortingTask"
+            :disabled="loading"
+            @click="abortGeneratingTask"
+          >
+            中止生成
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -663,7 +689,8 @@
           <template #default>
 
         <div v-if="!sentimentWordCloud.length" class="sentiment-cloud-empty sentiment-cloud-empty-standalone">
-          本任务回答原文中尚未命中任何情感词库词。完成检测与答案分析后自动统计；仅展示有出现次数的词；可在「情感词管理」中调整词表后重新跑分析。若有数据可点击「来源明细」查看每条回答与词库词的对应次数。
+          本任务暂无可用词云词条（回答原文中未统计到已入库的语义短语）。词云在全部答案分析完成之后，由词云 AI
+          基于原文批量抽取并写入；若关闭词云 AI、无可用模型连接、或原文中未出现可抽取短语，则此处为空。可在「情感词管理」中维护词条后重新跑分析。有数据时可点击「来源明细」查看每条回答与词条的命中次数。
         </div>
         <div v-else class="sentiment-cloud-card">
           <div
@@ -934,6 +961,9 @@
     <div class="mp-body">
       <p v-if="!modelPickerLoading && modelPickerList.length" class="mp-tip">
         请勾选参与本次探针的模型。未在列表中请先到「大模型接入」配置并启用。
+      </p>
+      <p v-if="modelPickerSyncing && modelPickerList.length" class="mp-tip mp-tip--sync">
+        正在同步最新连接列表…
       </p>
 
     <div v-if="modelPickerLoading" class="mp-loading">
@@ -1297,6 +1327,10 @@ import {
 } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import {
+  readGeoHealthAvailableModelsCache,
+  writeGeoHealthAvailableModelsCache,
+} from '../utils/geoHealthAvailableModelsCache.js'
 import * as XLSX from 'xlsx'
 
 // ===== 体检模型选择弹窗状态 =====
@@ -1304,6 +1338,8 @@ import * as XLSX from 'xlsx'
 const MAX_HEALTH_PROBE_MODELS = 6
 const modelPickerVisible = ref(false)
 const modelPickerLoading = ref(false)
+/** 已有缓存列表时，后台向服务器同步最新连接 */
+const modelPickerSyncing = ref(false)
 const modelPickerList = ref([])
 const pickedConnectionIds = ref([])
 const pickedConnectionIdsSnapshot = ref([])
@@ -1350,38 +1386,6 @@ const goToAiConnections = () => {
   router.push('/ai-provider-connections')
 }
 
-const fetchAvailableModels = async () => {
-  modelPickerLoading.value = true
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/geo-brand/available-models`, {
-      headers: { 'x-user-id': 'default_user' },
-    })
-    const data = await res.json().catch(() => ({}))
-    if (!data.success) throw new Error(data.error || '加载失败')
-    modelPickerList.value = Array.isArray(data.list) ? data.list : []
-    // 默认勾选「测连成功」的连接，避免误选未测的
-    const okIds = modelPickerList.value
-      .filter((m) => m.lastTestStatus === 'ok')
-      .map((m) => m.id)
-    const rawPick = okIds.length
-      ? okIds
-      : modelPickerList.value.map((m) => m.id)
-    pickedConnectionIds.value = rawPick.slice(0, MAX_HEALTH_PROBE_MODELS)
-    pickedAnalysisId.value = null
-    syncProbePickSnapshot()
-  } catch (e) {
-    ElMessage.error(e.message || '加载可用模型失败')
-    modelPickerList.value = []
-  } finally {
-    modelPickerLoading.value = false
-  }
-}
-
-const openModelPickerDialog = async () => {
-  modelPickerVisible.value = true
-  await fetchAvailableModels()
-}
-
 const confirmModelPicker = async () => {
   if (!pickedConnectionIds.value.length) {
     ElMessage.warning('请至少选择一个模型')
@@ -1403,6 +1407,88 @@ const hasData = ref(false)
 
 // ===== API 配置 =====
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
+
+/** 与请求头一致；可用模型缓存按该用户隔离 */
+const HEALTH_REPORT_USER_ID = 'default_user'
+
+async function fetchAvailableModelsFromApi() {
+  const res = await fetch(`${API_BASE_URL}/api/geo-brand/available-models`, {
+    headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!data.success) throw new Error(data.error || '加载失败')
+  return Array.isArray(data.list) ? data.list : []
+}
+
+const applyPickerListAndDefaults = (list) => {
+  modelPickerList.value = list
+  const okIds = list.filter((m) => m.lastTestStatus === 'ok').map((m) => m.id)
+  const rawPick = okIds.length ? okIds : list.map((m) => m.id)
+  pickedConnectionIds.value = rawPick.slice(0, MAX_HEALTH_PROBE_MODELS)
+  pickedAnalysisId.value = null
+  syncProbePickSnapshot()
+}
+
+const mergePicksAfterListUpdate = (list) => {
+  const idSet = new Set(list.map((m) => m.id))
+  const kept = pickedConnectionIds.value.filter((id) => idSet.has(id))
+  if (kept.length) {
+    pickedConnectionIds.value = kept.slice(0, MAX_HEALTH_PROBE_MODELS)
+    syncProbePickSnapshot()
+    return
+  }
+  const okIds = list.filter((m) => m.lastTestStatus === 'ok').map((m) => m.id)
+  const rawPick = okIds.length ? okIds : list.map((m) => m.id)
+  pickedConnectionIds.value = rawPick.slice(0, MAX_HEALTH_PROBE_MODELS)
+  pickedAnalysisId.value = null
+  syncProbePickSnapshot()
+}
+
+const openModelPickerDialog = async () => {
+  modelPickerVisible.value = true
+  const cached = readGeoHealthAvailableModelsCache(HEALTH_REPORT_USER_ID)
+  if (cached && Array.isArray(cached.list)) {
+    applyPickerListAndDefaults(cached.list)
+    modelPickerLoading.value = false
+    modelPickerSyncing.value = true
+    try {
+      const list = await fetchAvailableModelsFromApi()
+      writeGeoHealthAvailableModelsCache(list, HEALTH_REPORT_USER_ID)
+      if (!modelPickerVisible.value) return
+      modelPickerList.value = list
+      mergePicksAfterListUpdate(list)
+    } catch (e) {
+      if (!cached.list.length) {
+        ElMessage.error(e.message || '加载可用模型失败')
+      }
+    } finally {
+      modelPickerSyncing.value = false
+    }
+    return
+  }
+
+  modelPickerLoading.value = true
+  modelPickerSyncing.value = false
+  try {
+    const list = await fetchAvailableModelsFromApi()
+    writeGeoHealthAvailableModelsCache(list, HEALTH_REPORT_USER_ID)
+    applyPickerListAndDefaults(list)
+  } catch (e) {
+    ElMessage.error(e.message || '加载可用模型失败')
+    modelPickerList.value = []
+  } finally {
+    modelPickerLoading.value = false
+  }
+}
+
+function warmAvailableModelsCache() {
+  if (readGeoHealthAvailableModelsCache(HEALTH_REPORT_USER_ID)) {
+    return
+  }
+  fetchAvailableModelsFromApi()
+    .then((list) => writeGeoHealthAvailableModelsCache(list, HEALTH_REPORT_USER_ID))
+    .catch(() => {})
+}
 
 /** 报告内 /uploads/... 等与后端 origin 拼接 */
 function reportAssetUrl(u) {
@@ -2717,46 +2803,103 @@ let sentimentWordCloudResizeObserver = null
 let sentimentWcObservedEl = null
 let sentimentWcScopeActive = true
 
-/** 参考稿式：绿/红/灰分层 + 大字加粗；全横向 */
+/** 词云极性配色（字号/字重由排序档位单独控制） */
 const wordCloudStyleForPolarity = (pol, strength) => {
   const s = Math.min(1, Math.max(0, Number(strength) || 0))
   if (pol === 'positive') {
-    if (s >= 0.72) return { color: '#05ec9e', fontWeight: 700 }
-    if (s >= 0.38) return { color: '#04e185', fontWeight: 600 }
-    return { color: '#07aa7c', fontWeight: 500 }
+    if (s >= 0.72) return { color: '#05ec9e' }
+    if (s >= 0.38) return { color: '#04e185' }
+    return { color: '#07aa7c' }
   }
   if (pol === 'negative') {
-    if (s >= 0.5) return { color: '#FF4D4F', fontWeight: 700 }
-    return { color: '#ff8787', fontWeight: 500 }
+    if (s >= 0.5) return { color: '#FF4D4F' }
+    return { color: '#ff8787' }
   }
-  if (s >= 0.42) return { color: '#595959', fontWeight: 600 }
-  return { color: '#BFBFBF', fontWeight: 400 }
+  if (s >= 0.42) return { color: '#595959' }
+  return { color: '#BFBFBF' }
+}
+
+/** 画布「标准字号」基准（T2 = 100%）；T0/T1 按比例放大 */
+const WORDCLOUD_BASE_FONT_PX = 14
+const WORDCLOUD_TIER = {
+  /** Top 1–3：约 400%–500% 基准，Heavy */
+  0: { fontSize: 64, fontWeight: 800, opacity: 1, layoutValue: 100 },
+  /** Top 4–10：约 200%–250% */
+  1: { fontSize: 32, fontWeight: 700, opacity: 1, layoutValue: 58 },
+  /** Top 11–30：基准字号 */
+  2: { fontSize: WORDCLOUD_BASE_FONT_PX, fontWeight: 400, opacity: 1, layoutValue: 26 },
+  /** Top 31+：极小 + 低透明背景肌理 */
+  3: { fontSize: 11, fontWeight: 400, opacity: 0.35, layoutValue: 6 },
+}
+
+const wordCloudCountForRank = (w) => {
+  const c = Number(w.count)
+  if (Number.isFinite(c) && c > 0) return c
+  const wgt = Number(w.weight)
+  if (Number.isFinite(wgt) && wgt > 0) return Math.max(1, Math.round(wgt * 100))
+  return 1
+}
+
+const rankToWordCloudTier = (rank1) => {
+  if (rank1 <= 3) return 0
+  if (rank1 <= 10) return 1
+  if (rank1 <= 30) return 2
+  return 3
 }
 
 const buildSentimentWordCloudOption = (list) => {
-  const counts = list.map((w) => {
-    const c = Number(w.count)
-    if (Number.isFinite(c) && c > 0) return c
-    const wgt = Number(w.weight)
-    if (Number.isFinite(wgt) && wgt > 0) return Math.max(1, Math.round(wgt * 100))
-    return 1
+  const maxCount = Math.max(1, ...list.map(wordCloudCountForRank))
+
+  const ranked = list
+    .map((w) => ({
+      w,
+      cnt: wordCloudCountForRank(w),
+    }))
+    .sort((a, b) => {
+      if (b.cnt !== a.cnt) return b.cnt - a.cnt
+      const bw = Number(b.w.weight) || 0
+      const aw = Number(a.w.weight) || 0
+      if (bw !== aw) return bw - aw
+      return String(a.w.text).localeCompare(String(b.w.text), 'zh')
+    })
+
+  ranked.forEach((e, idx) => {
+    e.rank = idx + 1
+    e.tier = rankToWordCloudTier(e.rank)
   })
-  const maxCount = Math.max(1, ...counts)
-  const data = list.map((w, i) => {
+
+  // 先画 T3→T0，保证 T0 最后绘制叠在最上层（Canvas 绘制顺序）
+  const drawOrder = [...ranked].sort((a, b) => {
+    if (b.tier !== a.tier) return b.tier - a.tier
+    if (b.cnt !== a.cnt) return b.cnt - a.cnt
+    return String(a.w.text).localeCompare(String(b.w.text), 'zh')
+  })
+
+  const data = drawOrder.map((e) => {
     const pol =
-      w.polarity === 'positive' ? 'positive' : w.polarity === 'negative' ? 'negative' : 'neutral'
-    const cnt = counts[i] || 1
-    const strength = cnt / maxCount
-    const style = wordCloudStyleForPolarity(pol, strength)
+      e.w.polarity === 'positive' ? 'positive' : e.w.polarity === 'negative' ? 'negative' : 'neutral'
+    const strength = e.cnt / maxCount
+    const { color } = wordCloudStyleForPolarity(pol, strength)
+    const t = WORDCLOUD_TIER[e.tier]
     return {
-      name: w.text,
-      value: cnt,
+      name: e.w.text,
+      value: t.layoutValue,
       textStyle: {
-        color: style.color,
-        fontWeight: style.fontWeight,
+        color,
+        fontSize: t.fontSize,
+        fontWeight: t.fontWeight,
+        opacity: t.opacity,
+      },
+      emphasis: {
+        textStyle: {
+          opacity: e.tier === 3 ? 0.92 : 1,
+          textShadowBlur: 6,
+          textShadowColor: 'rgba(0,0,0,0.12)',
+        },
       },
     }
   })
+
   return {
     animationDurationUpdate: 480,
     tooltip: {
@@ -2773,7 +2916,12 @@ const buildSentimentWordCloudOption = (list) => {
             : row?.polarity === 'negative'
               ? '负面/警示'
               : '中性描述'
-        const n = row?.count != null && Number.isFinite(Number(row.count)) ? Number(row.count) : Number(p.value) || 0
+        const n =
+          row?.count != null && Number.isFinite(Number(row.count))
+            ? Number(row.count)
+            : row
+              ? wordCloudCountForRank(row)
+              : Number(p.value) || 0
         return `${p.name}\n${polLabel}\n出现 ${n} 次`
       },
     },
@@ -2781,8 +2929,8 @@ const buildSentimentWordCloudOption = (list) => {
       {
         type: 'wordCloud',
         shape: 'card',
-        gridSize: 10,
-        sizeRange: [23, 72],
+        gridSize: 12,
+        sizeRange: [9, 88],
         rotationRange: [0, 0],
         left: 'center',
         top: 'center',
@@ -3160,6 +3308,7 @@ const loadHealthReport = async () => {
 // ===== 操作方法 =====
 const generating = ref(false)
 const generatingText = ref('生成中...')
+const abortingTask = ref(false)
 
 /**
  * 任务持久化：把 taskId 写到 localStorage，页面切出再切回/刷新都能恢复轮询。
@@ -3186,6 +3335,7 @@ const pollTaskProgress = async (taskId) => {
   let lastStatus = ''
   let lastProgress = null
   let firstCheck = true
+  let taskGone404 = false
 
   try {
     for (let i = 0; i < 600; i++) {
@@ -3200,6 +3350,10 @@ const pollTaskProgress = async (taskId) => {
           `${API_BASE_URL}/api/geo-brand/tasks/${taskId}/progress`,
           { headers: { 'x-user-id': 'default_user' } }
         )
+        if (pr.status === 404) {
+          taskGone404 = true
+          break
+        }
         progress = await pr.json().catch(() => null)
       } catch (e) {
         console.warn('[geo-brand] progress 请求异常，继续轮询:', e)
@@ -3231,6 +3385,13 @@ const pollTaskProgress = async (taskId) => {
       }
     }
 
+    if (abortRef.cancelled) return { aborted: true }
+
+    if (taskGone404) {
+      ElMessage.info('任务已不存在，已停止跟踪（可能已中止或已删除）')
+      return { aborted: true }
+    }
+
     if (lastStatus === 'failed') {
       const taskErr = lastProgress?.errorText
       if (taskErr) {
@@ -3238,19 +3399,56 @@ const pollTaskProgress = async (taskId) => {
       } else {
         ElMessage.warning(`任务 #${taskId} 部分失败，请查看 geo_health_answer.error_text`)
       }
-    } else {
+    } else if (lastStatus === 'completed') {
       ElMessage.success(`任务 #${taskId} 已完成`)
+      generatingText.value = '刷新报告...'
+      await loadHealthReport()
+    } else {
+      ElMessage.warning('任务长时间未结束，请稍后刷新页面查看进度')
     }
-
-    generatingText.value = '刷新报告...'
-    await loadHealthReport()
     return { aborted: false, status: lastStatus }
   } finally {
-    if (!abortRef.cancelled) {
-      generating.value = false
-      activeTaskId.value = null
-      localStorage.removeItem(ACTIVE_TASK_KEY)
+    generating.value = false
+    activeTaskId.value = null
+    localStorage.removeItem(ACTIVE_TASK_KEY)
+  }
+}
+
+/**
+ * 中止当前生成：删除服务端未终局任务（级联清理本题数据），并停止本地轮询。
+ */
+const abortGeneratingTask = async () => {
+  const tid = activeTaskId.value
+  if (!tid || abortingTask.value) return
+  try {
+    await ElMessageBox.confirm(
+      '确定中止本次体检吗？未完成的任务及相关数据将被删除，且无法恢复。',
+      '中止生成',
+      {
+        type: 'warning',
+        confirmButtonText: '中止',
+        cancelButtonText: '取消',
+      }
+    )
+  } catch {
+    return
+  }
+  abortingTask.value = true
+  try {
+    const r = await fetch(`${API_BASE_URL}/api/geo-brand/tasks/${tid}`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': 'default_user' },
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok || !data?.success) {
+      throw new Error(data?.error || `请求失败（HTTP ${r.status}）`)
     }
+    pollAbort.cancelled = true
+    ElMessage.success('已中止并删除本次任务')
+  } catch (e) {
+    ElMessage.error('中止失败：' + (e.message || e))
+  } finally {
+    abortingTask.value = false
   }
 }
 
@@ -3351,6 +3549,10 @@ const resumeActiveTaskIfAny = async () => {
       `${API_BASE_URL}/api/geo-brand/tasks/${taskId}/progress`,
       { headers: { 'x-user-id': 'default_user' } }
     )
+    if (pr.status === 404) {
+      localStorage.removeItem(ACTIVE_TASK_KEY)
+      return
+    }
     const progress = await pr.json().catch(() => null)
     if (!progress?.success) {
       localStorage.removeItem(ACTIVE_TASK_KEY)
@@ -3393,6 +3595,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', onDocumentVisibility)
   await loadEnterpriseSettings()
   await loadHealthReport()
+  warmAvailableModelsCache()
   // 切回来时恢复未完成的任务轮询
   resumeActiveTaskIfAny()
 })
@@ -3489,6 +3692,14 @@ onUnmounted(() => {
   background: #f8fafc;
   border: 1px solid #ebeef5;
   border-radius: 10px;
+}
+.mp-tip--sync {
+  margin: -6px 0 12px;
+  padding: 0 2px;
+  font-size: 12px;
+  color: #909399;
+  background: transparent;
+  border: none;
 }
 
 .mp-loading {
@@ -3769,6 +3980,14 @@ onUnmounted(() => {
   line-height: 1.5;
 }
 
+.no-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  align-items: center;
+}
+
 /* ===== 导航 ===== */
 .health-nav {
   display: flex;
@@ -3829,6 +4048,13 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.nav-gen-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .nav-time {

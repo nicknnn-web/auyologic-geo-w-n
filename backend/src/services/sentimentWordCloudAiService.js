@@ -57,7 +57,7 @@ function aiTimeoutMs() {
 
 /**
  * @param {unknown} parsed
- * @returns {Array<{ answerId: string, phrases: Array<{ phrase: string, polarity: string }> }>}
+ * @returns {Array<{ answerId: string, phrases: Array<{ phrase: string, polarity: string, clusterHead?: string|null }> }>}
  */
 function normalizeAiItems(parsed) {
   if (!parsed || typeof parsed !== 'object') return [];
@@ -72,7 +72,11 @@ function normalizeAiItems(parsed) {
       const polarity = String(p?.polarity ?? '').trim().toLowerCase();
       if (!phrase || !POLARITY_SET.has(polarity)) continue;
       if (!isSentimentKeywordLengthValid(phrase)) continue;
-      phrases.push({ phrase, polarity });
+      let clusterHead = String(p?.clusterHead ?? p?.cluster_head ?? '').trim();
+      if (clusterHead && (!isSentimentKeywordLengthValid(clusterHead) || clusterHead === phrase)) {
+        clusterHead = '';
+      }
+      phrases.push({ phrase, polarity, clusterHead: clusterHead || null });
     }
     if (answerId) out.push({ answerId, phrases });
   }
@@ -116,7 +120,7 @@ function chunkAnswerRowsForWordCloudAi(rows) {
  * @param {import('pg').Pool} pool
  * @param {string} userId
  * @param {{ brandName: string, industry?: string, brandDescription?: string, targetAudience?: string, answerRows: Array<{ analysis_id: number|string, raw_json?: object }> }} ctx
- * @returns {Promise<Array<{ phrase: string, polarity: string, analysisId: string }>>}
+ * @returns {Promise<Array<{ phrase: string, polarity: string, analysisId: string, clusterHead?: string|null }>>}
  */
 export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
   if (wordCloudAiDisabled()) return [];
@@ -176,11 +180,20 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
     for (const it of items) {
       const fullText = textById.get(String(it.answerId));
       if (!fullText) continue;
-      for (const { phrase, polarity } of it.phrases) {
+      for (const { phrase, polarity, clusterHead: chIn } of it.phrases) {
         if (!phrase || !isSentimentKeywordLengthValid(phrase)) continue;
         if (fullText.indexOf(phrase) === -1) continue;
         if (countLexiconPhraseInText(fullText, phrase) < 1) continue;
-        collected.push({ phrase, polarity, analysisId: String(it.answerId) });
+        let clusterHead = chIn ? String(chIn).trim() : '';
+        if (clusterHead && fullText.indexOf(clusterHead) === -1) clusterHead = '';
+        if (clusterHead && !isSentimentKeywordLengthValid(clusterHead)) clusterHead = '';
+        if (clusterHead === phrase) clusterHead = '';
+        collected.push({
+          phrase,
+          polarity,
+          analysisId: String(it.answerId),
+          clusterHead: clusterHead || null,
+        });
       }
     }
   }
@@ -189,13 +202,125 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
 }
 
 /**
+ * 聚合多批 AI 抽取：同 phrase_norm + 极性合并，并对 clusterHead 投票。
+ * @param {Array<{ phrase: string, polarity: string, clusterHead?: string|null }>} rows
+ */
+function aggregateAiPhraseBuckets(rows) {
+  /** @type {Map<string, { phrase: string, polarity: string, clusterHeadVotes: Map<string, number> }>} */
+  const byKey = new Map();
+  for (const row of rows || []) {
+    const phrase = String(row.phrase || '').trim();
+    if (!phrase || !isSentimentKeywordLengthValid(phrase)) continue;
+    const polarity = String(row.polarity || '').trim().toLowerCase();
+    if (!POLARITY_SET.has(polarity)) continue;
+    const mk = mergeKeyForWordCloudPhrase(phrase);
+    const key = `${mk}|${polarity}`;
+    let ch = row.clusterHead != null ? String(row.clusterHead).trim() : '';
+    if (ch && (!isSentimentKeywordLengthValid(ch) || ch === phrase)) ch = '';
+    if (ch && mergeKeyForWordCloudPhrase(ch) === mk) ch = '';
+
+    if (!byKey.has(key)) {
+      byKey.set(key, { phrase, polarity, clusterHeadVotes: new Map() });
+    }
+    const bucket = byKey.get(key);
+    if (ch) {
+      bucket.clusterHeadVotes.set(ch, (bucket.clusterHeadVotes.get(ch) || 0) + 1);
+    }
+  }
+
+  const phraseKeySet = new Set(byKey.keys());
+  const headExists = (clusterText, pol) => {
+    const hmk = mergeKeyForWordCloudPhrase(clusterText);
+    return phraseKeySet.has(`${hmk}|${pol}`);
+  };
+
+  /** @type {Array<{ phrase: string, polarity: string, clusterHead: string|null }>} */
+  const list = [];
+  for (const bucket of byKey.values()) {
+    let clusterHead = null;
+    if (bucket.clusterHeadVotes.size) {
+      let best = '';
+      let bestN = -1;
+      for (const [k, n] of bucket.clusterHeadVotes) {
+        if (n > bestN) {
+          bestN = n;
+          best = k;
+        }
+      }
+      if (best && headExists(best, bucket.polarity)) clusterHead = best;
+    }
+    list.push({ phrase: bucket.phrase, polarity: bucket.polarity, clusterHead });
+  }
+  return list;
+}
+
+/**
+ * 词云合并项按「主词 → 子词」深度优先排序，供入库时映射 parent_id。
+ * @param {Array<{ text: string, count: number, polarity: string, source?: string, clusterHead?: string|null }>} merged
+ */
+export function orderWordCloudItemsForPersist(merged) {
+  const keyOf = (text, pol) =>
+    `${mergeKeyForWordCloudPhrase(text)}|${String(pol || '').toLowerCase()}`;
+  const items = (merged || []).map((it) => ({
+    text: it.text,
+    count: it.count,
+    polarity: String(it.polarity || '').toLowerCase(),
+    source: it.source,
+    clusterHead: it.clusterHead ? String(it.clusterHead).trim() : null,
+  }));
+  const byKey = new Map(items.map((it) => [keyOf(it.text, it.polarity), it]));
+
+  for (const it of items) {
+    const ch = it.clusterHead;
+    if (!ch) continue;
+    const pk = keyOf(ch, it.polarity);
+    const self = keyOf(it.text, it.polarity);
+    if (pk === self || !byKey.has(pk)) it.clusterHead = null;
+  }
+
+  const visited = new Set();
+  const ordered = [];
+
+  function visit(it) {
+    const k = keyOf(it.text, it.polarity);
+    if (visited.has(k)) return;
+    visited.add(k);
+    ordered.push(it);
+    const kids = items
+      .filter((x) => x.clusterHead && keyOf(x.clusterHead, x.polarity) === k)
+      .sort((a, b) => b.count - a.count);
+    for (const c of kids) visit(c);
+  }
+
+  const isRoot = (it) => {
+    const ch = it.clusterHead;
+    if (!ch) return true;
+    const pk = keyOf(ch, it.polarity);
+    const self = keyOf(it.text, it.polarity);
+    return !byKey.has(pk) || pk === self;
+  };
+
+  const roots = items.filter(isRoot).sort((a, b) => b.count - a.count);
+  for (const r of roots) visit(r);
+
+  for (const it of items) {
+    const k = keyOf(it.text, it.polarity);
+    if (!visited.has(k)) {
+      it.clusterHead = null;
+      visit(it);
+    }
+  }
+  return ordered;
+}
+
+/**
  * 词库 + AI 合并为 sentimentWordCloud 列表（与前端 GEOHealthReport 字段一致）。
  * @param {object} p
  * @param {Array<{ keyword: string, polarity: string }>} p.lexEntries
  * @param {Map<string, number>} p.lexHitCount
  * @param {Array<{ analysis_id?: number|string, raw_json?: object }>} p.answerRows
- * @param {Array<{ phrase: string, polarity: string }>} p.aiRows
- * @returns {Array<{ text: string, count: number, polarity: string, weight: number, source?: string }>}
+ * @param {Array<{ phrase: string, polarity: string, clusterHead?: string|null }>} p.aiRows
+ * @returns {Array<{ text: string, count: number, polarity: string, weight: number, source?: string, clusterHead?: string|null }>}
  */
 export function mergeLexiconAndAiWordCloud(p) {
   const { lexEntries, lexHitCount, answerRows, aiRows } = p;
@@ -222,25 +347,14 @@ export function mergeLexiconAndAiWordCloud(p) {
       count,
       polarity: e.polarity,
       source: 'lexicon',
+      clusterHead: null,
     });
   }
 
-  /** AI 同 mergeKey 只保留一条展示词与极性（先出现优先） */
-  const aiCanonByMergeKey = new Map();
-  for (const row of aiRows || []) {
-    const phrase = String(row.phrase || '').trim();
-    if (!phrase || !isSentimentKeywordLengthValid(phrase)) continue;
+  const aggregatedAi = aggregateAiPhraseBuckets(aiRows);
+  for (const { phrase, polarity, clusterHead } of aggregatedAi) {
     const mk = mergeKeyForWordCloudPhrase(phrase);
     if (!mk || lexMergeKeys.has(mk)) continue;
-    if (!POLARITY_SET.has(String(row.polarity || '').toLowerCase())) continue;
-    if (aiCanonByMergeKey.has(mk)) continue;
-    aiCanonByMergeKey.set(mk, {
-      phrase,
-      polarity: String(row.polarity).toLowerCase(),
-    });
-  }
-
-  for (const { phrase, polarity } of aiCanonByMergeKey.values()) {
     let total = 0;
     for (const ans of answerRows || []) {
       const text = extractProbeAnswerText(ans.raw_json);
@@ -253,6 +367,7 @@ export function mergeLexiconAndAiWordCloud(p) {
       count: total,
       polarity,
       source: 'ai',
+      clusterHead: clusterHead || null,
     });
   }
 
@@ -265,6 +380,7 @@ export function mergeLexiconAndAiWordCloud(p) {
     polarity: x.polarity,
     weight: x.count / hitMax,
     source: x.source,
+    clusterHead: x.clusterHead ?? null,
   }));
 
   list.sort((a, b) => b.count - a.count || String(a.text).localeCompare(String(b.text), 'zh-Hans-CN'));

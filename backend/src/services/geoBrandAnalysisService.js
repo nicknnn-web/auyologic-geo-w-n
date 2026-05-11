@@ -21,7 +21,7 @@
  */
 
 import { createAiClientByConnectionId } from './aiClientFactory.js';
-import { extractJsonFromText, runWithSlidingConcurrency } from './geoBrandTaskService.js';
+import { extractJsonFromText, runWithSlidingConcurrency, geoHealthTaskExists } from './geoBrandTaskService.js';
 import {
   GEO_HEALTH_ANALYSIS_CONCURRENCY,
   GEO_HEALTH_ANALYSIS_DELAY_MS,
@@ -80,7 +80,8 @@ import {
   ANALYSIS_SYSTEM_PROMPT,
   buildAnalysisPrompt,
 } from '../prompts/geoHealthAnalysis.js';
-import { extractProbeAnswerText, loadSentimentLexiconForPrompt } from './sentimentLexiconService.js';
+import { extractProbeAnswerText } from './sentimentLexiconService.js';
+import { persistAiWordCloudForTask } from './geoHealthWordCloudPersistService.js';
 import { segmentAnswerText } from './answerTokenizer.js';
 export { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt };
 
@@ -189,8 +190,10 @@ export async function analyzeOneAnswer(
   }
 
   const category = inferCategory(row.question_type, row.keyword_type_label);
-  const taskUserId = String(row.task_user_id || 'default_user').trim() || 'default_user';
-  const lexicon = sentimentLexicon || (await loadSentimentLexiconForPrompt(pool, taskUserId));
+  const lexicon =
+    sentimentLexicon && typeof sentimentLexicon === 'object'
+      ? sentimentLexicon
+      : { positive: [], neutral: [], negative: [] };
   const prompt = buildAnalysisPrompt({
     brand,
     question: row.question,
@@ -272,7 +275,8 @@ export async function analyzeOneAnswer(
 /**
  * 对一个 task 下所有 geo_health_answer 逐批运行分析。
  * 会自动从 users 表读取企业名称作为 brand。
- * 完成后更新 geo_health_task.status = 'completed'。
+ * 在词云 AI 结果写入 geo_health_word_cloud_item 之后，再将 geo_health_task.status 置为 completed，
+ * 避免前端在「已完成」瞬间拉报告却仍读不到词云（与 GET /geo-health-report 同源数据）。
  *
  * @param {object} pool
  * @param {number} taskId
@@ -285,7 +289,10 @@ export async function runAllAnalysisForTask(pool, taskId) {
     [taskId]
   );
   const taskRow = tRes.rows[0];
-  if (!taskRow) throw new Error(`任务不存在 taskId=${taskId}`);
+  if (!taskRow) {
+    console.log(`[geo-analysis] task=${taskId} 不存在（可能已中止删除）`);
+    return { taskId, processed: 0, failedCount: 0, skippedCount: 0, aborted: true };
+  }
 
   let analysisCid = taskRow.analysis_connection_id;
   if (!analysisCid && Array.isArray(taskRow.connection_ids) && taskRow.connection_ids.length) {
@@ -336,14 +343,19 @@ export async function runAllAnalysisForTask(pool, taskId) {
   );
 
   if (answers.length === 0) {
+    if (!(await geoHealthTaskExists(pool, taskId))) {
+      console.log(`[geo-analysis] task=${taskId} 无待分析答案且任务已删除（中止）`);
+      return { taskId, processed: 0, failedCount: 0, skippedCount: 0, aborted: true };
+    }
+    await persistWordCloudSnapshot(pool, taskId, taskRow.user_id);
     await pool.query(`UPDATE geo_health_task SET status = 'completed' WHERE id = $1`, [taskId]);
     return { taskId, processed: 0, failedCount: 0, skippedCount: 0 };
   }
 
   await pool.query(`UPDATE geo_health_task SET status = 'analyzing' WHERE id = $1`, [taskId]);
 
-  // 词典预加载：原先每条 answer 都重新查库，6 模型 × N 题量级时浪费严重
-  const sentimentLexicon = await loadSentimentLexiconForPrompt(pool, taskRow.user_id);
+  /** 分析阶段不再注入运营情感词表，仅依赖模型对原文的判定 */
+  const sentimentLexicon = { positive: [], neutral: [], negative: [] };
 
   const conc = GEO_HEALTH_ANALYSIS_CONCURRENCY;
   const delayMs = GEO_HEALTH_ANALYSIS_DELAY_MS;
@@ -368,11 +380,36 @@ export async function runAllAnalysisForTask(pool, taskId) {
     }
   });
 
+  if (!(await geoHealthTaskExists(pool, taskId))) {
+    console.log(`[geo-analysis] task=${taskId} 分析过程中已删除（中止）`);
+    return { taskId, processed: answers.length, failedCount, skippedCount, aborted: true };
+  }
+
+  await persistWordCloudSnapshot(pool, taskId, taskRow.user_id);
   await pool.query(`UPDATE geo_health_task SET status = 'completed' WHERE id = $1`, [taskId]);
   console.log(
     `[geo-analysis] task=${taskId} 完成 total=${answers.length} failed=${failedCount} skipped=${skippedCount}`
   );
   return { taskId, processed: answers.length, failedCount, skippedCount };
+}
+
+async function persistWordCloudSnapshot(pool, taskId, userId) {
+  const uid = String(userId || 'default_user').trim() || 'default_user';
+  try {
+    const entRes = await pool.query(
+      `SELECT company_name, industry, description, target_audience FROM users WHERE user_id = $1 LIMIT 1`,
+      [uid]
+    );
+    const e = entRes.rows[0] || {};
+    await persistAiWordCloudForTask(pool, taskId, uid, {
+      brandName: String(e.company_name || '').trim() || '品牌',
+      industry: String(e.industry || '').trim(),
+      brandDescription: String(e.description || '').trim(),
+      targetAudience: String(e.target_audience || '').trim(),
+    });
+  } catch (e) {
+    console.warn('[geo-analysis] 词云入库失败（不影响任务完成）', e?.message || e);
+  }
 }
 
 // ─────────────────────────────────────────────

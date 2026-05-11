@@ -50,10 +50,24 @@ export const PROVIDERS = {
   },
   /** 豆包 / 火山方舟 — OpenAI 兼容 */
   doubao: {
-    label: '豆包（火山方舟）',
+    label: '豆包',
     baseURL: process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3',
     apiKeyEnv: 'DOUBAO_API_KEY',
     defaultModel: process.env.DOUBAO_DEFAULT_MODEL || 'doubao-seed-1-6-251015',
+  },
+  /** 腾讯元宝（对话能力基于混元）— OpenAI 兼容，见腾讯云混元文档 */
+  hunyuan: {
+    label: '腾讯元宝（混元）',
+    baseURL: process.env.HUNYUAN_BASE_URL || 'https://api.hunyuan.cloud.tencent.com/v1',
+    apiKeyEnv: 'HUNYUAN_API_KEY',
+    defaultModel: process.env.HUNYUAN_DEFAULT_MODEL || 'hunyuan-turbos-latest',
+  },
+  /** 文心一言 — 百度千帆 OpenAI 兼容（/v2） */
+  wenxin: {
+    label: '文心一言（千帆）',
+    baseURL: process.env.WENXIN_BASE_URL || 'https://qianfan.baidubce.com/v2',
+    apiKeyEnv: 'WENXIN_API_KEY',
+    defaultModel: process.env.WENXIN_DEFAULT_MODEL || 'ernie-4.0-turbo-8k',
   },
 };
 

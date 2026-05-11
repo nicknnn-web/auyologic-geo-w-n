@@ -80,6 +80,86 @@ export function extractProbeAnswerText(rawJson) {
 }
 
 /**
+ * 与 GET /sentiment-lexicon/:id/trace 一致：在本 task 全部探针回答正文中，按子串非重叠扫描统计 keyword 出现次数之和。
+ * @param {import('pg').Pool} pool
+ * @param {number} taskId
+ * @param {string} keyword
+ * @returns {Promise<number>}
+ */
+export async function countProbeKeywordOccurrencesForTask(pool, taskId, keyword) {
+  const kw = String(keyword || '').trim();
+  if (!kw) return 0;
+  const tid = Number(taskId);
+  if (!Number.isFinite(tid) || tid <= 0) return 0;
+  const { rows: ans } = await pool.query(
+    `SELECT ga.raw_json
+     FROM geo_health_analysis a
+     INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
+     WHERE a.task_id = $1 AND a.error_text IS NULL`,
+    [tid]
+  );
+  let total = 0;
+  for (const ar of ans) {
+    const text = extractProbeAnswerText(ar.raw_json);
+    if (!text) continue;
+    let pos = 0;
+    while (true) {
+      const i = text.indexOf(kw, pos);
+      if (i === -1) break;
+      total += 1;
+      pos = i + Math.max(1, kw.length);
+    }
+  }
+  return total;
+}
+
+/**
+ * 本期任务全部探针回答正文（与溯源 trace 同源 SQL）。
+ * @param {import('pg').Pool} pool
+ * @param {number} taskId
+ * @returns {Promise<string[]>}
+ */
+export async function probeAnswerTextsForTask(pool, taskId) {
+  const tid = Number(taskId);
+  if (!Number.isFinite(tid) || tid <= 0) return [];
+  const { rows } = await pool.query(
+    `SELECT ga.raw_json
+     FROM geo_health_analysis a
+     INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
+     WHERE a.task_id = $1 AND a.error_text IS NULL`,
+    [tid]
+  );
+  const out = [];
+  for (const ar of rows || []) {
+    const t = extractProbeAnswerText(ar.raw_json);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * 与溯源 trace 一致：逐条回答内对 keyword 做非重叠子串 indexOf 计数（大小写敏感，与 trace 相同）。
+ * @param {string[]} texts
+ * @param {string} keyword
+ * @returns {number}
+ */
+export function countProbeKeywordSubstringHits(texts, keyword) {
+  const kw = String(keyword || '').trim();
+  if (!kw || !texts?.length) return 0;
+  let total = 0;
+  for (const text of texts) {
+    let pos = 0;
+    while (true) {
+      const i = text.indexOf(kw, pos);
+      if (i === -1) break;
+      total += 1;
+      pos = i + Math.max(1, kw.length);
+    }
+  }
+  return total;
+}
+
+/**
  * 在回答原文中统计词库词出现次数：从左到右、非重叠子串匹配。
  * 词库词含拉丁字母时大小写不敏感；纯中文等按字面匹配。
  * @param {string} haystack

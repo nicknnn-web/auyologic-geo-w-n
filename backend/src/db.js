@@ -416,6 +416,53 @@ export async function initDB() {
       `CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_sentiment_lexicon_user_kw ON geo_sentiment_lexicon (user_id, lower(keyword))`
     );
 
+    // 品牌体检词云词条（按 task 入库；AI 生成 + 管理页编辑；报告词云只读此表）
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_word_cloud_item (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL DEFAULT 'default_user',
+        task_id INTEGER NOT NULL REFERENCES geo_health_task(id) ON DELETE CASCADE,
+        keyword VARCHAR(200) NOT NULL,
+        phrase_norm VARCHAR(200) NOT NULL,
+        tier VARCHAR(20) NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT true,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        hit_count INTEGER NOT NULL DEFAULT 1,
+        source VARCHAR(16) NOT NULL DEFAULT 'ai',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT chk_geo_health_wc_tier CHECK (tier IN ('positive', 'neutral', 'negative')),
+        CONSTRAINT chk_geo_health_wc_source CHECK (source IN ('ai', 'user'))
+      )
+    `);
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_geo_health_wc_task_tier_norm
+       ON geo_health_word_cloud_item (task_id, tier, phrase_norm)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_wc_task ON geo_health_word_cloud_item(task_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_wc_user_task ON geo_health_word_cloud_item(user_id, task_id)`
+    );
+    await client.query(`ALTER TABLE geo_health_word_cloud_item ADD COLUMN IF NOT EXISTS parent_id INTEGER`);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_wc_parent ON geo_health_word_cloud_item(parent_id)`
+    );
+    await client.query(`
+      DO $fk$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'fk_geo_health_wc_parent'
+        ) THEN
+          ALTER TABLE geo_health_word_cloud_item
+            ADD CONSTRAINT fk_geo_health_wc_parent
+            FOREIGN KEY (parent_id) REFERENCES geo_health_word_cloud_item(id) ON DELETE CASCADE;
+        END IF;
+      END
+      $fk$;
+    `);
+
     // 品牌体检报告快照（整份 JSON + 词云数组；分析/文章/词库变更后指纹失效）
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_task_cache (

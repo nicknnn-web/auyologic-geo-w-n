@@ -1,5 +1,6 @@
 /**
- * 品牌体检报告快照：按 task 缓存整份 JSON（含词云），分析/文章/词库变更后指纹失效自动重算。
+ * 品牌体检报告快照：按 task 缓存整份 JSON（含词云）。
+ * 第三段指纹列名仍为 lexicon_fingerprint，语义为「本期词云明细表」变更检测（geo_health_word_cloud_item）。
  */
 
 function cacheDisabled() {
@@ -14,7 +15,7 @@ function cacheDisabled() {
  * @returns {Promise<{ analysisFp: string, articleFp: string, lexiconFp: string }>}
  */
 export async function computeGeoTaskCacheFingerprints(pool, taskId, userId) {
-  const [ar, pr, lr] = await Promise.all([
+  const [ar, pr] = await Promise.all([
     pool.query(
       `SELECT COUNT(*)::int AS c, COALESCE(MAX(created_at)::text, '') AS mx
        FROM geo_health_analysis WHERE task_id = $1 AND error_text IS NULL`,
@@ -25,15 +26,21 @@ export async function computeGeoTaskCacheFingerprints(pool, taskId, userId) {
        FROM geo_health_article WHERE task_id = $1`,
       [taskId]
     ),
-    pool.query(
-      `SELECT COUNT(*)::int AS c, COALESCE(MAX(id), 0)::int AS mid, COALESCE(MAX(updated_at)::text, '') AS mu
-       FROM geo_sentiment_lexicon WHERE user_id = $1 AND enabled = true`,
-      [userId]
-    ),
   ]);
+  let wcRow = { c: 0, mu: '' };
+  try {
+    const lr = await pool.query(
+      `SELECT COUNT(*)::int AS c, COALESCE(MAX(updated_at)::text, '') AS mu
+       FROM geo_health_word_cloud_item WHERE task_id = $1`,
+      [taskId]
+    );
+    wcRow = lr.rows[0] || wcRow;
+  } catch (e) {
+    if (e.code !== '42P01') throw e;
+  }
   const analysisFp = `${ar.rows[0]?.c ?? 0}:${ar.rows[0]?.mx ?? ''}`;
   const articleFp = `${pr.rows[0]?.c ?? 0}:${pr.rows[0]?.mx ?? ''}`;
-  const lexiconFp = `${lr.rows[0]?.c ?? 0}:${lr.rows[0]?.mid ?? 0}:${lr.rows[0]?.mu ?? ''}`;
+  const lexiconFp = `${wcRow.c ?? 0}:${wcRow.mu ?? ''}`;
   return { analysisFp, articleFp, lexiconFp };
 }
 

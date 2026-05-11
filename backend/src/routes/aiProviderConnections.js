@@ -21,7 +21,17 @@ const router = Router();
 
 const UPLOADS_ROOT = path.join(process.cwd(), 'public', 'uploads');
 
-const ALLOWED_KEYS = new Set(['deepseek', 'qwen', 'kimi', 'glm', 'openai', 'doubao', 'custom']);
+const ALLOWED_KEYS = new Set([
+  'deepseek',
+  'qwen',
+  'kimi',
+  'glm',
+  'openai',
+  'doubao',
+  'hunyuan',
+  'wenxin',
+  'custom',
+]);
 
 function safePathSegment(s) {
   return String(s || 'user')

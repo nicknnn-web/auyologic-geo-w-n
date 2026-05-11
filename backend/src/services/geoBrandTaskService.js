@@ -299,6 +299,12 @@ const buildDefaultUserPrompt = buildProbeUserPrompt;
  * @param {number} [options.maxTokens=4096]
  * @param {number} [options.temperature=0.3]
  */
+/** 任务行仍存在（未被用户中止删除） */
+export async function geoHealthTaskExists(pool, taskId) {
+  const r = await pool.query(`SELECT 1 FROM geo_health_task WHERE id = $1 LIMIT 1`, [taskId]);
+  return r.rows.length > 0;
+}
+
 export async function probeOneQuestionWithModel(pool, options) {
   const {
     taskId,
@@ -314,6 +320,10 @@ export async function probeOneQuestionWithModel(pool, options) {
     signal,
     timeoutMs = GEO_HEALTH_PROBE_TIMEOUT_MS,
   } = options;
+
+  if (!(await geoHealthTaskExists(pool, taskId))) {
+    return null;
+  }
 
   if (!connectionId && !preparedClient) {
     throw new Error('probeOneQuestionWithModel: 需要 connectionId 或 preparedClient');
@@ -369,24 +379,26 @@ export async function probeOneQuestionWithModel(pool, options) {
     parsed = extractJsonFromText(content);
   } catch (e) {
     errMsg = e.message || String(e);
-    await pool.query(
-      `INSERT INTO geo_health_answer (task_id, question_id, model_name, connection_id, raw_json, valid_count, error_text)
-       VALUES ($1, $2, $3, $4, $5::jsonb, 0, $6)
-       ON CONFLICT (question_id, model_name) DO UPDATE SET
-         raw_json = EXCLUDED.raw_json,
-         connection_id = EXCLUDED.connection_id,
-         valid_count = 0,
-         error_text = EXCLUDED.error_text,
-         created_at = NOW()`,
-      [
-        taskId,
-        questionId,
-        modelName,
-        cid,
-        JSON.stringify({ error: errMsg, vendorName: modelName, providerKey: client.providerKey, model: client.model }),
-        errMsg,
-      ]
-    );
+    if (await geoHealthTaskExists(pool, taskId)) {
+      await pool.query(
+        `INSERT INTO geo_health_answer (task_id, question_id, model_name, connection_id, raw_json, valid_count, error_text)
+         VALUES ($1, $2, $3, $4, $5::jsonb, 0, $6)
+         ON CONFLICT (question_id, model_name) DO UPDATE SET
+           raw_json = EXCLUDED.raw_json,
+           connection_id = EXCLUDED.connection_id,
+           valid_count = 0,
+           error_text = EXCLUDED.error_text,
+           created_at = NOW()`,
+        [
+          taskId,
+          questionId,
+          modelName,
+          cid,
+          JSON.stringify({ error: errMsg, vendorName: modelName, providerKey: client.providerKey, model: client.model }),
+          errMsg,
+        ]
+      );
+    }
     throw e;
   }
 
@@ -406,6 +418,10 @@ export async function probeOneQuestionWithModel(pool, options) {
     parsed,
     usage,
   };
+
+  if (!(await geoHealthTaskExists(pool, taskId))) {
+    return null;
+  }
 
   await pool.query(
     `INSERT INTO geo_health_answer (task_id, question_id, model_name, connection_id, raw_json, valid_count, error_text)
@@ -554,7 +570,7 @@ export async function runAllProbesForTask(pool, taskId) {
     failedCount = await runWithSlidingConcurrency(tasks, conc, async ({ questionId, connectionId }) => {
       try {
         const preparedClient = clientMap.get(connectionId);
-        await probeOneQuestionWithModel(pool, {
+        const pr = await probeOneQuestionWithModel(pool, {
           taskId,
           questionId,
           connectionId,
@@ -562,6 +578,7 @@ export async function runAllProbesForTask(pool, taskId) {
           preparedQuestion: questionMap.get(questionId),
           brandWebsite,
         });
+        if (pr == null) return 0;
         return 0;
       } catch (e) {
         console.error(
@@ -574,12 +591,19 @@ export async function runAllProbesForTask(pool, taskId) {
       }
     });
 
+    if (!(await geoHealthTaskExists(pool, taskId))) {
+      console.log(`[geo-health] task=${taskId} 已删除（中止），跳过 probing_done`);
+      return { taskId, processed: tasks.length, failedCount };
+    }
+
     // probing 完成，等待 runAllAnalysisForTask 把状态推到 completed
     await pool.query(`UPDATE geo_health_task SET status = 'probing_done' WHERE id = $1`, [taskId]);
     return { taskId, processed: tasks.length, failedCount };
   } catch (e) {
     console.error(`[geo-health] task=${taskId} probe runner fatal`, e);
-    await pool.query(`UPDATE geo_health_task SET status = 'failed' WHERE id = $1`, [taskId]);
+    if (await geoHealthTaskExists(pool, taskId)) {
+      await pool.query(`UPDATE geo_health_task SET status = 'failed' WHERE id = $1`, [taskId]);
+    }
     throw e;
   }
 }

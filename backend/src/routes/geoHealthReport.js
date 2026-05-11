@@ -19,7 +19,7 @@
  *   intentPaths[] / platforms[] / matrixData{}
  *   keywordTypeLabels{}（data_key → data_value，与 sys_dict.keyword_type 同步，供竞品详情等展示）
  *   competitorMentions[]
- *   sentimentWordCloud[]（词库 + 可选 AI 从原文抽取的三类情感短语，非重叠计数合并、重合不双计；count、weight 同上；source 可选 lexicon|ai）
+ *   sentimentWordCloud[]（本期任务 geo_health_word_cloud_item：任务完成时 AI 入库，可在情感词管理中编辑；text/count/polarity/weight/source）
  *   sourceData[]
  *   diagnosticSuggestions[]（仅综合语境矩阵，无模型数据时为空数组）
  *   matrixContext：综合语境矩阵（16 档）摘要
@@ -30,27 +30,25 @@ import { Router } from 'express';
 import pool from '../db.js';
 import { SOURCE_CATEGORY, SOURCE_CATEGORY_LABEL } from '../services/sourceClassifier.js';
 import {
-  aggregateLexiconHitsFromProbeAnswers,
   buildSentimentSourceDetailRows,
   extractProbeAnswerText,
-  loadSentimentLexiconPolarityRules,
 } from '../services/sentimentLexiconService.js';
+import { inferCategory } from '../services/geoBrandAnalysisService.js';
+import {
+  loadWordCloudLexEntriesForTask,
+  loadPersistedWordCloudPayload,
+} from '../services/geoHealthWordCloudPersistService.js';
+import {
+  computeGeoTaskCacheFingerprints,
+  getGeoTaskReportCache,
+  upsertGeoTaskReportCache,
+} from '../services/geoTaskCacheService.js';
 import { computeAiHealthScore } from '../utils/aiHealthScore.js';
 import {
   aggregateMatrixContextFromModels,
   matrixContextPayload,
   buildMatrixContextDiagnosticItem,
 } from '../utils/contextMatrix.js';
-import { inferCategory } from '../services/geoBrandAnalysisService.js';
-import {
-  buildSentimentWordCloudMerged,
-  mergeLexiconAndAiWordCloud,
-} from '../services/sentimentWordCloudAiService.js';
-import {
-  computeGeoTaskCacheFingerprints,
-  getGeoTaskReportCache,
-  upsertGeoTaskReportCache,
-} from '../services/geoTaskCacheService.js';
 
 /** 库中尚无 keyword_type 字典时的兜底行（与 index.js 种子一致） */
 const FALLBACK_KEYWORD_TYPE_ROWS = [
@@ -586,44 +584,8 @@ router.get('/geo-health-report', async (req, res) => {
       barTone: 'primary',
     }));
 
-    // ── 5. 词云：词库非重叠计数 + 可选 AI 从原文抽三类短语（合并、本任务已命中词库词与 AI 同 key 不双计）──
-    const answerForCloudRes = await pool.query(
-      `SELECT a.id AS analysis_id, ga.raw_json
-       FROM geo_health_analysis a
-       INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
-       WHERE a.task_id = $1 AND a.error_text IS NULL`,
-      [taskId]
-    );
-
-    const lexPolarityRules = await loadSentimentLexiconPolarityRules(pool, userId);
-    const lexEntries = [
-      ...lexPolarityRules.negative.map((k) => ({ keyword: k, polarity: 'negative' })),
-      ...lexPolarityRules.positive.map((k) => ({ keyword: k, polarity: 'positive' })),
-      ...lexPolarityRules.neutral.map((k) => ({ keyword: k, polarity: 'neutral' })),
-    ];
-
-    const lexHitCount = aggregateLexiconHitsFromProbeAnswers(answerForCloudRes.rows, lexEntries);
-
-    let sentimentWordCloud;
-    try {
-      sentimentWordCloud = await buildSentimentWordCloudMerged(pool, userId, {
-        brandName,
-        industry,
-        brandDescription,
-        targetAudience,
-        answerRows: answerForCloudRes.rows,
-        lexEntries,
-        lexHitCount,
-      });
-    } catch (wcErr) {
-      console.error('[geo-health-report] 词云 AI 合并失败，回退为仅词库:', wcErr);
-      sentimentWordCloud = mergeLexiconAndAiWordCloud({
-        lexEntries,
-        lexHitCount,
-        answerRows: answerForCloudRes.rows,
-        aiRows: [],
-      });
-    }
+    // ── 5. 词云：仅读本期任务已入库的 AI 词云（任务完成时写入 geo_health_word_cloud_item）──
+    const sentimentWordCloud = await loadPersistedWordCloudPayload(pool, taskId);
 
     // ── 6. 信源（geo_health_article.source_category 四分类聚合，与探针 Prompt 枚举一致）──
     const srcArtRes = await pool.query(
@@ -728,7 +690,7 @@ router.get('/geo-health-report', async (req, res) => {
 });
 
 /**
- * 词云来源明细：每条「探针回答原文 × 词库词」命中一行，支持分页与内容模糊筛选（q）
+ * 词云来源明细：每条探针回答原文 × 本期词云词条命中一行，支持分页与内容模糊筛选（q）
  */
 router.get('/geo-health-report/sentiment-sources', async (req, res) => {
   try {
@@ -761,12 +723,7 @@ router.get('/geo-health-report/sentiment-sources', async (req, res) => {
       [taskId]
     );
 
-    const lexPolarityRules = await loadSentimentLexiconPolarityRules(pool, userId);
-    const lexEntries = [
-      ...lexPolarityRules.negative.map((k) => ({ keyword: k, polarity: 'negative' })),
-      ...lexPolarityRules.positive.map((k) => ({ keyword: k, polarity: 'positive' })),
-      ...lexPolarityRules.neutral.map((k) => ({ keyword: k, polarity: 'neutral' })),
-    ];
+    const lexEntries = await loadWordCloudLexEntriesForTask(pool, taskId);
 
     const allRows = buildSentimentSourceDetailRows(answerRes.rows, lexEntries);
 
