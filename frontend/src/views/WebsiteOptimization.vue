@@ -286,7 +286,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import {
   Monitor, Check, Loading, Link, Clock, RefreshRight, Download,
@@ -298,6 +298,7 @@ const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const WEBSITE_REPORTS_API = `${API_BASE_URL}/api/website-reports`
 
 const router = useRouter()
+const route = useRoute()
 
 // ===== 常量 =====
 const dimLabels = {
@@ -784,6 +785,10 @@ const formatTime = (isoString) => formatZhCnYmdHm(isoString)
 
 // ===== 初始化 =====
 onMounted(() => {
+  const q = route.query.url ?? route.query.prefill
+  if (q != null && String(q).trim()) {
+    inputUrl.value = String(q).trim()
+  }
   loadHistory()
 })
 </script>

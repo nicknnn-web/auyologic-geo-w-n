@@ -155,7 +155,8 @@
                       <div class="mv-plat-head">
                         <div
                           class="mv-plat-icon"
-                          :style="{ background: (m.iconBgColor || m.brandColor) }"
+                          :class="{ 'mv-plat-icon--photo': !!m.iconUrl }"
+                          :style="m.iconUrl ? { background: 'transparent' } : { background: (m.iconBgColor || m.brandColor) }"
                         >
                           <img
                             v-if="m.iconUrl"
@@ -441,7 +442,8 @@
                     <div class="plat-header">
                       <span
                         class="plat-icon"
-                        :style="{ backgroundColor: plat.iconBgColor || plat.color }"
+                        :class="{ 'plat-icon--photo': !!plat.iconUrl }"
+                        :style="plat.iconUrl ? { backgroundColor: 'transparent' } : { backgroundColor: plat.iconBgColor || plat.color }"
                       >
                         <img
                           v-if="plat.iconUrl"
@@ -4302,6 +4304,17 @@ onUnmounted(() => {
   display: block;
 }
 
+.mv-plat-icon--photo {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.mv-plat-icon--photo .mv-plat-icon-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .mv-plat-titles {
   display: flex;
   flex-direction: column;
@@ -4951,6 +4964,16 @@ onUnmounted(() => {
   height: 70%;
   object-fit: contain;
   display: block;
+}
+
+.plat-icon--photo {
+  overflow: hidden;
+}
+
+.plat-icon--photo .plat-icon-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .plat-name {

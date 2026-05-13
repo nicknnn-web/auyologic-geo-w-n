@@ -70,20 +70,27 @@
 
     <!-- 第二行：网站健康度 + GEO收录 -->
     <div class="grid grid-cols-2 gap-5 mb-5">
-      <!-- 网站健康度 -->
+      <!-- 网站健康度（仅展示「企业信息」中官网地址对应的检测记录，而非任意历史 URL） -->
       <div class="dash-card">
         <div class="dash-card-header">
-          <div class="dash-card-title">
-            <el-icon class="dash-icon" color="#f56c6c"><Monitor /></el-icon>
-            网站健康度
+          <div class="dash-card-title-block">
+            <div class="dash-card-title">
+              <el-icon class="dash-icon" color="#f56c6c"><Monitor /></el-icon>
+              网站健康度
+            </div>
+            <div class="dash-card-subhint">与企业信息中的官网一致</div>
           </div>
-          <router-link to="/website-optimization" class="dash-card-more">
-            {{ siteScore !== '--' ? '查看详情' : '立即检测' }}
+          <router-link
+            v-if="siteHealthReady || hasEnterpriseWebsite"
+            :to="websiteOptimizationLink"
+            class="dash-card-more"
+          >
+            {{ siteHealthReady ? '查看详情' : '立即检测' }}
             <el-icon><ArrowRight /></el-icon>
           </router-link>
         </div>
 
-        <template v-if="siteScore !== '--'">
+        <template v-if="siteHealthReady">
           <div class="health-body">
             <div class="health-left">
               <div class="health-big-score" :class="healthGradeClass">{{ siteScore }}</div>
@@ -115,13 +122,23 @@
           </div>
         </template>
 
+        <template v-else-if="!hasEnterpriseWebsite">
+          <div class="health-empty health-empty--cta">
+            <div class="health-empty-text">尚未填写企业官网</div>
+            <div class="health-empty-sub">请先在「企业信息」中填写官网地址，再前往网站优化检测获取健康度评分</div>
+            <el-button type="primary" round class="health-cta-btn" @click="goEnterpriseSettings">
+              去填写官网信息
+            </el-button>
+          </div>
+        </template>
+
         <template v-else>
-          <div class="health-empty">
-            <div class="health-empty-icon">
-              <el-icon size="32" color="#dcdfe6"><Monitor /></el-icon>
-            </div>
-            <div class="health-empty-text">尚未检测</div>
-            <div class="health-empty-sub">开始网站优化检测，获取 SEO 与 AI 抓取评分</div>
+          <div class="health-empty health-empty--cta">
+            <div class="health-empty-text">企业官网尚未检测</div>
+            <div class="health-empty-sub">当前官网：<span class="health-preview-url">{{ enterpriseWebsite }}</span></div>
+            <el-button type="primary" round class="health-cta-btn" @click="goWebsiteOptimization">
+              进行网站优化检测
+            </el-button>
           </div>
         </template>
       </div>
@@ -249,30 +266,115 @@ const router = useRouter()
 // 后端 API 地址
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
-// ===== 网站健康度 =====
+// ===== 网站健康度（仅匹配「企业信息」官网 host 的 website_optimization 记录）=====
 const siteScore = ref('--')
 const siteUrl = ref('')
+const enterpriseWebsite = ref('')
+
+const hasEnterpriseWebsite = computed(() => String(enterpriseWebsite.value || '').trim() !== '')
+
+const siteHealthReady = computed(() => siteScore.value !== '--')
+
+const websiteOptimizationLink = computed(() => {
+  const w = String(enterpriseWebsite.value || '').trim()
+  if (!w) return '/website-optimization'
+  return { path: '/website-optimization', query: { url: w } }
+})
 
 const healthGradeClass = computed(() => {
-  if (siteScore.value >= 80) return 'grade-green'
-  if (siteScore.value >= 60) return 'grade-yellow'
+  const s = siteScore.value
+  if (s === '--' || typeof s !== 'number') return 'grade-red'
+  if (s >= 80) return 'grade-green'
+  if (s >= 60) return 'grade-yellow'
   return 'grade-red'
 })
 
 const healthGrade = computed(() => {
-  if (siteScore.value >= 80) return '优秀'
-  if (siteScore.value >= 70) return '良好'
-  if (siteScore.value >= 60) return '及格'
+  const s = siteScore.value
+  if (s === '--' || typeof s !== 'number') return '需改进'
+  if (s >= 80) return '优秀'
+  if (s >= 70) return '良好'
+  if (s >= 60) return '及格'
   return '需改进'
 })
 
-// 模拟子维度（等后端数据）
-const siteDimensions = [
-  { name: '技术基础', score: 22, color: '#409eff' },
-  { name: '页面结构', score: 18, color: '#67c23a' },
-  { name: '结构化数据', score: 13, color: '#e6a23c' },
-  { name: 'AI亲和性', score: 15, color: '#7070f0' },
-]
+const siteDimensions = ref([
+  { name: '技术基础', score: 0, color: '#409eff' },
+  { name: '页面结构', score: 0, color: '#67c23a' },
+  { name: '结构化数据', score: 0, color: '#e6a23c' },
+  { name: 'AI亲和性', score: 0, color: '#7070f0' },
+])
+
+/** 与网站优化检测页分解权重一致，用于仅有 overall 时估算各条 */
+const DIM_WEIGHTS = { tech: 0.22, structure: 0.28, schema: 0.22, ai: 0.28 }
+
+function normalizeSiteHost(raw) {
+  const t = String(raw || '').trim()
+  if (!t) return ''
+  try {
+    let href = t
+    if (!/^https?:\/\//i.test(href)) href = `https://${href}`
+    return new URL(href).hostname.replace(/^www\./i, '').toLowerCase()
+  } catch {
+    return t
+      .replace(/^https?:\/\//i, '')
+      .split('/')[0]
+      .split('?')[0]
+      .replace(/^www\./i, '')
+      .toLowerCase()
+  }
+}
+
+function pickLatestReportForEnterpriseSite(reports, enterpriseUrl) {
+  const h = normalizeSiteHost(enterpriseUrl)
+  if (!h || !Array.isArray(reports)) return null
+  for (const r of reports) {
+    if (normalizeSiteHost(r.url) === h) return r
+  }
+  return null
+}
+
+function reportOverallScore(row) {
+  if (!row) return null
+  const n = Number(row.overallScore ?? row.score)
+  return Number.isFinite(n) ? n : null
+}
+
+function applySiteDimensionsFromRow(row, overall) {
+  let tech = Number(row.techScore ?? 0)
+  let seo = Number(row.seoScore ?? 0)
+  let ai = Number(row.aiScore ?? 0)
+  let content = Number(row.contentScore ?? 0)
+  const sum = tech + seo + ai + content
+  const o = Math.min(100, Math.max(0, Number(overall) || 0))
+  if (sum === 0 && o > 0) {
+    tech = Math.round(o * DIM_WEIGHTS.tech)
+    const structure = Math.round(o * DIM_WEIGHTS.structure)
+    const schema = Math.round(o * DIM_WEIGHTS.schema)
+    const aiF = Math.max(0, o - tech - structure - schema)
+    siteDimensions.value = [
+      { name: '技术基础', score: tech, color: '#409eff' },
+      { name: '页面结构', score: structure, color: '#67c23a' },
+      { name: '结构化数据', score: schema, color: '#e6a23c' },
+      { name: 'AI亲和性', score: aiF, color: '#7070f0' },
+    ]
+    return
+  }
+  siteDimensions.value = [
+    { name: '技术基础', score: Math.min(100, tech), color: '#409eff' },
+    { name: '页面结构', score: Math.min(100, content), color: '#67c23a' },
+    { name: '结构化数据', score: Math.min(100, seo), color: '#e6a23c' },
+    { name: 'AI亲和性', score: Math.min(100, ai), color: '#7070f0' },
+  ]
+}
+
+function goEnterpriseSettings() {
+  router.push('/enterprise-settings')
+}
+
+function goWebsiteOptimization() {
+  router.push(websiteOptimizationLink.value)
+}
 
 // ===== GEO收录 =====
 const geoPlatforms = ref([
@@ -322,21 +424,38 @@ const formatHistoryDate = (dateStr) => (!dateStr ? '' : formatZhCnMdHm(dateStr))
 onMounted(async () => {
   const userId = 'default_user'
 
-  // 网站健康度 - 从后端 API 获取
+  // 网站健康度：企业官网 + 匹配 host 的检测记录（不按时间取任意 URL）
+  siteScore.value = '--'
+  siteUrl.value = ''
   try {
-    const res = await fetch(`${API_BASE_URL}/api/website-reports`, {
-      headers: { 'x-user-id': userId }
-    })
-    if (res.ok) {
-      const reports = await res.json()
-      if (reports && reports.length > 0) {
-        const latestReport = reports[0]
-        siteScore.value = latestReport.score
-        siteUrl.value = latestReport.url
+    const [settingsRes, reportsRes] = await Promise.all([
+      fetch(`${API_BASE_URL}/api/settings`, { headers: { 'x-user-id': userId } }),
+      fetch(`${API_BASE_URL}/api/website-reports`, { headers: { 'x-user-id': userId } }),
+    ])
+    let website = ''
+    if (settingsRes.ok) {
+      const st = await settingsRes.json()
+      website = String(st.website || '').trim()
+      enterpriseWebsite.value = website
+    } else {
+      enterpriseWebsite.value = ''
+    }
+
+    if (website && reportsRes.ok) {
+      const reports = await reportsRes.json()
+      const matched = pickLatestReportForEnterpriseSite(
+        Array.isArray(reports) ? reports : [],
+        website
+      )
+      const overall = reportOverallScore(matched)
+      if (matched && overall != null) {
+        siteScore.value = overall
+        siteUrl.value = String(matched.url || website).trim() || website
+        applySiteDimensionsFromRow(matched, overall)
       }
     }
   } catch (e) {
-    console.warn('获取网站报告失败:', e)
+    console.warn('获取网站健康度失败:', e)
   }
 
   // 关键词 / 问题 / 草稿 / 已发布 — 聚合统计（与列表分页无关）
@@ -424,9 +543,10 @@ onMounted(async () => {
 
 .dash-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   margin-bottom: 18px;
+  gap: 12px;
 }
 
 .dash-card-title {
@@ -436,6 +556,21 @@ onMounted(async () => {
   font-size: 14px;
   font-weight: 600;
   color: #303133;
+}
+
+.dash-card-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dash-card-subhint {
+  font-size: 11px;
+  font-weight: 400;
+  color: #909399;
+  line-height: 1.3;
+  padding-left: 24px;
 }
 
 .dash-icon { font-size: 16px; }
@@ -448,6 +583,8 @@ onMounted(async () => {
   color: #909399;
   text-decoration: none;
   transition: color 0.2s;
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .dash-card-more:hover { color: #409eff; }
@@ -551,6 +688,36 @@ onMounted(async () => {
 .health-empty-sub {
   font-size: 12px;
   color: #c0c4cc;
+}
+
+.health-empty--cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 168px;
+  padding: 20px 16px 24px;
+  gap: 12px;
+}
+
+.health-empty--cta .health-empty-text {
+  margin-bottom: 0;
+  color: #606266;
+}
+
+.health-empty--cta .health-empty-sub {
+  max-width: 280px;
+  line-height: 1.5;
+  color: #909399;
+}
+
+.health-cta-btn {
+  min-width: 200px;
+}
+
+.health-preview-url {
+  color: #409eff;
+  word-break: break-all;
 }
 
 /* GEO */

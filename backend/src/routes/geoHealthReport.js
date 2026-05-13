@@ -133,6 +133,28 @@ function logoExtrasFor(logoMap, modelName) {
   return logoMap.get(String(modelName || '').trim()) || { iconUrl: null, iconBgColor: null };
 }
 
+/** 报告 JSON 命中任务缓存时仍须按当前库里的接入 Logo 刷新，避免上传后一直看到旧快照 */
+function applyFreshVendorLogos(payload, vendorLogoMap) {
+  if (!payload || typeof payload !== 'object' || !vendorLogoMap) return;
+  const sync = (modelKey) => logoExtrasFor(vendorLogoMap, modelKey);
+  if (Array.isArray(payload.platforms)) {
+    for (const plat of payload.platforms) {
+      const mn = plat.key ?? plat.platformKey;
+      const { iconUrl, iconBgColor } = sync(mn);
+      plat.iconUrl = iconUrl;
+      plat.iconBgColor = iconBgColor;
+    }
+  }
+  if (Array.isArray(payload.modelVisibilityCards)) {
+    for (const card of payload.modelVisibilityCards) {
+      const mn = card.platformKey ?? card.key;
+      const { iconUrl, iconBgColor } = sync(mn);
+      card.iconUrl = iconUrl;
+      card.iconBgColor = iconBgColor;
+    }
+  }
+}
+
 // 矩阵单元格状态说明（对应前端样式与文案）
 // - 绿色高亮：industry_first / precise_hit / brand_win
 // - 蓝色安全：head_tier
@@ -305,9 +327,18 @@ router.get('/geo-health-report', async (req, res) => {
     const taskId = taskRes.rows[0].task_id;
     const checkTime = taskRes.rows[0].check_time;
 
+    const logoConnRes = await pool.query(
+      `SELECT vendor_name, logo_relpath, logo_bg_color
+       FROM ai_provider_connection
+       WHERE user_id = $1`,
+      [userId]
+    );
+    const vendorLogoMap = buildVendorLogoMap(logoConnRes.rows);
+
     const cacheFps = await computeGeoTaskCacheFingerprints(pool, taskId, userId);
     const cachedPayload = await getGeoTaskReportCache(pool, taskId, userId, cacheFps);
     if (cachedPayload) {
+      applyFreshVendorLogos(cachedPayload, vendorLogoMap);
       return res.json(cachedPayload);
     }
 
@@ -333,14 +364,6 @@ router.get('/geo-health-report', async (req, res) => {
     );
 
     const modelNames = mvRes.rows.map((r) => r.model_name);
-
-    const logoConnRes = await pool.query(
-      `SELECT vendor_name, logo_relpath, logo_bg_color
-       FROM ai_provider_connection
-       WHERE user_id = $1`,
-      [userId]
-    );
-    const vendorLogoMap = buildVendorLogoMap(logoConnRes.rows);
 
     const platforms = modelNames.map((mn) => {
       const cfg = MODEL_DISPLAY_MAP[mn] || {
