@@ -19,15 +19,15 @@
         {
           "key": "DATABASE_URL",
           "reference": {
-            "service": "postgresql",
+            "service": "postgresql-car",
             "key": "DATABASE_URL"
           }
         }
       ],
-      "dependencies": ["postgresql", "minio"]
+      "dependencies": ["postgresql-car", "minio-bion"]
     },
     {
-      "name": "postgresql",
+      "name": "postgresql-car",
       "path": null,
       "icon": "🗄️",
       "plan": "pro",
