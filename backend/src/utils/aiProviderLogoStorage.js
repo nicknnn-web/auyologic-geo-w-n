@@ -2,7 +2,7 @@
  * 大模型接入 Logo：仅使用 MinIO，数据库 logo_relpath 存完整可访问的 https 预览地址。
  */
 import path from 'path';
-import { uploadFile, deleteFile, objectNameFromPublicUrl } from '../services/minioClient.js';
+import { uploadFile, deleteFile, objectNameFromPublicUrl, isMinioEnvReadyForUpload } from '../services/minioClient.js';
 
 function safePathSegment(s) {
   return String(s || 'user')
@@ -12,9 +12,7 @@ function safePathSegment(s) {
 }
 
 export function canUseMinioForLogos() {
-  return [process.env.MINIO_ENDPOINT, process.env.MINIO_ACCESS_KEY, process.env.MINIO_SECRET_KEY, process.env.MINIO_BUCKET, process.env.MINIO_PUBLIC_URL].every(
-    (v) => v != null && String(v).trim() !== ''
-  );
+  return isMinioEnvReadyForUpload();
 }
 
 /**
@@ -46,7 +44,7 @@ export function removeAiLogoStored(storedUrl) {
 export async function saveAiLogoFromBuffer(opts) {
   if (!canUseMinioForLogos()) {
     throw new Error(
-      '未配置 MinIO，无法上传 AI Logo。请设置 MINIO_ENDPOINT、MINIO_ACCESS_KEY、MINIO_SECRET_KEY、MINIO_BUCKET、MINIO_PUBLIC_URL（MINIO_PORT 可省略，未设置时默认 443）。'
+      '未配置 MinIO，无法上传 AI Logo。请设置 MINIO_ENDPOINT、MINIO_BUCKET、MINIO_PUBLIC_URL，以及密钥（MINIO_ACCESS_KEY + MINIO_SECRET_KEY，或 Zeabur 等平台的 MINIO_ROOT_USER + MINIO_ROOT_PASSWORD）。MINIO_ENDPOINT 可写完整 https 地址，会自动解析主机名；MINIO_PORT 可省略（HTTPS 默认 443、HTTP 默认 9000）；内网 HTTP 请加 MINIO_USE_SSL=false。'
     );
   }
   const { userId, connectionId, originalName, buffer, mimetype } = opts;

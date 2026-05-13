@@ -5,24 +5,69 @@ import * as Minio from 'minio';
  * 用于文件上传和公开 URL 生成
  */
 
-/** 未设置或无效时默认 443（HTTPS 网关 / 云 S3 兼容端点常见，避免未配 MINIO_PORT 导致 NaN） */
+/** MinIO SDK 的 endPoint 只要主机名，不要带 https://、路径或 :port（端口单独用 MINIO_PORT） */
+export function normalizeMinioEndpoint(raw) {
+  let h = String(raw || '').trim();
+  if (!h) return '';
+  if (/^https?:\/\//i.test(h)) {
+    try {
+      return new URL(h).hostname;
+    } catch {
+      h = h.replace(/^https?:\/\//i, '');
+    }
+  }
+  const noPath = h.split('/')[0];
+  return noPath.split(':')[0].trim();
+}
+
+export function resolveMinioAccessKey() {
+  return String(process.env.MINIO_ACCESS_KEY || process.env.MINIO_ROOT_USER || '').trim();
+}
+
+export function resolveMinioSecretKey() {
+  return String(process.env.MINIO_SECRET_KEY || process.env.MINIO_ROOT_PASSWORD || '').trim();
+}
+
+/** MINIO_USE_SSL=false / 0 / off 时走 HTTP（内网 MinIO 常见） */
+function resolveMinioUseSSL() {
+  const v = String(process.env.MINIO_USE_SSL ?? '').trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  return true;
+}
+
+/** 未设置或无效时：HTTPS 默认 443，HTTP 默认 9000（与常见 MinIO 部署一致） */
 export function resolveMinioPort() {
   const raw = process.env.MINIO_PORT;
   if (raw != null && String(raw).trim() !== '') {
     const n = parseInt(String(raw).trim(), 10);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  return 443;
+  return resolveMinioUseSSL() ? 443 : 9000;
+}
+
+const ENDPOINT = normalizeMinioEndpoint(process.env.MINIO_ENDPOINT);
+
+/** Logo / 图库等上传前校验：与客户端实际使用同一套解析规则 */
+export function isMinioEnvReadyForUpload() {
+  return !!(
+    ENDPOINT &&
+    process.env.MINIO_BUCKET &&
+    String(process.env.MINIO_BUCKET).trim() &&
+    process.env.MINIO_PUBLIC_URL &&
+    String(process.env.MINIO_PUBLIC_URL).trim() &&
+    resolveMinioAccessKey() &&
+    resolveMinioSecretKey()
+  );
 }
 
 // 初始化 MinIO 客户端
-console.log('MINIO_ENDPOINT =', process.env.MINIO_ENDPOINT)
+console.log('MINIO_ENDPOINT(raw) =', process.env.MINIO_ENDPOINT, '→ normalized =', ENDPOINT);
 const minioClient = new Minio.Client({
-  endPoint: process.env.MINIO_ENDPOINT,
+  endPoint: ENDPOINT || '127.0.0.1',
   port: resolveMinioPort(),
-  useSSL: true,
-  accessKey: process.env.MINIO_ACCESS_KEY,
-  secretKey: process.env.MINIO_SECRET_KEY
+  useSSL: resolveMinioUseSSL(),
+  accessKey: resolveMinioAccessKey(),
+  secretKey: resolveMinioSecretKey(),
 });
 
 // Bucket 配置
@@ -51,14 +96,13 @@ async function initializeBucket() {
           Effect: 'Allow',
           Principal: '*',
           Action: ['s3:GetObject'],
-          Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`]
-        }
-      ]
+          Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`],
+        },
+      ],
     };
 
     await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
     console.log(`✅ Bucket "${BUCKET_NAME}" 公开访问策略已设置`);
-
   } catch (error) {
     console.error('❌ MinIO Bucket 初始化失败:', error);
     throw error;
@@ -138,5 +182,5 @@ export {
   deleteFile,
   getPublicUrl,
   BUCKET_NAME,
-  PUBLIC_URL_PREFIX
+  PUBLIC_URL_PREFIX,
 };
