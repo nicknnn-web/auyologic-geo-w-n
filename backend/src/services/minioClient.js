@@ -59,6 +59,7 @@ function resolveMinioPublicUrlPrefix() {
   ];
   for (const k of keys) {
     const t = String(process.env[k] || '').trim();
+    console.log(t+"这是"+k);
     if (t) return stripTrailingSlash(t);
   }
   const hostOnly = String(process.env.MINIO_PUBLIC_HOST || '').trim();
