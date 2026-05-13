@@ -41,8 +41,9 @@
       "icon": "🎨",
       "plan": "pro",
       "region": "auto",
-      "runtime": "docker",
-      "dockerfile": "Dockerfile",
+      "runtime": "node",
+      "buildCommand": "npm install && npm run build",
+      "startCommand": "npm start",
       "dependencies": ["auyologic-backend"]
     }
   ]
