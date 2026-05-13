@@ -5,11 +5,21 @@ import * as Minio from 'minio';
  * 用于文件上传和公开 URL 生成
  */
 
+/** 未设置或无效时默认 443（HTTPS 网关 / 云 S3 兼容端点常见，避免未配 MINIO_PORT 导致 NaN） */
+export function resolveMinioPort() {
+  const raw = process.env.MINIO_PORT;
+  if (raw != null && String(raw).trim() !== '') {
+    const n = parseInt(String(raw).trim(), 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 443;
+}
+
 // 初始化 MinIO 客户端
 console.log('MINIO_ENDPOINT =', process.env.MINIO_ENDPOINT)
 const minioClient = new Minio.Client({
   endPoint: process.env.MINIO_ENDPOINT,
-  port: parseInt(process.env.MINIO_PORT),
+  port: resolveMinioPort(),
   useSSL: true,
   accessKey: process.env.MINIO_ACCESS_KEY,
   secretKey: process.env.MINIO_SECRET_KEY

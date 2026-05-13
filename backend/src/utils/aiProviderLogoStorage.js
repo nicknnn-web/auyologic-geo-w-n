@@ -12,11 +12,8 @@ function safePathSegment(s) {
 }
 
 export function canUseMinioForLogos() {
-  const port = parseInt(process.env.MINIO_PORT, 10);
-  return (
-    [process.env.MINIO_ENDPOINT, process.env.MINIO_ACCESS_KEY, process.env.MINIO_SECRET_KEY, process.env.MINIO_BUCKET, process.env.MINIO_PUBLIC_URL].every(
-      (v) => v != null && String(v).trim() !== ''
-    ) && Number.isFinite(port)
+  return [process.env.MINIO_ENDPOINT, process.env.MINIO_ACCESS_KEY, process.env.MINIO_SECRET_KEY, process.env.MINIO_BUCKET, process.env.MINIO_PUBLIC_URL].every(
+    (v) => v != null && String(v).trim() !== ''
   );
 }
 
@@ -49,7 +46,7 @@ export function removeAiLogoStored(storedUrl) {
 export async function saveAiLogoFromBuffer(opts) {
   if (!canUseMinioForLogos()) {
     throw new Error(
-      '未配置 MinIO，无法上传 AI Logo。请设置 MINIO_ENDPOINT、MINIO_PORT、MINIO_ACCESS_KEY、MINIO_SECRET_KEY、MINIO_BUCKET、MINIO_PUBLIC_URL 后重试。'
+      '未配置 MinIO，无法上传 AI Logo。请设置 MINIO_ENDPOINT、MINIO_ACCESS_KEY、MINIO_SECRET_KEY、MINIO_BUCKET、MINIO_PUBLIC_URL（MINIO_PORT 可省略，未设置时默认 443）。'
     );
   }
   const { userId, connectionId, originalName, buffer, mimetype } = opts;
