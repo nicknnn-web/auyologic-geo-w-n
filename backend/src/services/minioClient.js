@@ -160,6 +160,12 @@ function resolveMinioUseSSLFromParsed(parsed) {
 }
 
 function resolveMinioPortFromParsed(parsed, useSSL) {
+  // 当 endpoint 是完整 URL 时，优先用 URL 的端口；若 URL 无端口则用 SSL 默认端口
+  const epRaw = resolveMinioEndpointRaw();
+  if (/^https?:\/\//i.test(String(epRaw || '').trim())) {
+    if (parsed.portFromUrl != null && parsed.portFromUrl > 0) return parsed.portFromUrl;
+    return useSSL ? 443 : 9000;
+  }
   const raw = process.env.MINIO_PORT;
   if (raw != null && String(raw).trim() !== '') {
     const n = parseInt(String(raw).trim(), 10);
