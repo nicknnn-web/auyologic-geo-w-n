@@ -8,21 +8,21 @@
     </div>
 
     <!-- 上传区域 -->
-    <div 
-      class="border-2 border-dashed border-gray-300 rounded-lg p-8 mb-6 text-center hover:border-blue-400 transition-colors cursor-pointer"
-      :class="{ 'border-blue-500 bg-blue-50': isDragging }"
-      @dragover.prevent="isDragging = true"
-      @dragleave.prevent="isDragging = false"
-      @drop.prevent="handleDrop"
-      @click="triggerUpload"
+    <div
+        class="border-2 border-dashed border-gray-300 rounded-lg p-8 mb-6 text-center hover:border-blue-400 transition-colors cursor-pointer"
+        :class="{ 'border-blue-500 bg-blue-50': isDragging }"
+        @dragover.prevent="isDragging = true"
+        @dragleave.prevent="isDragging = false"
+        @drop.prevent="handleDrop"
+        @click="triggerUpload"
     >
-      <input 
-        ref="fileInput"
-        type="file"
-        class="hidden"
-        multiple
-        accept="image/*"
-        @change="handleFileSelect"
+      <input
+          ref="fileInput"
+          type="file"
+          class="hidden"
+          multiple
+          accept="image/*"
+          @change="handleFileSelect"
       />
       <el-icon class="text-4xl text-gray-400 mb-3"><PictureFilled /></el-icon>
       <div class="text-gray-600 mb-2">
@@ -46,26 +46,26 @@
     <div v-if="uploadingFiles.length > 0" class="mb-6">
       <div class="text-sm font-medium text-gray-600 mb-3">上传中...</div>
       <div class="space-y-2">
-        <div 
-          v-for="file in uploadingFiles" 
-          :key="file.name"
-          class="flex items-center gap-3 bg-gray-50 rounded-lg p-3"
+        <div
+            v-for="file in uploadingFiles"
+            :key="file.name"
+            class="flex items-center gap-3 bg-gray-50 rounded-lg p-3"
         >
-          <img 
-            v-if="file.preview" 
-            :src="file.preview" 
-            class="w-10 h-10 object-cover rounded"
+          <img
+              v-if="file.preview"
+              :src="file.preview"
+              class="w-10 h-10 object-cover rounded"
           />
           <div v-else class="w-10 h-10 bg-gray-200 rounded flex items-center justify-center">
             <el-icon class="text-gray-400"><PictureFilled /></el-icon>
           </div>
           <div class="flex-1">
             <div class="text-sm font-medium">{{ file.name }}</div>
-            <el-progress 
-              :percentage="file.progress" 
-              :stroke-width="4"
-              :show-text="false"
-              class="mt-1"
+            <el-progress
+                :percentage="file.progress"
+                :stroke-width="4"
+                :show-text="false"
+                class="mt-1"
             />
           </div>
           <el-tag size="small" :type="file.status === 'done' ? 'success' : 'warning'">
@@ -85,81 +85,81 @@
           </el-button>
         </div>
         <div class="flex items-center gap-2">
-          <el-button 
-            :type="viewMode === 'grid' ? 'primary' : 'default'" 
-            size="small"
-            @click="viewMode = 'grid'"
+          <el-button
+              :type="viewMode === 'grid' ? 'primary' : 'default'"
+              size="small"
+              @click="viewMode = 'grid'"
           >
             <el-icon><Grid /></el-icon>
           </el-button>
-          <el-button 
-            :type="viewMode === 'list' ? 'primary' : 'default'" 
-            size="small"
-            @click="viewMode = 'list'"
+          <el-button
+              :type="viewMode === 'list' ? 'primary' : 'default'"
+              size="small"
+              @click="viewMode = 'list'"
           >
             <el-icon><List /></el-icon>
           </el-button>
-          <el-button 
-            v-if="selectedImages.length > 0" 
-            type="primary" 
-            size="small"
-            @click="handleBatchDownload"
+          <el-button
+              v-if="selectedImages.length > 0"
+              type="primary"
+              size="small"
+              @click="handleBatchDownload"
           >
             批量下载 ({{ selectedImages.length }})
           </el-button>
-          <el-button 
-            v-if="selectedImages.length > 0" 
-            type="danger" 
-            size="small"
-            @click="handleBatchDelete"
+          <el-button
+              v-if="selectedImages.length > 0"
+              type="danger"
+              size="small"
+              @click="handleBatchDelete"
           >
             批量删除 ({{ selectedImages.length }})
           </el-button>
         </div>
       </div>
-      
+
       <!-- 网格视图 -->
       <div v-if="viewMode === 'grid'" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-        <div 
-          v-for="img in tableData" 
-          :key="img.id"
-          class="group relative bg-gray-50 rounded-lg overflow-hidden border-2 border-transparent hover:border-blue-400 transition-all cursor-pointer"
-          :class="{ 'border-blue-500': selectedImages.some(s => s.id === img.id) }"
-          @click="toggleSelect(img)"
+        <div
+            v-for="img in tableData"
+            :key="img.id"
+            class="group relative bg-gray-50 rounded-lg overflow-hidden border-2 border-transparent hover:border-blue-400 transition-all cursor-pointer"
+            :class="{ 'border-blue-500': selectedImages.some(s => s.id === img.id) }"
+            @click="toggleSelect(img)"
         >
           <!-- 选择框 -->
-          <div 
-            class="absolute top-2 left-2 z-10"
-            @click.stop
+          <div
+              class="absolute top-2 left-2 z-10"
+              @click.stop
           >
-            <el-checkbox 
-              :model-value="selectedImages.some(s => s.id === img.id)"
-              @change="toggleSelect(img)"
+            <el-checkbox
+                :model-value="selectedImages.some(s => s.id === img.id)"
+                @change="toggleSelect(img)"
             />
           </div>
-          
+
           <!-- 图片 -->
-          <div 
-            class="aspect-square overflow-hidden"
-            @click.stop="handlePreview(img)"
+          <div
+              class="aspect-square overflow-hidden"
+              @click.stop="handlePreview(img)"
           >
-            <img 
-              :src="img.preview" 
-              :alt="img.name"
-              class="w-full h-full object-cover group-hover:scale-105 transition-transform"
+            <img
+                :src="img.preview"
+                :alt="img.name"
+                class="w-full h-full object-cover group-hover:scale-105 transition-transform"
             />
           </div>
-          
+
           <!-- 信息 -->
           <div class="p-2 bg-white">
             <div class="text-xs font-medium truncate" :title="img.name">{{ img.name }}</div>
             <div class="text-xs text-gray-400">{{ formatFileSize(img.size) }}</div>
           </div>
-          
+
           <!-- 删除按钮 -->
-          <div 
-            class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-            @click.stop="handleDelete(img.id)"
+          <div
+              class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
+              @click.stop="handleDelete(img.id)"
           >
             <el-button link type="danger" size="small">
               <el-icon><Delete /></el-icon>
@@ -167,7 +167,7 @@
           </div>
         </div>
       </div>
-      
+
       <!-- 列表视图 -->
       <div v-else>
         <el-table :data="tableData" @selection-change="handleSelectionChange">
@@ -211,10 +211,10 @@
         </div>
       </template>
       <div v-if="currentPreview" class="flex justify-center">
-        <img 
-          :src="currentPreview.preview" 
-          :alt="currentPreview.name"
-          class="max-h-[70vh] object-contain"
+        <img
+            :src="currentPreview.preview"
+            :alt="currentPreview.name"
+            class="max-h-[70vh] object-contain"
         />
       </div>
       <template #footer>
@@ -277,21 +277,17 @@ const loadImagesFromAPI = async () => {
   try {
     const { list } = await imagesAPI.list()
     if (Array.isArray(list) && list.length > 0) {
-      tableData.value = list.map((img) => {
-        const path = img.imagePath || img.image_path || img.preview || ''
-        return {
-          id: img.id,
-          name: img.title || img.name || '',
-          preview: path,
-          url: path,
-          size: img.size || 0,
-          createdAt: img.createdAt
+      tableData.value = list.map(img => ({
+        id: img.id,
+        name: img.title || img.name || '',
+        preview: img.imagePath || img.image_path || img.preview || '',
+        size: img.size || 0,
+        createdAt: img.createdAt
             ? formatZhCnDateTime(img.createdAt)
             : img.created_at
-              ? formatZhCnDateTime(img.created_at)
-              : nowZhCnDateTime(),
-        }
-      })
+                ? formatZhCnDateTime(img.created_at)
+                : nowZhCnDateTime()
+      }))
       // 同步到 localStorage
       saveToStorage()
       return
@@ -352,7 +348,7 @@ const uploadFileToMinIO = (file) => {
   reader.onload = async (e) => {
     const preview = e.target?.result || ''
     uploadingFile.preview = preview
-    
+
     try {
       // 上传到 MinIO
       const uploadResult = await uploadFile(file, (progress) => {
@@ -361,7 +357,7 @@ const uploadFileToMinIO = (file) => {
 
       uploadingFile.progress = 100
       uploadingFile.status = 'done'
-      
+
       const imageData = {
         id: Date.now() + Math.random(),
         name: file.name,
@@ -372,7 +368,7 @@ const uploadFileToMinIO = (file) => {
         createdAt: nowZhCnDateTime()
       }
       tableData.value.unshift(imageData)
-      
+
       // 保存到后端 API
       try {
         const savedImage = await imagesAPI.create({
@@ -394,7 +390,7 @@ const uploadFileToMinIO = (file) => {
       } catch (e) {
         ElMessage.warning('localStorage 保存失败')
       }
-      
+
     } catch (error) {
       console.error('上传失败:', error)
       ElMessage.error(`上传失败: ${error.message}`)
@@ -403,12 +399,12 @@ const uploadFileToMinIO = (file) => {
       uploadingFiles.value = uploadingFiles.value.filter(f => f !== uploadingFile)
     }
   }
-  
+
   reader.onerror = () => {
     ElMessage.error(`读取文件失败`)
     uploadingFiles.value = uploadingFiles.value.filter(f => f !== uploadingFile)
   }
-  
+
   reader.readAsDataURL(file)
 }
 
@@ -442,7 +438,7 @@ const handlePreview = (img) => {
 
 const handlePreviewDownload = () => {
   if (!currentPreview.value) return
-  
+
   const a = document.createElement('a')
   a.href = currentPreview.value.preview
   a.download = currentPreview.value.name
@@ -460,7 +456,7 @@ const handleSingleDownload = (row) => {
 
 const handleDelete = async (id) => {
   const image = tableData.value.find(item => item.id === id)
-  
+
   // 尝试从 MinIO 删除文件
   if (image && image.url) {
     try {
@@ -469,7 +465,7 @@ const handleDelete = async (id) => {
       console.warn('从 MinIO 删除失败:', e)
     }
   }
-  
+
   // 同步删除数据库记录
   try {
     await imagesAPI.delete(id)
@@ -496,7 +492,7 @@ const handleBatchDelete = async () => {
         console.warn(`从 MinIO 删除图片 ${img.name} 失败:`, e)
       }
     }
-    
+
     try {
       await imagesAPI.delete(img.id)
     } catch (e) {
@@ -515,7 +511,7 @@ const handleBatchDownload = () => {
     ElMessage.warning('请先选择要下载的图片')
     return
   }
-  
+
   // 从 MinIO 下载
   selectedImages.value.forEach((img, idx) => {
     setTimeout(async () => {
@@ -535,7 +531,7 @@ const handleBatchDownload = () => {
       }
     }, idx * 300) // 间隔 300ms 避免浏览器阻止
   })
-  
+
   ElMessage.success(`正在下载 ${selectedImages.value.length} 张图片`)
 }
 </script>

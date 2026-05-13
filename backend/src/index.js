@@ -20,7 +20,6 @@ import {
   cleanupTask,
 } from './services/playwrightPublisher.js';
 import { parsePagination, pagedResponse } from './pagination.js';
-import { normalizeImagePathForApi } from './services/minioClient.js';
 
 const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
