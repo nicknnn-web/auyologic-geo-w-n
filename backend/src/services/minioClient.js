@@ -66,7 +66,30 @@ function resolveMinioPublicUrlPrefix() {
     if (/^https?:\/\//i.test(hostOnly)) return stripTrailingSlash(hostOnly);
     return stripTrailingSlash(`https://${hostOnly}`);
   }
+  /**
+   * Zeabur：后端常只绑定集群内 MINIO_ENDPOINT，公网域名（如 https://minio-storage.zeabur.app）
+   * 需在「运行 Node 的后端服务」里单独配 MINIO_PUBLIC_URL。若 S3 连接地址本身就是 https 且主机为 *.zeabur.app，
+   * 则与浏览器访问对象同源，可在此自动作为公网前缀，避免漏配 MINIO_PUBLIC_URL。
+   */
+  const fromZeaburHttpsEndpoint = inferPublicPrefixFromZeaburHttpsEndpoint();
+  if (fromZeaburHttpsEndpoint) return fromZeaburHttpsEndpoint;
   return '';
+}
+
+/** 当 MINIO_ENDPOINT / S3_ENDPOINT 等为 https://*.zeabur.app 时，用其 origin 作为对象公网前缀 */
+function inferPublicPrefixFromZeaburHttpsEndpoint() {
+  const raw = resolveMinioEndpointRaw();
+  const s = String(raw || '').trim();
+  if (!/^https:\/\//i.test(s)) return '';
+  try {
+    const u = new URL(s);
+    if (!/\.zeabur\.app$/i.test(u.hostname)) return '';
+    const path = (u.pathname || '').replace(/\/+$/, '');
+    if (path && path !== '/') return '';
+    return stripTrailingSlash(u.origin);
+  } catch {
+    return '';
+  }
 }
 
 /** MinIO SDK 的 endPoint 只要主机名（无协议、无端口） */
@@ -314,7 +337,10 @@ async function initializeBucket() {
 async function uploadFile(fileBuffer, objectName, contentType = 'application/octet-stream') {
   const c = getMinioConfig();
   if (!c.bucket || !c.publicPrefix) {
-    throw new Error('MinIO 未配置完整：需要 bucket 与对外访问前缀（如 MINIO_PUBLIC_URL）');
+    throw new Error(
+      'MinIO 未配置完整：需要 bucket 与浏览器可访问的公网前缀。请在运行本后端的 Zeabur 服务环境变量中设置 MINIO_PUBLIC_URL（例如 https://minio-storage.zeabur.app，与对象存储的公网域名一致，不要末尾 /）。' +
+        '若 MINIO_ENDPOINT 已是 https://xxx.zeabur.app 且与对外访问同源，可不设 MINIO_PUBLIC_URL；若 ENDPOINT 为集群内地址，则必须单独设置 MINIO_PUBLIC_URL。'
+    );
   }
   try {
     const client = getMinioClient();
