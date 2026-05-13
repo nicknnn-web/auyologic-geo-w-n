@@ -277,17 +277,21 @@ const loadImagesFromAPI = async () => {
   try {
     const { list } = await imagesAPI.list()
     if (Array.isArray(list) && list.length > 0) {
-      tableData.value = list.map(img => ({
-        id: img.id,
-        name: img.title || img.name || '',
-        preview: img.imagePath || img.image_path || img.preview || '',
-        size: img.size || 0,
-        createdAt: img.createdAt
-            ? formatZhCnDateTime(img.createdAt)
-            : img.created_at
-                ? formatZhCnDateTime(img.created_at)
-                : nowZhCnDateTime()
-      }))
+      tableData.value = list.map((img) => {
+        const path = img.imagePath || img.image_path || img.preview || ''
+        return {
+          id: img.id,
+          name: img.title || img.name || '',
+          preview: path,
+          url: path,
+          size: img.size || 0,
+          createdAt: img.createdAt
+              ? formatZhCnDateTime(img.createdAt)
+              : img.created_at
+                  ? formatZhCnDateTime(img.created_at)
+                  : nowZhCnDateTime(),
+        }
+      })
       // 同步到 localStorage
       saveToStorage()
       return

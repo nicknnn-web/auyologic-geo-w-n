@@ -6,6 +6,7 @@ import archiver from 'archiver';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
+import { normalizeImagePathForApi } from './services/minioClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

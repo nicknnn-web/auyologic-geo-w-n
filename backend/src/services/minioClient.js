@@ -1,11 +1,11 @@
 import * as Minio from 'minio';
 
 /**
- * MinIO 客户端配置
- * 用于文件上传和公开 URL 生成
+ * MinIO 客户端（运行时读环境变量 + 懒创建客户端）
+ * 避免进程启动瞬间未注入变量导致整进程内「永远未配置」；与 Zeabur 等云平台行为对齐。
  */
 
-/** 从若干常见环境变量中取第一个非空的连接主机/URL 原文（再交给 normalizeMinioEndpoint） */
+/** 从若干常见环境变量中取第一个非空的连接主机/URL 原文 */
 function resolveMinioEndpointRaw() {
   const keys = [
     'MINIO_ENDPOINT',
@@ -37,17 +37,39 @@ function resolveMinioBucket() {
   return '';
 }
 
-/** 对外访问 URL 前缀（与 uploadFile 中拼接规则一致，一般不要末尾 /） */
+function stripTrailingSlash(s) {
+  return String(s || '').replace(/\/+$/, '');
+}
+
+/**
+ * 对外访问 URL 前缀（与 putObject 后拼接给前端的规则一致）
+ * 若平台只给了「公网主机名」，可配 MINIO_PUBLIC_HOST（无协议时默认补 https://）
+ */
 function resolveMinioPublicUrlPrefix() {
-  const keys = ['MINIO_PUBLIC_URL', 'MINIO_PUBLIC_ENDPOINT', 'S3_PUBLIC_URL', 'MINIO_BROWSER_REDIRECT_URL'];
+  const keys = [
+    'MINIO_PUBLIC_URL',
+    'MINIO_PUBLIC_ENDPOINT',
+    'S3_PUBLIC_URL',
+    'MINIO_BROWSER_REDIRECT_URL',
+    'MINIO_PUBLIC_BASE_URL',
+    'MINIO_EXTERNAL_URL',
+    'PUBLIC_ASSET_ORIGIN',
+    'APP_PUBLIC_URL',
+    'ASSET_PUBLIC_BASE_URL',
+  ];
   for (const k of keys) {
     const t = String(process.env[k] || '').trim();
-    if (t) return t.replace(/\/$/, '');
+    if (t) return stripTrailingSlash(t);
+  }
+  const hostOnly = String(process.env.MINIO_PUBLIC_HOST || '').trim();
+  if (hostOnly) {
+    if (/^https?:\/\//i.test(hostOnly)) return stripTrailingSlash(hostOnly);
+    return stripTrailingSlash(`https://${hostOnly}`);
   }
   return '';
 }
 
-/** MinIO SDK 的 endPoint 只要主机名，不要带 https://、路径或 :port（端口单独用 MINIO_PORT） */
+/** MinIO SDK 的 endPoint 只要主机名（无协议、无端口） */
 export function normalizeMinioEndpoint(raw) {
   let h = String(raw || '').trim();
   if (!h) return '';
@@ -63,7 +85,7 @@ export function normalizeMinioEndpoint(raw) {
 }
 
 /**
- * 从「连接地址」原文解析主机、URL 内端口、是否 HTTPS（云端常给完整 http(s)://host:9000，不能再丢端口）
+ * 从连接地址原文解析主机、URL 内端口、是否 HTTPS
  * @returns {{ host: string, portFromUrl: number|null, schemeIsHttps: boolean|null }}
  */
 function parseMinioConnectionFromRaw(raw) {
@@ -103,76 +125,165 @@ export function resolveMinioSecretKey() {
   ).trim();
 }
 
-const _rawEndpoint = resolveMinioEndpointRaw();
-const _parsedConn = parseMinioConnectionFromRaw(_rawEndpoint);
-const ENDPOINT = _parsedConn.host;
-const BUCKET_NAME = resolveMinioBucket();
-const PUBLIC_URL_PREFIX = resolveMinioPublicUrlPrefix();
-
-/** MINIO_USE_SSL 优先；未设置时若连接地址是 http(s) URL 则按协议推断（避免内网 http://host:9000 仍走 TLS） */
-function resolveMinioUseSSL() {
+function resolveMinioUseSSLFromParsed(parsed) {
   const v = String(process.env.MINIO_USE_SSL ?? '').trim().toLowerCase();
   if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
   if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
-  if (_parsedConn.schemeIsHttps === true) return true;
-  if (_parsedConn.schemeIsHttps === false) return false;
+  if (parsed.schemeIsHttps === true) return true;
+  if (parsed.schemeIsHttps === false) return false;
   return true;
 }
 
-/** 优先 MINIO_PORT，其次连接 URL 中的端口，最后按是否 TLS 默认 443 / 9000 */
-export function resolveMinioPort() {
+function resolveMinioPortFromParsed(parsed, useSSL) {
   const raw = process.env.MINIO_PORT;
   if (raw != null && String(raw).trim() !== '') {
     const n = parseInt(String(raw).trim(), 10);
     if (Number.isFinite(n) && n > 0) return n;
   }
-  if (_parsedConn.portFromUrl != null && _parsedConn.portFromUrl > 0) {
-    return _parsedConn.portFromUrl;
+  if (parsed.portFromUrl != null && parsed.portFromUrl > 0) return parsed.portFromUrl;
+  return useSSL ? 443 : 9000;
+}
+
+/**
+ * 当前进程环境下的 MinIO 连接与拼接用配置（每次调用重新读 env）
+ */
+export function getMinioConfig() {
+  const rawEp = resolveMinioEndpointRaw();
+  const parsed = parseMinioConnectionFromRaw(rawEp);
+  const host = String(parsed.host || '').trim();
+  const bucket = resolveMinioBucket();
+  const publicPrefix = resolveMinioPublicUrlPrefix();
+  const accessKey = resolveMinioAccessKey();
+  const secretKey = resolveMinioSecretKey();
+  const useSSL = resolveMinioUseSSLFromParsed(parsed);
+  const port = resolveMinioPortFromParsed(parsed, useSSL);
+  return {
+    host,
+    bucket,
+    publicPrefix,
+    accessKey,
+    secretKey,
+    port,
+    useSSL,
+    rawEndpoint: rawEp,
+  };
+}
+
+/**
+ * 将 images.image_path 等字段规范为浏览器可用的绝对 http(s) URL。
+ * 已是绝对地址（含协议相对 //host/...）则补全或原样返回；仅为对象键或含 bucket 前缀的相对路径时按当前 MinIO 公网前缀拼接。
+ * 若未配置 MINIO_PUBLIC_URL 等导致无法拼接，则返回原字符串。
+ */
+export function normalizeImagePathForApi(stored) {
+  let raw = String(stored ?? '').trim();
+  if (!raw) return raw;
+  const qIdx = raw.indexOf('?');
+  const pathOnly = qIdx === -1 ? raw : raw.slice(0, qIdx);
+  const query = qIdx === -1 ? '' : raw.slice(qIdx);
+
+  if (/^\/\//.test(pathOnly)) {
+    raw = `https:${pathOnly}${query}`;
   }
-  return resolveMinioUseSSL() ? 443 : 9000;
+  const qIdx2 = raw.indexOf('?');
+  const pathPart = qIdx2 === -1 ? raw : raw.slice(0, qIdx2);
+  const query2 = qIdx2 === -1 ? '' : raw.slice(qIdx2);
+
+  if (/^https?:\/\//i.test(pathPart)) {
+    return qIdx2 === -1 ? pathPart : `${pathPart}${query2}`;
+  }
+
+  const c = getMinioConfig();
+  const prefix = stripTrailingSlash(c.publicPrefix || '');
+  const bucket = String(c.bucket || '').trim();
+  if (!prefix || !bucket) return String(stored ?? '').trim();
+
+  let key = pathPart.replace(/^\/+/, '');
+  const bucketPrefix = `${bucket}/`;
+  if (key.startsWith(bucketPrefix)) {
+    key = key.slice(bucketPrefix.length);
+  } else if (key === bucket) {
+    key = '';
+  }
+  if (!key) return String(stored ?? '').trim();
+
+  const abs = `${prefix}/${bucket}/${key}`;
+  return `${abs}${query2}`;
 }
 
-/** Logo / 图库等上传前校验：与客户端实际使用同一套解析规则 */
+/** Logo / 图库等上传前校验（运行时） */
 export function isMinioEnvReadyForUpload() {
-  return !!(ENDPOINT && BUCKET_NAME && PUBLIC_URL_PREFIX && resolveMinioAccessKey() && resolveMinioSecretKey());
+  const c = getMinioConfig();
+  return !!(c.host && c.bucket && c.publicPrefix && c.accessKey && c.secretKey);
 }
 
-// 初始化 MinIO 客户端
-console.log(
-    'MinIO env → rawEndpoint:',
-    _rawEndpoint || '(empty)',
-    '→ host:',
-    ENDPOINT,
-    'port:',
-    resolveMinioPort(),
-    'useSSL:',
-    resolveMinioUseSSL(),
-    'bucket:',
-    BUCKET_NAME || '(empty)',
-    'publicPrefix:',
-    PUBLIC_URL_PREFIX ? '(set)' : '(empty)'
+let _cachedClient = null;
+let _cacheSig = '';
+
+function clientSignature(c) {
+  return [c.host, c.port, c.useSSL, c.accessKey, c.secretKey, process.env.MINIO_REGION || ''].join('\0');
+}
+
+export function getMinioClient() {
+  const c = getMinioConfig();
+  const sig = clientSignature(c);
+  if (!_cachedClient || _cacheSig !== sig) {
+    const prev = _cacheSig;
+    _cacheSig = sig;
+    _cachedClient = new Minio.Client({
+      endPoint: c.host || '127.0.0.1',
+      port: c.port,
+      useSSL: c.useSSL,
+      accessKey: c.accessKey,
+      secretKey: c.secretKey,
+      region: String(process.env.MINIO_REGION || process.env.AWS_REGION || 'us-east-1').trim() || 'us-east-1',
+    });
+    if (!prev || prev !== sig) {
+      console.log(
+          'MinIO env → raw:',
+          c.rawEndpoint || '(empty)',
+          'host:',
+          c.host || '(empty)',
+          'port:',
+          c.port,
+          'useSSL:',
+          c.useSSL,
+          'bucket:',
+          c.bucket || '(empty)',
+          'publicPrefix:',
+          c.publicPrefix ? '(set)' : '(empty)'
+      );
+    }
+  }
+  return _cachedClient;
+}
+
+/** 兼容旧代码：等价于 getMinioClient() */
+export const minioClient = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        const real = getMinioClient();
+        const v = real[prop];
+        return typeof v === 'function' ? v.bind(real) : v;
+      },
+    }
 );
-const minioClient = new Minio.Client({
-  endPoint: ENDPOINT || '127.0.0.1',
-  port: resolveMinioPort(),
-  useSSL: resolveMinioUseSSL(),
-  accessKey: resolveMinioAccessKey(),
-  secretKey: resolveMinioSecretKey(),
-  region: String(process.env.MINIO_REGION || process.env.AWS_REGION || 'us-east-1').trim() || 'us-east-1',
-});
 
 /**
  * 初始化 Bucket（确保 Bucket 存在并设置公开访问策略）
  */
 async function initializeBucket() {
+  const c = getMinioConfig();
+  if (!c.bucket) throw new Error('未配置 MINIO_BUCKET（或等价变量）');
+  const client = getMinioClient();
   try {
-    const exists = await minioClient.bucketExists(BUCKET_NAME);
+    const exists = await client.bucketExists(c.bucket);
 
     if (!exists) {
-      await minioClient.makeBucket(BUCKET_NAME);
-      console.log(`✅ MinIO Bucket "${BUCKET_NAME}" 创建成功`);
+      await client.makeBucket(c.bucket);
+      console.log(`✅ MinIO Bucket "${c.bucket}" 创建成功`);
     } else {
-      console.log(`✅ MinIO Bucket "${BUCKET_NAME}" 已存在`);
+      console.log(`✅ MinIO Bucket "${c.bucket}" 已存在`);
     }
 
     const policy = {
@@ -183,13 +294,13 @@ async function initializeBucket() {
           Effect: 'Allow',
           Principal: '*',
           Action: ['s3:GetObject'],
-          Resource: [`arn:aws:s3:::${BUCKET_NAME}/*`],
+          Resource: [`arn:aws:s3:::${c.bucket}/*`],
         },
       ],
     };
 
-    await minioClient.setBucketPolicy(BUCKET_NAME, JSON.stringify(policy));
-    console.log(`✅ Bucket "${BUCKET_NAME}" 公开访问策略已设置`);
+    await client.setBucketPolicy(c.bucket, JSON.stringify(policy));
+    console.log(`✅ Bucket "${c.bucket}" 公开访问策略已设置`);
   } catch (error) {
     console.error('❌ MinIO Bucket 初始化失败:', error);
     throw error;
@@ -198,20 +309,18 @@ async function initializeBucket() {
 
 /**
  * 上传文件到 MinIO
- *
- * 返回的是「固定形态的公开对象 URL」（MINIO_PUBLIC_URL + bucket + key 拼接），
- * 不是预签名 URL，不含过期参数；只要对象未被删除且 Bucket 保持匿名可读策略，链接长期有效。
- *
- * @param {Buffer|string} fileBuffer - 文件内容
- * @param {string} objectName - 存储对象名称（包含路径）
- * @param {string} contentType - 文件 MIME 类型
- * @returns {Promise<string>} 可长期使用的公开访问 URL（非预签名、无过期时间）
+ * @returns {Promise<string>} 公开访问 URL
  */
 async function uploadFile(fileBuffer, objectName, contentType = 'application/octet-stream') {
+  const c = getMinioConfig();
+  if (!c.bucket || !c.publicPrefix) {
+    throw new Error('MinIO 未配置完整：需要 bucket 与对外访问前缀（如 MINIO_PUBLIC_URL）');
+  }
   try {
-    await minioClient.putObject(BUCKET_NAME, objectName, fileBuffer, null, contentType);
+    const client = getMinioClient();
+    await client.putObject(c.bucket, objectName, fileBuffer, null, contentType);
 
-    const publicUrl = `${PUBLIC_URL_PREFIX}/${BUCKET_NAME}/${objectName}`;
+    const publicUrl = normalizeImagePathForApi(`${c.publicPrefix}/${c.bucket}/${objectName}`);
 
     console.log(`✅ 文件上传成功: ${objectName}`);
 
@@ -222,13 +331,12 @@ async function uploadFile(fileBuffer, objectName, contentType = 'application/oct
   }
 }
 
-/**
- * 删除文件
- * @param {string} objectName - 存储对象名称
- */
 async function deleteFile(objectName) {
+  const c = getMinioConfig();
+  if (!c.bucket) return;
   try {
-    await minioClient.removeObject(BUCKET_NAME, objectName);
+    const client = getMinioClient();
+    await client.removeObject(c.bucket, objectName);
     console.log(`✅ 文件删除成功: ${objectName}`);
   } catch (error) {
     console.error('❌ 文件删除失败:', error);
@@ -236,24 +344,20 @@ async function deleteFile(objectName) {
   }
 }
 
-/**
- * 获取文件的公开 URL
- * @param {string} objectName - 存储对象名称
- * @returns {string} 公开访问 URL
- */
 function getPublicUrl(objectName) {
-  return `${PUBLIC_URL_PREFIX}/${BUCKET_NAME}/${objectName}`;
+  const c = getMinioConfig();
+  return normalizeImagePathForApi(`${c.publicPrefix}/${c.bucket}/${objectName}`);
 }
 
 /**
- * 从本服务生成的 MinIO 公开 URL 解析出对象键（用于删除）
- * 与 uploadFile 拼接规则一致：PUBLIC_URL_PREFIX + '/' + BUCKET + '/' + objectName
+ * 从公开 URL 解析对象键（用于删除）
  */
 export function objectNameFromPublicUrl(fullUrl) {
+  const c = getMinioConfig();
   const u = String(fullUrl || '').split('?')[0].trim();
-  if (!u || !PUBLIC_URL_PREFIX || !BUCKET_NAME) return null;
-  const base = String(PUBLIC_URL_PREFIX).replace(/\/$/, '');
-  const pfx = `${base}/${BUCKET_NAME}/`;
+  if (!u || !c.publicPrefix || !c.bucket) return null;
+  const base = String(c.publicPrefix).replace(/\/$/, '');
+  const pfx = `${base}/${c.bucket}/`;
   if (!u.startsWith(pfx)) return null;
   try {
     return decodeURIComponent(u.slice(pfx.length));
@@ -262,12 +366,10 @@ export function objectNameFromPublicUrl(fullUrl) {
   }
 }
 
-export {
-  minioClient,
-  initializeBucket,
-  uploadFile,
-  deleteFile,
-  getPublicUrl,
-  BUCKET_NAME,
-  PUBLIC_URL_PREFIX,
-};
+/** 与历史代码兼容：端口按当前 env 计算 */
+export function resolveMinioPort() {
+  const c = getMinioConfig();
+  return c.port;
+}
+
+export { initializeBucket, uploadFile, deleteFile, getPublicUrl };
