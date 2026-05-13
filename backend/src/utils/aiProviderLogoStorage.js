@@ -44,7 +44,7 @@ export function removeAiLogoStored(storedUrl) {
 export async function saveAiLogoFromBuffer(opts) {
   if (!canUseMinioForLogos()) {
     throw new Error(
-      '未配置 MinIO，无法上传 AI Logo。请设置 MINIO_ENDPOINT、MINIO_BUCKET、MINIO_PUBLIC_URL，以及密钥（MINIO_ACCESS_KEY + MINIO_SECRET_KEY，或 Zeabur 等平台的 MINIO_ROOT_USER + MINIO_ROOT_PASSWORD）。MINIO_ENDPOINT 可写完整 https 地址，会自动解析主机名；MINIO_PORT 可省略（HTTPS 默认 443、HTTP 默认 9000）；内网 HTTP 请加 MINIO_USE_SSL=false。'
+      '未配置 MinIO，无法上传 AI Logo。请在本服务环境中绑定变量：地址可用 MINIO_ENDPOINT / MINIO_HOST / MINIO_SERVER_URL / S3_ENDPOINT；Bucket 可用 MINIO_BUCKET / S3_BUCKET；对外访问前缀可用 MINIO_PUBLIC_URL / MINIO_PUBLIC_ENDPOINT；密钥可用 MINIO_ACCESS_KEY+MINIO_SECRET_KEY 或 MINIO_ROOT_USER+MINIO_ROOT_PASSWORD 或 AWS_ACCESS_KEY_ID+AWS_SECRET_ACCESS_KEY。完整 https 地址会自动解析主机名；MINIO_PORT 可省略；内网 HTTP 请加 MINIO_USE_SSL=false。'
     );
   }
   const { userId, connectionId, originalName, buffer, mimetype } = opts;
