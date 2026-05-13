@@ -10,6 +10,7 @@ function resolveMinioEndpointRaw() {
   const keys = [
     'MINIO_ENDPOINT',
     'MINIO_SERVER_URL',
+    'MINIO_BION_HOST',
     'MINIO_HOST',
     'MINIO_INTERNAL_HOST',
     'S3_ENDPOINT',
