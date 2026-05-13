@@ -57,10 +57,14 @@ async function initializeBucket() {
 
 /**
  * 上传文件到 MinIO
+ *
+ * 返回的是「固定形态的公开对象 URL」（MINIO_PUBLIC_URL + bucket + key 拼接），
+ * 不是预签名 URL，不含过期参数；只要对象未被删除且 Bucket 保持匿名可读策略，链接长期有效。
+ *
  * @param {Buffer|string} fileBuffer - 文件内容
  * @param {string} objectName - 存储对象名称（包含路径）
  * @param {string} contentType - 文件 MIME 类型
- * @returns {Promise<string>} 公开访问 URL
+ * @returns {Promise<string>} 可长期使用的公开访问 URL（非预签名、无过期时间）
  */
 async function uploadFile(fileBuffer, objectName, contentType = 'application/octet-stream') {
   try {
@@ -98,6 +102,23 @@ async function deleteFile(objectName) {
  */
 function getPublicUrl(objectName) {
   return `${PUBLIC_URL_PREFIX}/${BUCKET_NAME}/${objectName}`;
+}
+
+/**
+ * 从本服务生成的 MinIO 公开 URL 解析出对象键（用于删除）
+ * 与 uploadFile 拼接规则一致：PUBLIC_URL_PREFIX + '/' + BUCKET + '/' + objectName
+ */
+export function objectNameFromPublicUrl(fullUrl) {
+  const u = String(fullUrl || '').split('?')[0].trim();
+  if (!u || !PUBLIC_URL_PREFIX || !BUCKET_NAME) return null;
+  const base = String(PUBLIC_URL_PREFIX).replace(/\/$/, '');
+  const pfx = `${base}/${BUCKET_NAME}/`;
+  if (!u.startsWith(pfx)) return null;
+  try {
+    return decodeURIComponent(u.slice(pfx.length));
+  } catch {
+    return u.slice(pfx.length);
+  }
 }
 
 export {

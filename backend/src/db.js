@@ -515,6 +515,9 @@ export async function initDB() {
     await client.query(
       `ALTER TABLE ai_provider_connection ADD COLUMN IF NOT EXISTS logo_bg_color VARCHAR(40)`
     );
+    await client.query(
+      `ALTER TABLE ai_provider_connection ALTER COLUMN logo_relpath TYPE VARCHAR(2048)`
+    ).catch(() => {});
 
     if (seedCnt[0].c === 0) {
       await client.query(`

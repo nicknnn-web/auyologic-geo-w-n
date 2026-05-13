@@ -3,11 +3,9 @@
  * GET/POST/PUT/DELETE /api/ai-provider-connections
  * POST /api/ai-provider-connections/:id/test
  * GET /api/ai-provider-connections/presets
- * POST/DELETE /api/ai-provider-connections/:id/logo  Logo 图片与底色
+ * POST/DELETE /api/ai-provider-connections/:id/logo  Logo 上传至 MinIO，logo_relpath 存完整预览 URL
  */
 import { Router } from 'express';
-import path from 'path';
-import fs from 'fs';
 import multer from 'multer';
 import pool from '../db.js';
 import { encryptSecret, decryptSecret, isEncryptionConfigured } from '../services/credentialCrypto.js';
@@ -16,10 +14,13 @@ import {
   getPresetBaseURL,
   createOpenAiCompatibleClient,
 } from '../services/aiClientFactory.js';
+import {
+  resolveAiLogoPublicUrl,
+  removeAiLogoStored,
+  saveAiLogoFromBuffer,
+} from '../utils/aiProviderLogoStorage.js';
 
 const router = Router();
-
-const UPLOADS_ROOT = path.join(process.cwd(), 'public', 'uploads');
 
 const ALLOWED_KEYS = new Set([
   'deepseek',
@@ -40,16 +41,6 @@ function safePathSegment(s) {
     .slice(0, 80) || 'user';
 }
 
-function tryUnlinkRel(relpath) {
-  if (!relpath || typeof relpath !== 'string') return;
-  const p = path.join(UPLOADS_ROOT, relpath.split('/').join(path.sep));
-  try {
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  } catch (e) {
-    console.warn('[ai-provider-connections] unlink logo', p, e?.message);
-  }
-}
-
 /** 合法则返回色值，空串/仅空白返回 null，非法返回 undefined（表示应 400） */
 function normalizeLogoBgColor(input) {
   if (input === undefined) return undefined;
@@ -63,24 +54,8 @@ function normalizeLogoBgColor(input) {
   return undefined;
 }
 
-const logoStorage = multer.diskStorage({
-  destination: (req, _file, cb) => {
-    const uid = safePathSegment(req.headers['x-user-id'] || 'default_user');
-    const dir = path.join(UPLOADS_ROOT, 'ai-logos', uid);
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const id = String(req.params.id || '');
-    const ext0 = path.extname(file.originalname).toLowerCase() || '.png';
-    const allowed = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']);
-    const ext = allowed.has(ext0) ? ext0 : '.png';
-    cb(null, `${id}${ext}`);
-  },
-});
-
 const logoUpload = multer({
-  storage: logoStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const ok =
@@ -118,9 +93,7 @@ function defaultModelForRow(row) {
 function toDto(row) {
   if (!row) return null;
   const logoRel = String(row.logo_relpath || '').trim();
-  const logoUrl = logoRel
-    ? `/uploads/${logoRel.replace(/\\/g, '/')}`
-    : null;
+  const logoUrl = logoRel ? resolveAiLogoPublicUrl(logoRel) : null;
   const rawBg = row.logo_bg_color;
   const logoBgColor = rawBg != null && String(rawBg).trim() !== '' ? String(rawBg).trim() : null;
   return {
@@ -398,7 +371,7 @@ router.delete('/ai-provider-connections/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: '未找到' });
     }
     const rel = del.rows[0]?.logo_relpath;
-    if (rel) tryUnlinkRel(rel);
+    if (rel) removeAiLogoStored(rel);
     res.json({ success: true });
   } catch (e) {
     console.error('[ai-provider-connections]', e);
@@ -487,28 +460,46 @@ router.post(
       if (!Number.isFinite(id)) {
         return res.status(400).json({ success: false, error: '无效 id' });
       }
-      if (!req.file?.path) {
+      if (!req.file?.buffer) {
         return res.status(400).json({ success: false, error: '请选择图片文件' });
       }
-      const rel = path.relative(UPLOADS_ROOT, req.file.path).replace(/\\/g, '/');
       const { rows: exist } = await pool.query(
         `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
         [id, uid]
       );
       if (!exist[0]) {
-        tryUnlinkRel(rel);
         return res.status(404).json({ success: false, error: '未找到' });
       }
       const oldRel = exist[0].logo_relpath;
-      const { rows } = await pool.query(
-        `UPDATE ai_provider_connection SET logo_relpath = $1, updated_at = NOW()
-         WHERE id = $2 AND user_id = $3
-         RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
-                   key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
-                   logo_relpath, logo_bg_color`,
-        [rel, id, uid]
-      );
-      if (oldRel && oldRel !== rel) tryUnlinkRel(oldRel);
+      let stored;
+      try {
+        stored = await saveAiLogoFromBuffer({
+          userId: uid,
+          connectionId: id,
+          originalName: req.file.originalname,
+          buffer: req.file.buffer,
+          mimetype: req.file.mimetype,
+        });
+      } catch (upErr) {
+        console.error('[ai-provider-connections logo] upload', upErr);
+        return res.status(500).json({ success: false, error: upErr.message || '上传存储失败' });
+      }
+      let rows;
+      try {
+        const upd = await pool.query(
+          `UPDATE ai_provider_connection SET logo_relpath = $1, updated_at = NOW()
+           WHERE id = $2 AND user_id = $3
+           RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
+                     key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
+                     logo_relpath, logo_bg_color`,
+          [stored, id, uid]
+        );
+        rows = upd.rows;
+      } catch (dbErr) {
+        removeAiLogoStored(stored);
+        throw dbErr;
+      }
+      if (oldRel && oldRel !== stored) removeAiLogoStored(oldRel);
       res.json({ success: true, data: toDto(rows[0]) });
     } catch (e) {
       console.error('[ai-provider-connections logo]', e);
@@ -536,7 +527,7 @@ router.delete('/ai-provider-connections/:id/logo', async (req, res) => {
       `UPDATE ai_provider_connection SET logo_relpath = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
       [id, uid]
     );
-    if (oldRel) tryUnlinkRel(oldRel);
+    if (oldRel) removeAiLogoStored(oldRel);
     const { rows: again } = await pool.query(
       `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
               key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,

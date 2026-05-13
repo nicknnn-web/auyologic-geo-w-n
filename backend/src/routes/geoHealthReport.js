@@ -44,6 +44,7 @@ import {
   upsertGeoTaskReportCache,
 } from '../services/geoTaskCacheService.js';
 import { computeAiHealthScore } from '../utils/aiHealthScore.js';
+import { resolveAiLogoPublicUrl } from '../utils/aiProviderLogoStorage.js';
 import {
   aggregateMatrixContextFromModels,
   matrixContextPayload,
@@ -121,7 +122,7 @@ function buildVendorLogoMap(rows) {
     const vn = String(row.vendor_name || '').trim();
     if (!vn) continue;
     const rel = String(row.logo_relpath || '').trim();
-    const iconUrl = rel ? `/uploads/${rel.replace(/\\/g, '/')}` : null;
+    const iconUrl = rel ? resolveAiLogoPublicUrl(rel) : null;
     const rawBg = row.logo_bg_color;
     const iconBgColor = rawBg != null && String(rawBg).trim() !== '' ? String(rawBg).trim() : null;
     m.set(vn, { iconUrl, iconBgColor });
