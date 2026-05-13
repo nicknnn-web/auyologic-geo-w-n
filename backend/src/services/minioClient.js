@@ -62,6 +62,29 @@ export function normalizeMinioEndpoint(raw) {
   return noPath.split(':')[0].trim();
 }
 
+/**
+ * 从「连接地址」原文解析主机、URL 内端口、是否 HTTPS（云端常给完整 http(s)://host:9000，不能再丢端口）
+ * @returns {{ host: string, portFromUrl: number|null, schemeIsHttps: boolean|null }}
+ */
+function parseMinioConnectionFromRaw(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return { host: '', portFromUrl: null, schemeIsHttps: null };
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const u = new URL(s);
+      const p = u.port ? parseInt(u.port, 10) : null;
+      return {
+        host: u.hostname,
+        portFromUrl: Number.isFinite(p) && p > 0 ? p : null,
+        schemeIsHttps: u.protocol === 'https:',
+      };
+    } catch {
+      return { host: normalizeMinioEndpoint(s), portFromUrl: null, schemeIsHttps: null };
+    }
+  }
+  return { host: normalizeMinioEndpoint(s), portFromUrl: null, schemeIsHttps: null };
+}
+
 export function resolveMinioAccessKey() {
   return String(
     process.env.MINIO_ACCESS_KEY ||
@@ -80,26 +103,34 @@ export function resolveMinioSecretKey() {
   ).trim();
 }
 
-/** MINIO_USE_SSL=false / 0 / off 时走 HTTP（内网 MinIO 常见） */
+const _rawEndpoint = resolveMinioEndpointRaw();
+const _parsedConn = parseMinioConnectionFromRaw(_rawEndpoint);
+const ENDPOINT = _parsedConn.host;
+const BUCKET_NAME = resolveMinioBucket();
+const PUBLIC_URL_PREFIX = resolveMinioPublicUrlPrefix();
+
+/** MINIO_USE_SSL 优先；未设置时若连接地址是 http(s) URL 则按协议推断（避免内网 http://host:9000 仍走 TLS） */
 function resolveMinioUseSSL() {
   const v = String(process.env.MINIO_USE_SSL ?? '').trim().toLowerCase();
   if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+  if (_parsedConn.schemeIsHttps === true) return true;
+  if (_parsedConn.schemeIsHttps === false) return false;
   return true;
 }
 
-/** 未设置或无效时：HTTPS 默认 443，HTTP 默认 9000（与常见 MinIO 部署一致） */
+/** 优先 MINIO_PORT，其次连接 URL 中的端口，最后按是否 TLS 默认 443 / 9000 */
 export function resolveMinioPort() {
   const raw = process.env.MINIO_PORT;
   if (raw != null && String(raw).trim() !== '') {
     const n = parseInt(String(raw).trim(), 10);
     if (Number.isFinite(n) && n > 0) return n;
   }
+  if (_parsedConn.portFromUrl != null && _parsedConn.portFromUrl > 0) {
+    return _parsedConn.portFromUrl;
+  }
   return resolveMinioUseSSL() ? 443 : 9000;
 }
-
-const ENDPOINT = normalizeMinioEndpoint(resolveMinioEndpointRaw());
-const BUCKET_NAME = resolveMinioBucket();
-const PUBLIC_URL_PREFIX = resolveMinioPublicUrlPrefix();
 
 /** Logo / 图库等上传前校验：与客户端实际使用同一套解析规则 */
 export function isMinioEnvReadyForUpload() {
@@ -108,8 +139,14 @@ export function isMinioEnvReadyForUpload() {
 
 // 初始化 MinIO 客户端
 console.log(
-  'MinIO env → host:',
+  'MinIO env → rawEndpoint:',
+  _rawEndpoint || '(empty)',
+  '→ host:',
   ENDPOINT,
+  'port:',
+  resolveMinioPort(),
+  'useSSL:',
+  resolveMinioUseSSL(),
   'bucket:',
   BUCKET_NAME || '(empty)',
   'publicPrefix:',
@@ -121,6 +158,7 @@ const minioClient = new Minio.Client({
   useSSL: resolveMinioUseSSL(),
   accessKey: resolveMinioAccessKey(),
   secretKey: resolveMinioSecretKey(),
+  region: String(process.env.MINIO_REGION || process.env.AWS_REGION || 'us-east-1').trim() || 'us-east-1',
 });
 
 /**
