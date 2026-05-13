@@ -20,6 +20,7 @@ import {
   cleanupTask,
 } from './services/playwrightPublisher.js';
 import { parsePagination, pagedResponse } from './pagination.js';
+import { normalizeImagePathForApi } from './services/minioClient.js';
 
 const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
@@ -386,10 +387,24 @@ async function handleCrudTableGet(req, res, table) {
     }
     await ensureTable(table)
     const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`)
-    res.json(toCamelCase(result.rows))
+    const rows =
+      table === 'images'
+        ? result.rows.map((r) => ({
+            ...r,
+            image_path: normalizeImagePathForApi(r.image_path),
+          }))
+        : result.rows
+    res.json(toCamelCase(rows))
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
+}
+
+/** 企业图库：入库前把仅对象键或缺协议的地址补成绝对 URL（与本地 MinIO 行为一致） */
+function normalizeImagesBodyImagePath(table, data) {
+  if (table !== 'images' || data.image_path == null) return
+  const v = String(data.image_path).trim()
+  if (v) data.image_path = normalizeImagePathForApi(v)
 }
 
 /** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–06） */
@@ -735,6 +750,7 @@ tables.forEach(table => {
           const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
+        normalizeImagesBodyImagePath(table, data);
         const cols = Object.keys(data);
         const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
         const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
@@ -749,6 +765,7 @@ tables.forEach(table => {
           const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
+        normalizeImagesBodyImagePath(table, data);
         const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
         const result = await pool.query(`UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} RETURNING *`, [...Object.values(data), req.params.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
@@ -778,6 +795,7 @@ tables.forEach(table => {
           delete data[key];
         }
       }
+      normalizeImagesBodyImagePath(table, data);
       const cols = Object.keys(data);
       const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
       const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
@@ -796,6 +814,7 @@ tables.forEach(table => {
           delete data[key];
         }
       }
+      normalizeImagesBodyImagePath(table, data);
       const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
       const result = await pool.query(
         `UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} RETURNING *`,
@@ -820,7 +839,11 @@ tables.forEach(table => {
       await ensureTable(table);
       const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
-      res.json(toCamelCase(result.rows[0]));
+      let row = result.rows[0];
+      if (table === 'images' && row) {
+        row = { ...row, image_path: normalizeImagePathForApi(row.image_path) };
+      }
+      res.json(toCamelCase(row));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 });
