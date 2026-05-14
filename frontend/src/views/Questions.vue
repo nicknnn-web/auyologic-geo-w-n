@@ -31,9 +31,12 @@
           @change="onFilterChange"
         >
           <el-option label="全部状态" value="" />
-          <el-option label="待审核" value="待审核" />
-          <el-option label="已审核" value="已审核" />
-          <el-option label="已拒绝" value="已拒绝" />
+          <el-option
+            v-for="d in questionStatusOptions"
+            :key="d.dataKey"
+            :label="d.dataValue"
+            :value="d.dataKey"
+          />
         </el-select>
         <el-button
           type="danger"
@@ -135,7 +138,7 @@
         </template>
         <template #default="{ row }">
           <el-tag :type="getStatusType(row.status)" @click.stop="cycleStatus(row)" style="cursor:pointer">
-            {{ row.status }}
+            {{ statusLabel(row) }}
           </el-tag>
         </template>
       </el-table-column>
@@ -392,19 +395,51 @@ const exportQuestionsLoading = ref(false)
 
 const keywordTypeOptions = ref([])
 
-const KEYWORD_TYPE_FALLBACK_LABEL = {
-  '01': '品牌词',
-  '02': '产品词',
-  '03': '场景词',
-  '04': '企业词'
+const QUESTION_STATUS_FALLBACK = [
+  { dataKey: 'pending', dataValue: '待审核', sortOrder: 10 },
+  { dataKey: 'approved', dataValue: '已审核', sortOrder: 20 },
+  { dataKey: 'rejected', dataValue: '已拒绝', sortOrder: 30 },
+]
+
+const questionStatusOptions = ref([...QUESTION_STATUS_FALLBACK])
+
+const loadQuestionStatusDict = async () => {
+  const list = await fetchDictList('question_status')
+  const mapped = list.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0,
+  }))
+  questionStatusOptions.value = mapped.length ? mapped : [...QUESTION_STATUS_FALLBACK]
 }
+
+const statusLabel = (row) => {
+  const sl = row?.statusLabel ?? row?.status_label
+  if (sl) return sl
+  const k = String(row?.status || '').trim()
+  const opt = questionStatusOptions.value.find((x) => (x.dataKey || x.data_key) === k)
+  return opt?.dataValue || opt?.data_value || k || '-'
+}
+
+const questionStatusCycleKeys = computed(() => {
+  const opts = questionStatusOptions.value
+    .map((r) => ({
+      k: r.dataKey ?? r.data_key,
+      so: r.sortOrder ?? r.sort_order ?? 0,
+    }))
+    .filter((x) => x.k)
+  if (!opts.length) return ['pending', 'approved', 'rejected']
+  opts.sort((a, b) => a.so - b.so)
+  return [...new Set(opts.map((x) => x.k))]
+})
 
 const keywordTypeLabel = (raw) => {
   const k = normalizeKeywordTypeKey(raw)
   const row = keywordTypeOptions.value.find((x) => (x.dataKey || x.data_key) === k)
   if (row?.dataValue || row?.data_value) return row.dataValue || row.data_value
-  if (KEYWORD_TYPE_FALLBACK_LABEL[k]) return KEYWORD_TYPE_FALLBACK_LABEL[k]
-  return raw || '-'
+  const fb = KEYWORD_TYPE_DEFAULT_OPTIONS.find((x) => x.dataKey === k)
+  if (fb?.dataValue) return fb.dataValue
+  return raw || k || '-'
 }
 
 const loadKeywordTypeDict = async () => {
@@ -480,7 +515,7 @@ const handleExportQuestions = async () => {
         row.question || '',
         keywordTypeLabel(row.keywordType),
         row.sourceKeyword || '',
-        row.status || '',
+        statusLabel(row),
         formatDate(row.createdAt),
       ]),
     ]
@@ -500,7 +535,7 @@ const handleExportQuestions = async () => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadData(), loadKeywordTypeDict()])
+  await Promise.all([loadData(), loadKeywordTypeDict(), loadQuestionStatusDict()])
   // 检查是否有传递过来的关键词ID（只执行一次，执行后清除参数）
   if (route.query.keywordIds) {
     setTimeout(() => {
@@ -518,14 +553,16 @@ const getTypeColor = (type) => {
     '01': 'primary',
     '02': 'success',
     '03': 'warning',
-    '04': 'danger'
+    '04': 'danger',
+    '05': 'info',
   }
   return map[k] || 'info'
 }
 
-const getStatusType = (status) => {
-  const map = { '待审核': 'warning', '已审核': 'success', '已拒绝': 'info' }
-  return map[status] || 'info'
+const getStatusType = (statusKey) => {
+  const k = String(statusKey || '').trim()
+  const map = { pending: 'warning', approved: 'success', rejected: 'info' }
+  return map[k] || 'info'
 }
 
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
@@ -603,7 +640,7 @@ const GEO_TYPE_TO_ZH = {
   brand: '品牌',
   product: '产品',
   scenario: '场景',
-  enterprise: '企业',
+  enterprise: '对比',
   price: '价格',
 }
 const GEO_TYPE_FALLBACK_KEY = {
@@ -868,7 +905,7 @@ const handleAIExpand = async () => {
           question: pq,
           keywordType: normalizeKeywordTypeKey(original.keywordType) || '01',
           sourceKeyword: original.sourceKeyword || original.question,
-          status: '待审核'
+          status: 'pending'
         }
         // 写后端
         try {
@@ -1029,7 +1066,7 @@ const handleAIExpand = async () => {
             question: item.question,
             keywordType: item.keywordType,
             sourceKeyword: item.sourceKeyword,
-            status: '待审核',
+            status: 'pending',
           }),
         })
         if (res.ok) {
@@ -1060,10 +1097,11 @@ const handleAIExpand = async () => {
 }
 
 const cycleStatus = async (row) => {
-  const statusOrder = ['待审核', '已审核', '已拒绝']
-  const currentIndex = statusOrder.indexOf(row.status)
-  const nextIndex = (currentIndex + 1) % statusOrder.length
-  const newStatus = statusOrder[nextIndex]
+  const order = questionStatusCycleKeys.value
+  const cur = String(row.status || '').trim()
+  let idx = order.indexOf(cur)
+  if (idx < 0) idx = 0
+  const newStatus = order[(idx + 1) % order.length]
 
   const userId = 'default_user'
   // 同步到后端
@@ -1203,7 +1241,7 @@ const handleSubmit = async () => {
     question: form.value.question,
     keywordType: form.value.keywordType,
     sourceKeyword: '-',
-    status: '待审核'
+    status: 'pending'
   }
 
   // 同步到后端
@@ -1484,7 +1522,7 @@ const saveGeoSelected = async () => {
         question: String(item.question || '').trim(),
         keywordType: item.typeKey,
         sourceKeyword,
-        status: '待审核',
+        status: 'pending',
       }
       try {
         const res = await fetch(`${API_BASE_URL}/api/questions`, {

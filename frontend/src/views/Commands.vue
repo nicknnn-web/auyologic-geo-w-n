@@ -36,7 +36,7 @@
       <el-table-column prop="name" label="指令名称" />
       <el-table-column label="创作类型" width="150">
         <template #default="{ row }">
-          <el-tag :type="getTypeColor(row.contentType)">{{ row.contentType || '文章创作' }}</el-tag>
+          <el-tag :type="getTypeColor(row.contentType)">{{ displayContentTypeLabel(row.contentType) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="Prompt 预览" min-width="200">
@@ -79,7 +79,12 @@
         </el-form-item>
         <el-form-item label="创作类型" prop="type">
           <el-select v-model="form.type" placeholder="请选择类型">
-            <el-option v-for="item in PROMPT_TYPES" :key="item.value" :label="item.label" :value="item.value" />
+            <el-option
+              v-for="opt in commandTypeSelectOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="提示词内容" prop="prompt">
@@ -108,20 +113,21 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { commandsAPI } from '../utils/api'
+import { fetchDictList, sortDictRows } from '../utils/sysDict.js'
+import {
+  labelByDataKey,
+  dataKeyByValue,
+  resolveToDataKey,
+  elTagTypeByDataKey,
+  toDataKeySelectOptions,
+} from '../utils/dictFieldMap.js'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
-
-// P3: 创作类型常量
-const PROMPT_TYPES = [
-  { label: '产品创作', value: '产品创作' },
-  { label: '种草推荐', value: '种草推荐' },
-  { label: '短视频脚本', value: '短视频脚本' }
-]
-
+const commandTypeRows = ref([])
 const tableData = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -149,14 +155,25 @@ const sortedData = computed(() => {
   return [...tableData.value].sort((a, b) => a.id - b.id)
 })
 
-const getTypeColor = (type) => {
-  const map = {
-    '产品创作': 'primary',
-    '种草推荐': 'success',
-    '短视频脚本': 'warning'
-  }
-  return map[type] || 'info'
+const commandTypeSelectOptions = computed(() => toDataKeySelectOptions(commandTypeRows.value))
+
+const loadCommandTypes = async () => {
+  const list = await fetchDictList('content_command_type')
+  commandTypeRows.value = sortDictRows(list)
 }
+
+/** 存库为 data_key；兼容历史 data_value 存库 */
+const displayContentTypeLabel = (stored) => {
+  if (!stored) return '—'
+  const rows = commandTypeRows.value
+  const byKey = labelByDataKey(rows, stored)
+  if (byKey) return byKey
+  const k = dataKeyByValue(rows, stored)
+  return k ? labelByDataKey(rows, k) || String(stored) : String(stored)
+}
+
+const getTypeColor = (contentType) =>
+  elTagTypeByDataKey(commandTypeRows.value, resolveToDataKey(commandTypeRows.value, contentType))
 
 // 加载数据（服务端分页）
 const loadData = async () => {
@@ -188,7 +205,8 @@ const loadData = async () => {
 }
 
 // 页面加载时获取数据
-onMounted(() => {
+onMounted(async () => {
+  await loadCommandTypes()
   loadData()
 })
 
@@ -221,11 +239,19 @@ const handleBatchDelete = async () => {
 
 // 初始化默认指令（返回 Promise，确保全部创建完成）
 const initDefaultCommands = async () => {
+  await loadCommandTypes()
+  const keys = toDataKeySelectOptions(commandTypeRows.value)
+    .map((o) => o.value)
+    .filter(Boolean)
+  if (keys.length === 0) {
+    ElMessage.warning('请先在系统字典中配置「创作类型」后再使用默认指令')
+    return
+  }
+
   const userId = 'default_user'
   const defaultCommands = [
     {
       name: '产品软文模板',
-      type: '产品创作',
       desc: '专业产品评测类文章',
       prompt: `请为品牌 {brand} 撰写一篇关于 {keyword} 的产品评测类文章。
 
@@ -247,7 +273,6 @@ const initDefaultCommands = async () => {
     },
     {
       name: '品牌故事模板',
-      type: '产品创作',
       desc: '品牌背景与情怀打造',
       prompt: `请为品牌 {brand} 撰写一篇关于 {keyword} 品牌故事类文章。
 
@@ -267,7 +292,6 @@ const initDefaultCommands = async () => {
     },
     {
       name: '种草推荐模板',
-      type: '种草推荐',
       desc: '以第一人称真实体验分享',
       prompt: `以第一人称视角，为品牌 {brand} 撰写一篇关于 {keyword} 的种草推荐文章。
 
@@ -289,7 +313,6 @@ const initDefaultCommands = async () => {
     },
     {
       name: '短视频脚本模板',
-      type: '短视频脚本',
       desc: '15-60秒的产品视频脚本',
       prompt: `请为品牌 {brand} 撰写一份 {keyword} 相关的短视频拍摄脚本。
 
@@ -308,7 +331,6 @@ const initDefaultCommands = async () => {
     },
     {
       name: '热点选题模板',
-      type: '种草推荐',
       desc: '结合热点的营销文章',
       prompt: `结合当前热点，为品牌 {brand} 撰写一篇关于 {keyword} 的热点营销文章。
 
@@ -328,15 +350,17 @@ const initDefaultCommands = async () => {
     }
   ]
 
-  for (const cmd of defaultCommands) {
+  for (let i = 0; i < defaultCommands.length; i++) {
+    const cmd = defaultCommands[i]
+    const contentType = keys[i % keys.length]
     try {
       const res = await fetch(`${API_BASE_URL}/api/instruction-templates`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'x-user-id': userId
         },
-        body: JSON.stringify({ name: cmd.name, content: cmd.prompt, contentType: cmd.type })
+        body: JSON.stringify({ name: cmd.name, content: cmd.prompt, contentType })
       })
       if (!res.ok) {
         console.warn('保存默认指令失败:', cmd.name)
@@ -354,12 +378,12 @@ const handleAdd = () => {
 }
 
 const handleEdit = (row) => {
-  // API 字段 content/contentType → 表单字段 prompt/type
+  // API 字段 content/contentType → 表单字段 prompt/type（type 统一为 data_key）
   form.value = {
     id: row.id,
     name: row.name,
     prompt: row.content || row.prompt || '',
-    type: row.contentType || row.type || ''
+    type: resolveToDataKey(commandTypeRows.value, row.contentType || row.type || ''),
   }
   isEdit.value = true
   dialogVisible.value = true

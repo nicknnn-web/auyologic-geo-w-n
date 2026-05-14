@@ -21,6 +21,7 @@ import {
   cleanupTask,
 } from './services/playwrightPublisher.js';
 import { parsePagination, pagedResponse } from './pagination.js';
+import { KEYWORD_TYPE_BOOTSTRAP_ROWS } from './config/keywordTypeSemantics.js';
 
 const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
@@ -39,12 +40,19 @@ const BUILD_VERSION = 'v2026043001';
 // 初始化数据库表 + sys_dict 与关键词类型英文 key 迁移
 initDB()
   .then(() => ensureSysDictAndMigrate())
+  .then(() => ensureContentAndPlatformDictSeeds())
+  .then(() => ensureQuestionStatusDictAndMigrate())
+  .then(() => ensureKeywordTypeMigrateAndSync())
   .catch((e) => {
     console.error('initDB:', e)
-    ensureSysDictAndMigrate().catch((e2) => console.error('sys_dict migrate:', e2))
+    ensureSysDictAndMigrate()
+      .then(() => ensureContentAndPlatformDictSeeds())
+      .then(() => ensureQuestionStatusDictAndMigrate())
+      .then(() => ensureKeywordTypeMigrateAndSync())
+      .catch((e2) => console.error('sys_dict migrate:', e2))
   })
 
-/** 系统字典表 + 种子；keywords.type / questions.keyword_type 统一为数字 data_key（01–06，含对比/价格） */
+/** 系统字典表 + 种子；首启见 ensureSysDictAndMigrate；上线库见 ensureKeywordTypeMigrateAndSync */
 const SYS_DICT_RUNTIME_BOOTSTRAP_META = 'sys_dict_runtime_bootstrap_v1'
 
 async function ensureSysDictAndMigrate() {
@@ -87,11 +95,11 @@ async function ensureSysDictAndMigrate() {
     [`UPDATE keywords SET type = '01' WHERE type IN ('品牌','brand')`, []],
     [`UPDATE keywords SET type = '02' WHERE type IN ('产品','product')`, []],
     [`UPDATE keywords SET type = '03' WHERE type IN ('场景','scene')`, []],
-    [`UPDATE keywords SET type = '04' WHERE type IN ('企业','enterprise')`, []],
+    [`UPDATE keywords SET type = '01' WHERE type IN ('企业','enterprise')`, []],
     [`UPDATE questions SET keyword_type = '01' WHERE keyword_type IN ('品牌','brand')`, []],
     [`UPDATE questions SET keyword_type = '02' WHERE keyword_type IN ('产品','product')`, []],
     [`UPDATE questions SET keyword_type = '03' WHERE keyword_type IN ('场景','scene')`, []],
-    [`UPDATE questions SET keyword_type = '04' WHERE keyword_type IN ('企业','enterprise')`, []],
+    [`UPDATE questions SET keyword_type = '01' WHERE keyword_type IN ('企业','enterprise')`, []],
   ]
   for (const [sql] of dataMigrations) {
     try {
@@ -116,12 +124,7 @@ async function ensureSysDictAndMigrate() {
   const seedApplied = await pool.query(`SELECT 1 FROM sys_dict_meta WHERE key = $1`, [
     KEYWORD_TYPE_SEED_META,
   ])
-  const seeds = [
-    ['keyword_type', '01', '品牌词', 10],
-    ['keyword_type', '02', '产品词', 20],
-    ['keyword_type', '03', '场景词', 30],
-    ['keyword_type', '04', '企业词', 40],
-  ]
+  const seeds = KEYWORD_TYPE_BOOTSTRAP_ROWS
   if (seedApplied.rows.length === 0) {
     for (const [dictType, dataKey, dataValue, sortOrder] of seeds) {
       await pool.query(
@@ -138,21 +141,6 @@ async function ensureSysDictAndMigrate() {
       `INSERT INTO sys_dict_meta (key, value) VALUES ($1, $2)
        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
       [KEYWORD_TYPE_SEED_META, '1']
-    )
-  }
-  /** 品牌体检抽题等：对比词/价格词（空库与已上线库均 upsert，不依赖 v1 种子是否已跑） */
-  for (const [dictType, dataKey, dataValue, sortOrder] of [
-    ['keyword_type', '05', '对比词', 50],
-    ['keyword_type', '06', '价格词', 60],
-  ]) {
-    await pool.query(
-      `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
-       VALUES ($1, $2, $3, $4, true)
-       ON CONFLICT (dict_type, data_key) DO UPDATE SET
-         data_value = EXCLUDED.data_value,
-         sort_order = EXCLUDED.sort_order,
-         enabled = EXCLUDED.enabled`,
-      [dictType, dataKey, dataValue, sortOrder]
     )
   }
   try {
@@ -200,6 +188,127 @@ async function upsertSysDictType(dictTypeKey, dictTypeValue) {
        updated_at = NOW()`,
     [dictTypeKey, v]
   )
+}
+
+/** 创作指令 content_type 对应的 sys_dict.dict_type（与库表设计一致，非业务枚举） */
+const INSTRUCTION_CONTENT_DICT_TYPE = 'content_command_type'
+
+/** 列表/详情：关联 sys_dict 解析创作类型展示名（data_key 或历史 data_value 存 content_type 均可） */
+const INSTRUCTION_TEMPLATES_DICT_FROM = `
+FROM instruction_templates t
+LEFT JOIN sys_dict dk ON dk.dict_type = '${INSTRUCTION_CONTENT_DICT_TYPE}'
+  AND COALESCE(dk.enabled, true) = true
+  AND dk.data_key = NULLIF(BTRIM(t.content_type::text), '')
+LEFT JOIN sys_dict dv ON dv.dict_type = '${INSTRUCTION_CONTENT_DICT_TYPE}'
+  AND COALESCE(dv.enabled, true) = true
+  AND dv.data_value = NULLIF(BTRIM(t.content_type::text), '')
+`
+
+/**
+ * 将 instruction_templates.content_type 仍为「字典展示值」的旧行对齐为 data_key（依赖库中已有 sys_dict 行）。
+ * 不在此函数内向 sys_dict 插入业务字典项；初始数据请执行 docs/sql/sys_dict_content_seed.sql 或由字典管理维护。
+ */
+async function ensureContentAndPlatformDictSeeds() {
+  try {
+    await ensureTable('instruction_templates')
+    await pool.query(
+      `UPDATE instruction_templates AS t
+       SET content_type = d.data_key
+       FROM sys_dict d
+       WHERE d.dict_type = $1
+         AND COALESCE(d.enabled, true) = true
+         AND t.content_type IS NOT NULL
+         AND TRIM(t.content_type::text) = d.data_value
+         AND TRIM(t.content_type::text) <> d.data_key`,
+      [INSTRUCTION_CONTENT_DICT_TYPE]
+    )
+  } catch (e) {
+    console.warn('instruction_templates content_type → data_key:', e.message)
+  }
+}
+
+/** 拓展问题审核状态：字典 question_status；questions.status 存 data_key（pending/approved/rejected） */
+const QUESTION_STATUS_DICT_TYPE = 'question_status'
+
+async function ensureQuestionStatusDictAndMigrate() {
+  try {
+    await upsertSysDictType(QUESTION_STATUS_DICT_TYPE, '审核状态')
+  } catch (e) {
+    console.warn('question_status dict_type:', e.message)
+  }
+  const seeds = [
+    ['pending', '待审核', 10],
+    ['approved', '已审核', 20],
+    ['rejected', '已拒绝', 30],
+  ]
+  for (const [dataKey, dataValue, sortOrder] of seeds) {
+    try {
+      await pool.query(
+        `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
+         VALUES ($1, $2, $3, $4, true)
+         ON CONFLICT (dict_type, data_key) DO UPDATE SET
+           data_value = EXCLUDED.data_value,
+           sort_order = EXCLUDED.sort_order,
+           enabled = EXCLUDED.enabled`,
+        [QUESTION_STATUS_DICT_TYPE, dataKey, dataValue, sortOrder]
+      )
+    } catch (e) {
+      console.warn('question_status seed:', e.message)
+    }
+  }
+  try {
+    await ensureTable('questions')
+    await pool.query(`UPDATE questions SET status = 'pending' WHERE status IN ('待审核', 'pending')`)
+    await pool.query(`UPDATE questions SET status = 'approved' WHERE status = '已审核'`)
+    await pool.query(`UPDATE questions SET status = 'rejected' WHERE status = '已拒绝'`)
+  } catch (e) {
+    console.warn('questions.status migrate:', e.message)
+  }
+}
+
+/** 旧六分法（04 企业 + 05 对比 + 06 价格）→ 当前 01–05 五类；展示名以库为准，此处只迁 data_key */
+const KEYWORD_TYPE_REKEY_META = 'keyword_type_rekey_six_to_five_v1'
+
+async function ensureKeywordTypeMigrateAndSync() {
+  try {
+    const done = await pool.query(`SELECT 1 FROM sys_dict_meta WHERE key = $1`, [KEYWORD_TYPE_REKEY_META])
+    if (done.rows.length === 0) {
+      const has06 = await pool.query(
+        `SELECT 1 FROM sys_dict WHERE dict_type = 'keyword_type' AND data_key = '06' LIMIT 1`
+      )
+      if (has06.rows.length > 0) {
+        const rekey = `CASE $COL WHEN '06' THEN '05' WHEN '05' THEN '04' WHEN '04' THEN '01' ELSE $COL END`
+        for (const [tbl, col] of [
+          ['questions', 'keyword_type'],
+          ['keywords', 'type'],
+        ]) {
+          const sql = `UPDATE ${tbl} SET ${col} = ${rekey.replace(/\$COL/g, col)} WHERE ${col} IN ('04','05','06')`
+          await pool.query(sql).catch((e) => console.warn(`keyword_type rekey ${tbl}:`, e.message))
+        }
+        await pool
+          .query(
+            `UPDATE geo_health_question SET question_type = CASE question_type WHEN '06' THEN '05' WHEN '05' THEN '04' WHEN '04' THEN '01' ELSE question_type END WHERE question_type IN ('04','05','06')`
+          )
+          .catch(() => {})
+      }
+      await pool
+        .query(`DELETE FROM sys_dict WHERE dict_type = 'keyword_type' AND data_key = '06'`)
+        .catch((e) => console.warn('keyword_type delete 06:', e.message))
+      await pool
+        .query(
+          `UPDATE sys_dict SET data_value = '对比词', sort_order = 40
+           WHERE dict_type = 'keyword_type' AND data_key = '04' AND data_value LIKE '%企业%'`
+        )
+        .catch((e) => console.warn('keyword_type fix 04 label:', e.message))
+      await pool.query(
+        `INSERT INTO sys_dict_meta (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [KEYWORD_TYPE_REKEY_META, '1']
+      )
+    }
+  } catch (e) {
+    console.warn('keyword_type migrate/sync:', e.message)
+  }
 }
 
 // 中间件
@@ -353,6 +462,50 @@ function buildCrudTableFilter(table, req) {
 async function fetchPagedCrudList(table, req) {
   await ensureTable(table)
   const { page, pageSize, offset } = parsePagination(req)
+
+  if (table === 'questions') {
+    await ensureQuestionStatusDictAndMigrate()
+    const parts = []
+    const params = []
+    if (req.query.keywordType) {
+      parts.push(`q.keyword_type = $${params.length + 1}`)
+      params.push(String(req.query.keywordType))
+    }
+    if (req.query.status) {
+      parts.push(`q.status = $${params.length + 1}`)
+      params.push(String(req.query.status))
+    }
+    const where = parts.length ? `WHERE ${parts.join(' AND ')}` : ''
+    const countR = await pool.query(`SELECT COUNT(*)::int AS c FROM questions q ${where}`, params)
+    const total = countR.rows[0]?.c ?? 0
+    const lim = params.length + 1
+    const off = params.length + 2
+    const statusJoin = `
+      LEFT JOIN sys_dict ds ON ds.dict_type = '${QUESTION_STATUS_DICT_TYPE}'
+        AND COALESCE(ds.enabled, true) = true
+        AND ds.data_key = NULLIF(BTRIM(q.status::text), '')
+      LEFT JOIN sys_dict dsv ON dsv.dict_type = '${QUESTION_STATUS_DICT_TYPE}'
+        AND COALESCE(dsv.enabled, true) = true
+        AND dsv.data_value = NULLIF(BTRIM(q.status::text), '')
+        AND ds.id IS NULL
+    `
+    const dataR = await pool.query(
+      `SELECT q.*, COALESCE(ds.data_value, dsv.data_value, q.status::text) AS status_label
+       FROM questions q
+       ${statusJoin}
+       ${where}
+       ORDER BY q.id DESC
+       LIMIT $${lim} OFFSET $${off}`,
+      [...params, pageSize, offset]
+    )
+    const out = pagedResponse(toCamelCase(dataR.rows), total, page, pageSize)
+    const appR = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM questions WHERE status = 'approved'`
+    )
+    out.approvedTotal = appR.rows[0]?.c ?? 0
+    return out
+  }
+
   const { where, params } = buildCrudTableFilter(table, req)
   const countR = await pool.query(
     `SELECT COUNT(*)::int AS c FROM ${table} ${where}`,
@@ -370,12 +523,6 @@ async function fetchPagedCrudList(table, req) {
     [...params, pageSize, offset]
   )
   const out = pagedResponse(toCamelCase(dataR.rows), total, page, pageSize)
-  if (table === 'questions') {
-    const appR = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM questions WHERE status = '已审核'`
-    )
-    out.approvedTotal = appR.rows[0]?.c ?? 0
-  }
   return out
 }
 
@@ -407,7 +554,7 @@ function normalizeImagesBodyImagePath(table, data) {
   if (v) data.image_path = normalizeImagePathForApi(v)
 }
 
-/** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–06） */
+/** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–05） */
 app.get('/api/sys-dict', async (req, res) => {
   try {
     const dictType = req.query.dictType || req.query.type
@@ -415,6 +562,9 @@ app.get('/api/sys-dict', async (req, res) => {
       return res.status(400).json({ error: 'dictType is required' })
     }
     await ensureSysDictAndMigrate()
+    await ensureContentAndPlatformDictSeeds()
+    await ensureQuestionStatusDictAndMigrate()
+    await ensureKeywordTypeMigrateAndSync()
     const result = await pool.query(
       `SELECT data_key, data_value, sort_order FROM sys_dict
        WHERE dict_type = $1 AND enabled = true
@@ -434,6 +584,9 @@ const SYS_DICT_KEY_RE = /^[a-zA-Z0-9_-]{1,64}$/
 app.get('/api/sys-dict/types', async (req, res) => {
   try {
     await ensureSysDictAndMigrate()
+    await ensureContentAndPlatformDictSeeds()
+    await ensureQuestionStatusDictAndMigrate()
+    await ensureKeywordTypeMigrateAndSync()
     const r = await pool.query(
       `SELECT dict_type_key, dict_type_value FROM sys_dict_type ORDER BY dict_type_key ASC`
     )
@@ -448,6 +601,9 @@ app.get('/api/sys-dict/types', async (req, res) => {
 app.get('/api/sys-dict/entries', async (req, res) => {
   try {
     await ensureSysDictAndMigrate()
+    await ensureContentAndPlatformDictSeeds()
+    await ensureQuestionStatusDictAndMigrate()
+    await ensureKeywordTypeMigrateAndSync()
     const dictType = req.query.dictType || req.query.type
     const { page, pageSize, offset } = parsePagination(req)
     const params = []
@@ -873,7 +1029,7 @@ app.get('/api/dashboard-stats', async (req, res) => {
       ),
       pool.query(`SELECT COUNT(*)::int AS c FROM keywords WHERE type = '行业'`),
       pool.query('SELECT COUNT(*)::int AS c FROM questions'),
-      pool.query(`SELECT COUNT(*)::int AS c FROM questions WHERE status = '已审核'`),
+      pool.query(`SELECT COUNT(*)::int AS c FROM questions WHERE status = 'approved'`),
       pool.query('SELECT COUNT(*)::int AS c FROM drafts'),
       pool.query(`SELECT COUNT(*)::int AS c FROM publish_records WHERE status = '已发布'`),
     ])

@@ -141,12 +141,12 @@
       <el-form :model="accountForm" :rules="accountRules" ref="accountFormRef" label-width="90px">
         <el-form-item label="平台" prop="platform">
           <el-select v-model="accountForm.platform" placeholder="请选择平台" style="width: 100%;" :disabled="isEdit">
-            <el-option label="小红书" value="小红书" />
-            <el-option label="抖音" value="抖音" />
-            <el-option label="微博" value="微博" />
-            <el-option label="知乎" value="知乎" />
-            <el-option label="微信公众号" value="微信公众号" />
-            <el-option label="B站" value="B站" />
+            <el-option
+              v-for="opt in platformSelectOpts"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="账号名称" prop="account_name">
@@ -286,7 +286,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Key, Phone, Loading, CircleCheck, Warning, Download } from '@element-plus/icons-vue'
 import api, { mediaAccountsAPI } from '../utils/api'
@@ -294,8 +294,19 @@ import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedAp
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
+import { fetchDictList } from '../utils/sysDict.js'
+import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
+import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
 
 const API = '/api/platform-accounts'
+
+const platformDictRows = ref([])
+
+const platformSelectOpts = computed(() => toDataValueSelectOptions(platformDictRows.value))
+
+const loadPlatformDict = async () => {
+  platformDictRows.value = await fetchDictList('publish_platform')
+}
 
 // ---- 代理在线状态 + 下载 ----
 const agentOnline = ref(false)
@@ -332,7 +343,8 @@ const loadAccounts = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadPlatformDict()
   loadAccounts()
 })
 
@@ -537,17 +549,7 @@ const handleVerify = async (account) => {
 }
 
 // ---- 工具函数 ----
-const getPlatformColor = (platform) => {
-  const map = {
-    '小红书': '#FF2442',
-    '抖音': '#000000',
-    '微博': '#E6162D',
-    '知乎': '#0084FF',
-    '微信公众号': '#07C160',
-    'B站': '#00A1D6',
-  }
-  return map[platform] || '#909399'
-}
+const getPlatformColor = (platform) => getPlatformHexColor(platform)
 
 const getCardBorderClass = (authStatus) => {
   if (authStatus === 'authorized') return 'border-green-200 bg-green-50/30'

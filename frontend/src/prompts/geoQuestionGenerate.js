@@ -18,15 +18,6 @@ const escapePromptText = (s) =>
     .replace(/`/g, '\\`')
     .replace(/\$\{/g, '\\${')
 
-const KEYWORD_LIB_TYPE_LABEL = {
-  '01': '品牌词',
-  '02': '产品/服务词',
-  '03': '场景/需求词',
-  '04': '企业/公司词',
-  '05': '价格词',
-}
-
-/** 关键词库 data_key（01–05）→ 生成 JSON 中 type 枚举（与 GEO 五类一致） */
 const KEYWORD_LIB_TO_GEO_TYPE = {
   '01': 'brand',
   '02': 'product',
@@ -81,10 +72,10 @@ export const buildGeoKeywordAnchoredPrompt = ({
       const raw = String(keyword || '').trim()
       if (!raw) return null
       const k = String(typeKey || '02').trim().padStart(2, '0')
-      const label = KEYWORD_LIB_TYPE_LABEL[k] || KEYWORD_LIB_TYPE_LABEL['02']
+      const label = k
       const geo = KEYWORD_LIB_TO_GEO_TYPE[k] || 'product'
       const geoZh = geoTypeBriefZh[geo] || geoTypeBriefZh.product
-      return `- 「${escapePromptText(raw)}」（库内类型：${label}）→ 为该词生成的 ${per} 条问题：JSON 里 type 必须全部为 "${geo}"；内容须 ${geoZh}。`
+      return `- 「${escapePromptText(raw)}」（库内 keyword_type data_key：${label}）→ 为该词生成的 ${per} 条问题：JSON 里 type 必须全部为 "${geo}"；内容须 ${geoZh}。`
     })
     .filter(Boolean)
     .join('\n')

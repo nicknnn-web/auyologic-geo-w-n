@@ -251,6 +251,9 @@ import { fetchAllPages, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '.
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
+import { fetchDictList } from '../utils/sysDict.js'
+import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
+import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -274,6 +277,18 @@ const pageSize = ref(DEFAULT_PAGE_SIZE)
 const tasksLoading = ref(false)
 const drafts = ref([])
 const authorizedAccounts = ref([])   // 只存已授权账号（下拉用，分页拉全）
+
+const platformDictRows = ref([])
+
+const loadPlatformDict = async () => {
+  platformDictRows.value = await fetchDictList('publish_platform')
+}
+
+const publishPlatformValues = computed(() =>
+  toDataValueSelectOptions(platformDictRows.value)
+    .map((o) => o.value)
+    .filter(Boolean)
+)
 
 // 当前正在执行轮询的任务ID
 const executingId = ref(null)
@@ -327,6 +342,7 @@ const loadDrafts = async () => {
 }
 
 onMounted(async () => {
+  await loadPlatformDict()
   await Promise.all([loadTasks(), loadAccounts(), loadDrafts()])
   // 支持从草稿箱跳转时带 draftId
   if (route.query.draftId) {
@@ -362,11 +378,10 @@ const formRules = {
 }
 
 const availablePlatforms = computed(() => {
-  const platforms = ['小红书', '抖音', '微博', '知乎', 'B站', '微信公众号']
-  return platforms.map(p => ({
+  return publishPlatformValues.value.map((p) => ({
     value: p,
     label: p,
-    accountCount: authorizedAccounts.value.filter(a => a.platform === p).length,
+    accountCount: authorizedAccounts.value.filter((a) => a.platform === p).length,
   }))
 })
 
@@ -521,13 +536,7 @@ const goToAccounts = () => {
   router.push('/media-accounts')
 }
 
-const getPlatformColor = (platform) => {
-  const map = {
-    '小红书': '#FF2442', '抖音': '#000000', '微博': '#E6162D',
-    '知乎': '#0084FF', '微信公众号': '#07C160', 'B站': '#00A1D6',
-  }
-  return map[platform] || '#909399'
-}
+const getPlatformColor = (platform) => getPlatformHexColor(platform)
 
 const getStatusType = (status) => {
   const map = {

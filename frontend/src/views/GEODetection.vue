@@ -1208,7 +1208,7 @@ const filteredQuestions = computed(() => {
 
 // 是否有待审核的问题（用于提醒用户先去 Questions 页面审核）
 const hasPendingQuestions = computed(() => {
-  return questions.value.some(q => q.status === '待审核')
+  return questions.value.some((q) => q.status === 'pending')
 })
 
 const isQuestionSelected = (id) => {
@@ -1582,9 +1582,10 @@ const getCategoryColor = (cat) => {
   const k = normalizeKeywordTypeKey(cat)
   const map = {
     '01': 'primary',
-    '04': 'danger',
     '02': 'success',
-    '03': 'warning'
+    '03': 'warning',
+    '04': 'danger',
+    '05': 'info',
   }
   return map[k] || 'info'
 }
@@ -1643,7 +1644,7 @@ const loadQuestionsFromAPI = async () => {
       (p, ps) => `${origin}/api/questions?page=${p}&pageSize=${ps}`,
       { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
     )
-    const approvedQuestions = allQ.filter((q) => q.status === '已审核')
+    const approvedQuestions = allQ.filter((q) => q.status === 'approved')
     questions.value = approvedQuestions.map((q, i) => ({
       id: q.id || i + 1,
       text: q.question || q.text || '',

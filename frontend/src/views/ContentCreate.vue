@@ -48,20 +48,21 @@
         </el-form-item>
 
         <el-form-item label="目标受众">
-          <el-select v-model="form.audience" placeholder="请选择目标受众" style="width: 300px;">
-            <el-option label="职场白领" value="职场白领" />
-            <el-option label="年轻妈妈" value="年轻妈妈" />
-            <el-option label="学生群体" value="学生群体" />
-            <el-option label="科技爱好者" value="科技爱好者" />
+          <el-select v-model="form.audience" placeholder="请选择目标受众" style="width: 300px;" clearable>
+            <el-option
+              v-for="opt in audienceSelectOpts"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
           </el-select>
         </el-form-item>
 
         <el-form-item label="投放平台">
           <el-checkbox-group v-model="form.platforms" style="width: 500px;">
-            <el-checkbox label="微信公众号">微信公众号</el-checkbox>
-            <el-checkbox label="小红书">小红书</el-checkbox>
-            <el-checkbox label="知乎">知乎</el-checkbox>
-            <el-checkbox label="微博">微博</el-checkbox>
+            <el-checkbox v-for="opt in platformSelectOpts" :key="opt.value" :label="opt.value">
+              {{ opt.label }}
+            </el-checkbox>
           </el-checkbox-group>
         </el-form-item>
       </div>
@@ -298,6 +299,8 @@ import { ElMessage } from 'element-plus'
 
 import { knowledgeAPI, historyAPI } from '../utils/api'
 import { fetchAllPages } from '../utils/pagedApi.js'
+import { fetchDictList } from '../utils/sysDict.js'
+import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
 import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 
@@ -325,50 +328,70 @@ const selectedText = ref('')
 const contentTextarea = ref(null)
 const activeScene = ref(null)
 
-// ========== 快速场景快捷入口 ==========
+const audienceDictRows = ref([])
+const platformDictRows = ref([])
+
+const audienceSelectOpts = computed(() => toDataValueSelectOptions(audienceDictRows.value))
+const platformSelectOpts = computed(() => toDataValueSelectOptions(platformDictRows.value))
+
+const loadContentDicts = async () => {
+  const [a, p] = await Promise.all([
+    fetchDictList('content_target_audience'),
+    fetchDictList('publish_platform'),
+  ])
+  audienceDictRows.value = a
+  platformDictRows.value = p
+}
+
+// ========== 快速场景快捷入口（平台选项来自字典，仅控制勾选数量，不写死具体平台名）==========
 const quickScenes = [
-  { 
-    id: 'xhs', 
-    name: '小红书种草', 
+  {
+    id: 'xhs',
+    name: '小红书种草',
     desc: '短平快，真实感',
-    platforms: ['小红书'],
-    commandHint: '选择种草型模板'
+    platformPickCount: 1,
+    commandHint: '选择种草型模板',
   },
-  { 
-    id: 'wxgzh', 
-    name: '公众号推文', 
+  {
+    id: 'wxgzh',
+    name: '公众号推文',
     desc: '深度内容，干货足',
-    platforms: ['微信公众号'],
-    commandHint: '选择深度分析型模板'
+    platformPickCount: 1,
+    commandHint: '选择深度分析型模板',
   },
-  { 
-    id: 'zh', 
-    name: '知乎问答', 
+  {
+    id: 'zh',
+    name: '知乎问答',
     desc: '专业有料，有观点',
-    platforms: ['知乎'],
-    commandHint: '选择知识科普型模板'
+    platformPickCount: 1,
+    commandHint: '选择知识科普型模板',
   },
-  { 
-    id: 'pc', 
-    name: '产品评测', 
+  {
+    id: 'pc',
+    name: '产品评测',
     desc: '客观全面，数据驱动',
-    platforms: ['微信公众号', '知乎'],
-    commandHint: '选择评测对比型模板'
+    platformPickCount: 2,
+    commandHint: '选择评测对比型模板',
   },
-  { 
-    id: 'gg', 
-    name: '品牌软文', 
+  {
+    id: 'gg',
+    name: '品牌软文',
     desc: '润物无声，情怀足',
-    platforms: ['微信公众号', '微博'],
-    commandHint: '选择品牌故事型模板'
-  }
+    platformPickCount: 2,
+    commandHint: '选择品牌故事型模板',
+  },
 ]
 
 // 应用快速场景配置
 const applyScene = (scene) => {
   activeScene.value = scene.id
-  form.value.platforms = scene.platforms
-  ElMessage.success(`已应用「${scene.name}」场景配置：${scene.platforms.join('+')}`)
+  const keys = platformSelectOpts.value.map((o) => o.value).filter(Boolean)
+  const n = Number(scene.platformPickCount) || 0
+  form.value.platforms = n > 0 && keys.length ? keys.slice(0, Math.min(n, keys.length)) : []
+  const suffix = form.value.platforms.length
+    ? `已勾选前 ${form.value.platforms.length} 个投放平台（按字典排序）`
+    : '未配置投放平台字典，未自动勾选'
+  ElMessage.success(`已应用「${scene.name}」：${suffix}`)
 }
 
 // 关键词变化时清除场景选中状态
@@ -553,8 +576,10 @@ const deleteHistory = async (id) => {
 const loadHistoryRecord = (record) => {
   // 恢复表单数据
   form.value.keyword = record.keyword || ''
-  form.value.audience = record.audience || ''
-  form.value.platforms = record.platforms ? [...record.platforms] : []
+  form.value.audience = resolveToDataValue(audienceDictRows.value, record.audience) || ''
+  form.value.platforms = (record.platforms || [])
+    .map((p) => resolveToDataValue(platformDictRows.value, p) || p)
+    .filter(Boolean)
   form.value.command = record.commandId || ''
   
   // 恢复生成结果
@@ -584,7 +609,9 @@ const selectedCommand = computed(() => {
 
 onMounted(async () => {
   const userId = 'default_user'
-  
+
+  await loadContentDicts()
+
   // 从后端 API 加载关键词（分页接口，多页合并）
   try {
     keywords.value = await fetchAllPages(
@@ -624,8 +651,10 @@ onMounted(async () => {
       const draft = JSON.parse(savedDraft)
       form.value.keyword = draft.brand || ''
       form.value.command = draft.commandId || ''
-      form.value.audience = draft.audience || ''
-      form.value.platforms = draft.platforms || []
+      form.value.audience = resolveToDataValue(audienceDictRows.value, draft.audience) || ''
+      form.value.platforms = (draft.platforms || [])
+        .map((p) => resolveToDataValue(platformDictRows.value, p) || p)
+        .filter(Boolean)
       form.value.extra = draft.extra || ''
       generatedContent.value = draft.content || ''
       generatedTitle.value = draft.title || ''
@@ -820,7 +849,7 @@ const migrateCommands = (cmds) => {
       
       // 如果处理后为空或太短，提供一个默认类型描述
       if (!newPrompt || newPrompt.length < 20) {
-        newPrompt = getDefaultTypePrompt(cmd.type)
+        newPrompt = getDefaultTypePrompt()
       }
       
       return { ...cmd, prompt: newPrompt }
@@ -832,16 +861,9 @@ const migrateCommands = (cmds) => {
   return migratedCmds
 }
 
-// 根据类型获取默认的风格描述
-const getDefaultTypePrompt = (type) => {
-  const typePrompts = {
-    '文章创作': '结构清晰，内容充实，语言流畅，有真情实感',
-    '短视频文案': '简洁有力，节奏快，画面感强，适合口头表达',
-    '社交媒体': '口语化，真实感强，便于互动传播',
-    '默认': '专业、客观、有价值'
-  }
-  return typePrompts[type] || typePrompts['默认']
-}
+// 迁移后兜底描述（不绑定具体字典项文案）
+const getDefaultTypePrompt = () =>
+  '结构清晰、重点突出，并符合当前所选指令模板的写作要求'
 // ========== 迁移函数结束 ==========
 
 // ========== 写作风格池（随机选择，减少AI感）==========
@@ -897,8 +919,8 @@ const getRandomOutro = () => {
 const buildGeoPrompt = () => {
   const cmd = selectedCommand.value
   const keyword = form.value.keyword  // 关键词 = 文章主题（核心驱动）
-  const audience = form.value.audience || '目标用户'
-  const platforms = form.value.platforms
+  const audienceLabel = form.value.audience || '目标用户'
+  const platformLabelsForPrompt = (form.value.platforms || []).filter(Boolean)
   const extra = form.value.extra || ''
   const templateName = cmd?.name || '软文'  // 模板名称 = 类型标签
   
@@ -938,16 +960,12 @@ const buildGeoPrompt = () => {
   }
   
   // ===== 4. 目标受众约束 =====
-  const audienceConstraint = `\n\n## 👥 目标受众\n${audience}`
-  
-  // ===== 5. 投放平台风格约束 =====
+  const audienceConstraint = `\n\n## 👥 目标受众\n${audienceLabel}`
+
+  // ===== 5. 投放平台（展示名来自字典，不写死平台枚举）=====
   let platformStyle = ''
-  if (platforms.includes('小红书')) {
-    platformStyle = `\n\n## 📕 小红书风格约束\n- 标题要吸睛，用 emoji 符号\n- 内容要口语化、真实感\n- 结尾加话题标签 #${keyword} #好物推荐\n- 300-500字为宜\n`
-  } else if (platforms.includes('微信公众号')) {
-    platformStyle = `\n\n## 📰 微信公众号风格约束\n- 标题要有吸引力\n- 内容要有深度，条理清晰\n- 可以适当引用数据增加权威性\n- 结尾引导关注和转发\n`
-  } else if (platforms.includes('知乎')) {
-    platformStyle = `\n\n## 💬 知乎风格约束\n- 以问题为导向开头\n- 内容要有干货、有见解\n- 适当引用权威来源和数据\n- 可以用对比表格增强说服力\n`
+  if (platformLabelsForPrompt.length) {
+    platformStyle = `\n\n## 发布平台\n请兼顾以下平台的表达习惯与篇幅节奏：${platformLabelsForPrompt.join('、')}\n`
   }
   
   // ===== 6. 补充说明（额外要求）=====

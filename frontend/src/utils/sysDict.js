@@ -3,6 +3,7 @@
  * 返回 [{ dataKey, dataValue, sortOrder }, ...]
  */
 import { unwrapListPayload, DEFAULT_PAGE_SIZE } from './pagedApi.js'
+import { placeholderKeywordTypeOptions } from '../config/keywordTypeSemantics.js'
 
 export function getApiBase() {
   return window.VITE_API_URL || window.location.origin
@@ -22,6 +23,13 @@ export async function fetchDictList(dictType) {
   }
 }
 
+/** 按 sort_order 排序后的字典行（接口字段兼容 camelCase / snake_case） */
+export function sortDictRows(list) {
+  return [...(list || [])].sort(
+    (a, b) => (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0)
+  )
+}
+
 /** 根据字典列表生成 key -> 展示文案 */
 export function dictLabelMap(list) {
   const m = {}
@@ -34,48 +42,45 @@ export function dictLabelMap(list) {
 }
 
 /**
- * 旧版中文 / 旧英文 data_key → 当前规范键 01–06（与 dict_type 组合唯一）
- * 规范：01 品牌 02 产品 03 场景 04 企业 05 对比 06 价格
+ * 旧版中文 / 旧英文 data_key → 当前规范键 01–05（品牌体检与 inferCategory 五分法）
+ * 旧六分法：04 企业 05 对比 06 价格 → 迁库后 01 / 04 / 05
  */
 export const KEYWORD_TYPE_LEGACY_MAP = {
   品牌: '01',
   产品: '02',
   场景: '03',
-  企业: '04',
-  对比词: '05',
-  价格词: '06',
+  企业: '01',
+  对比词: '04',
+  价格词: '05',
   brand: '01',
   product: '02',
   scene: '03',
-  enterprise: '04'
+  enterprise: '01',
+  compare: '04',
+  price: '05',
 }
 
 export function normalizeKeywordTypeKey(val) {
   if (val === undefined || val === null) return ''
   const s = String(val).trim()
   if (!s) return ''
-  return KEYWORD_TYPE_LEGACY_MAP[s] ?? s
+  let k = KEYWORD_TYPE_LEGACY_MAP[s] ?? s
+  if (k === '06') k = '05'
+  return k
 }
 
-/** 按 sortOrder 排序后的 data_key 列表；无字典时退回 01–04 */
+/** 按 sortOrder 排序后的 data_key 列表；无字典时退回 01–05 */
 export function keywordTypeKeysOrdered(list) {
   const rows = [...(list || [])].sort(
     (a, b) => (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0)
   )
   const keys = rows.map((r) => r.dataKey ?? r.data_key).filter(Boolean)
   if (keys.length) return keys
-  return ['01', '02', '03', '04', '05', '06']
+  return ['01', '02', '03', '04', '05']
 }
 
-/** 接口不可用时前端兜底（与 sys_dict keyword_type 一致） */
-export const KEYWORD_TYPE_DEFAULT_OPTIONS = [
-  { dataKey: '01', dataValue: '品牌词', sortOrder: 10 },
-  { dataKey: '02', dataValue: '产品词', sortOrder: 20 },
-  { dataKey: '03', dataValue: '场景词', sortOrder: 30 },
-  { dataKey: '04', dataValue: '企业词', sortOrder: 40 },
-  { dataKey: '05', dataValue: '对比词', sortOrder: 50 },
-  { dataKey: '06', dataValue: '价格词', sortOrder: 60 },
-]
+/** 接口不可用时占位（文案以接口为准；此处 dataValue=dataKey） */
+export const KEYWORD_TYPE_DEFAULT_OPTIONS = placeholderKeywordTypeOptions()
 
 /** dict_type（英文标识）→ 中文名称；字典管理筛选/表单/表格展示用，可与后端种子扩展 */
 export const DICT_TYPE_LABEL_ZH = {

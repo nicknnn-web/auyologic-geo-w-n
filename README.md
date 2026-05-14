@@ -76,4 +76,5 @@ npm run dev
 ## 相关文档
 
 - `ZEABUR_DEPLOY.md` — Zeabur 部署详细步骤
+- `docs/MIGRATION_ZEABUR_TO_SELFHOSTED.md` — Zeabur 迁往自建服务器（含 Jenkins）流程与官方版本核验方式
 - `HANDOVER.md` — 项目交接文档（内容已过时，仅供参考）

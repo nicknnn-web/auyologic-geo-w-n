@@ -24,6 +24,19 @@ function normalizeKeywordType(val, fallback) {
   return LEGACY_KEYWORD_TYPE[s] || s || fallback
 }
 
+/** 旧版中文审核状态 → data_key（与 sys_dict question_status 一致） */
+const LEGACY_QUESTION_STATUS = {
+  待审核: 'pending',
+  已审核: 'approved',
+  已拒绝: 'rejected',
+}
+
+function normalizeQuestionStatus(val) {
+  if (val == null || val === '') return 'pending'
+  const s = String(val).trim()
+  return LEGACY_QUESTION_STATUS[s] || s
+}
+
 async function migrateLocalStorage() {
   if (localStorage.getItem('__migrated') === 'true') {
     console.log('[迁移] 已完成，跳过')
@@ -85,7 +98,7 @@ async function migrateLocalStorage() {
               '03'
             ),
             sourceKeyword: q.sourceKeyword || q.source || '-',
-            status: q.status || '待审核'
+            status: normalizeQuestionStatus(q.status)
           })
         })
       } catch (e) {

@@ -35,7 +35,7 @@
           type="primary"
           size="large"
           class="wo-check-btn"
-          @click="handleStartCheck(true)"
+          @click="handleStartCheck"
           :loading="checking"
           :disabled="!inputUrl.trim()"
         >
@@ -285,7 +285,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import {
@@ -410,12 +410,15 @@ const getDimByItem = (itemName) => {
   return dimMap[itemName] || ''
 }
 
-const handleStartCheck = async (force = false) => {
-  if (!inputUrl.value.trim()) return
+const handleStartCheck = async () => {
+  if (!isValidUrl(inputUrl.value)) {
+    ElMessage.error("请检查网站格式！")
+    return
+  }
+
   report.value = null
   dimensions.value.forEach(d => { d.done = false; d.active = false })
   checking.value = true
-  // 显示开始检测提示
   ElNotification({
     title: '正在检测',
     type: 'info',
@@ -425,10 +428,6 @@ const handleStartCheck = async (force = false) => {
   })
 
   try {
-    // 确保URL带协议前缀
-    let targetUrl = inputUrl.value.trim()
-    if (!/^https?:\/\//i.test(targetUrl)) targetUrl = 'https://' + targetUrl
-
     // 通过后端 API 检测（解决浏览器 CORS 问题）
     const res = await fetch(`${API_BASE_URL}/api/website-analyze`, {
       method: 'POST',
@@ -478,7 +477,7 @@ const handleStartCheck = async (force = false) => {
     }))
 
     report.value = {
-      url: result.url || inputUrl.value,
+      url: result.url || targetUrl,
       score: totalScore,
       items: dimMap,
       issues: result.issues &&
@@ -518,11 +517,28 @@ const handleStartCheck = async (force = false) => {
     await autoSaveReport()
   }
 }
+function isValidUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
 
+  try {
+    const parsed = new URL(url);
+
+    // 只允许 http 和 https
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
 // 自动保存报告到后端
 const autoSaveReport = async () => {
   if (!report.value) return
-  
+
   const userId = 'default_user'
   const reportData = {
     url: report.value.url,
@@ -532,7 +548,7 @@ const autoSaveReport = async () => {
     details: JSON.stringify(report.value.details),
     checkedAt: report.value.checkedAt
   }
-  
+
   try {
     // 先检查是否已存在相同 URL 的记录
     const checkRes = await fetch(WEBSITE_REPORTS_API, {
@@ -544,7 +560,7 @@ const autoSaveReport = async () => {
       const existing = existingReports.find(r => r.url === report.value.url)
       existingId = existing?.id
     }
-    
+
     let res
     if (existingId) {
       // 存在则更新
@@ -567,7 +583,7 @@ const autoSaveReport = async () => {
         body: JSON.stringify(reportData)
       })
     }
-    
+
     if (res.ok) {
       console.log('✅ 报告已保存到后端')
       await loadHistory()
@@ -600,10 +616,10 @@ const handleSaveReport = async () => {
 
   localStorage.setItem('auyologic_data', JSON.stringify(allData))
   loadHistory()
-  
+
   // 同时保存到后端
   await autoSaveReport()
-  
+
   ElMessage.success({ message: '报告已保存', offset: 80 })
 }
 
@@ -621,7 +637,7 @@ const handleExportReport = () => {
 
 const handleViewReport = (r) => {
   report.value = r
-  inputUrl.value = r.url
+  inputUrl.value = String(r.url || '').trim().replace(/^https?:\/\//i, '')
   selectedHistory.value = []
 }
 
@@ -642,16 +658,8 @@ const handleRecheckSelected = async () => {
 }
 
 const handleRecheck = async (url) => {
-  inputUrl.value = url
-  // 显示重新检测提示
-  ElNotification({
-    title: '正在检测',
-    type: 'info',
-    duration: 3000,
-    position: 'top-right',
-    offset: 60
-  })
-  await handleStartCheck(true) // 强制重新检测
+  inputUrl.value = String(url || '').trim().replace(/^https?:\/\//i, '')
+  await handleStartCheck()
 }
 
 const handleClearHistory = async () => {
@@ -665,7 +673,7 @@ const handleClearHistory = async () => {
   } catch (e) {
     console.warn('从后端删除失败:', e)
   }
-  
+
   const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   allData['website-reports'] = []
   localStorage.setItem('auyologic_data', JSON.stringify(allData))
@@ -712,7 +720,7 @@ const toggleSelect = (idx) => {
 
 const handleBatchDelete = async () => {
   const userId = 'default_user'
-  
+
   // 从后端删除选中的记录
   const idsToDelete = selectedHistory.value.map(i => reportHistory.value[i].id).filter(Boolean)
   for (const id of idsToDelete) {
@@ -725,7 +733,7 @@ const handleBatchDelete = async () => {
       console.warn('从后端删除失败:', e)
     }
   }
-  
+
   const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
   const filtered = (allData['website-reports'] || []).filter((_, i) => !selectedHistory.value.includes(i))
   allData['website-reports'] = filtered
@@ -783,12 +791,18 @@ const syncToDashboard = () => {
 
 const formatTime = (isoString) => formatZhCnYmdHm(isoString)
 
-// ===== 初始化 =====
+watch(
+  () => [route.query.url, route.query.prefill],
+  () => {
+    const q = route.query.url ?? route.query.prefill
+    if (q != null && String(q).trim()) {
+      inputUrl.value = String(q).trim().replace(/^https?:\/\//i, '')
+    }
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
-  const q = route.query.url ?? route.query.prefill
-  if (q != null && String(q).trim()) {
-    inputUrl.value = String(q).trim()
-  }
   loadHistory()
 })
 </script>

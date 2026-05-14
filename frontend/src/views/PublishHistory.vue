@@ -56,6 +56,7 @@ import { ElMessage } from 'element-plus'
 import { publishRecordsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE } from '../utils/pagedApi.js'
 import { formatZhCnSlashYmdHm } from '../utils/dateTime.js'
+import { getPlatformElTagType } from '../utils/publishPlatformUi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const tableData = ref([])
@@ -64,10 +65,7 @@ const page = ref(1)
 const pageSize = ref(DEFAULT_PAGE_SIZE)
 const loading = ref(false)
 
-const getPlatformColor = (platform) => {
-  const map = { '微信公众号': 'success', '小红书': 'danger', '抖音': 'info', '微博': 'warning', '知乎': 'primary', 'B站': 'primary' }
-  return map[platform] || 'info'
-}
+const getPlatformColor = (platform) => getPlatformElTagType(platform)
 
 const formatTime = (ts) => (!ts ? '-' : formatZhCnSlashYmdHm(ts))
 

@@ -888,16 +888,9 @@ const buildKeywordGroups = (f, searchKeywords = []) => {
         kws = buildScenarioKeywords(name, industry, scenarioWords, extractedPhrases, coreBusinessWords, skSafe)
         break
       case '04':
-        kws = buildEnterpriseKeywords(name, industry, skSafe)
+        kws = buildContrastKeywords(name, industry, categoryWords)
         break
       case '05':
-        if (label.includes('价格')) {
-          kws = buildPriceKeywords(name, industry, categoryWords)
-        } else {
-          kws = buildContrastKeywords(name, industry, categoryWords)
-        }
-        break
-      case '06':
         kws = buildPriceKeywords(name, industry, categoryWords)
         break
       default:

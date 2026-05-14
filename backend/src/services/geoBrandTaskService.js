@@ -73,7 +73,7 @@ export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn,
   let sql = `
     SELECT q.id, q.question
     FROM questions q
-    WHERE q.status = '已审核'
+    WHERE q.status = 'approved'
   `;
   if (userId != null && String(userId).trim() !== '') {
     const uid = String(userId).trim();

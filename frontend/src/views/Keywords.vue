@@ -151,19 +151,13 @@ const form = ref({ keyword: '', type: '' })
 
 const keywordTypeOptions = ref([])
 
-const KEYWORD_TYPE_FALLBACK_LABEL = {
-  '01': '品牌词',
-  '02': '产品词',
-  '03': '场景词',
-  '04': '企业词'
-}
-
 const keywordTypeLabel = (raw) => {
   const k = normalizeKeywordTypeKey(raw)
   const row = keywordTypeOptions.value.find((x) => (x.dataKey || x.data_key) === k)
   if (row?.dataValue || row?.data_value) return row.dataValue || row.data_value
-  if (KEYWORD_TYPE_FALLBACK_LABEL[k]) return KEYWORD_TYPE_FALLBACK_LABEL[k]
-  return raw || '-'
+  const fb = KEYWORD_TYPE_DEFAULT_OPTIONS.find((x) => x.dataKey === k)
+  if (fb?.dataValue) return fb.dataValue
+  return raw || k || '-'
 }
 
 const loadKeywordTypeDict = async () => {
@@ -218,7 +212,8 @@ const getTypeColor = (type) => {
     '01': 'primary',
     '02': 'success',
     '03': 'warning',
-    '04': 'danger'
+    '04': 'danger',
+    '05': 'info',
   }
   return map[k] || 'info'
 }

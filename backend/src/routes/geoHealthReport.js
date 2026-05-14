@@ -50,19 +50,10 @@ import {
   matrixContextPayload,
   buildMatrixContextDiagnosticItem,
 } from '../utils/contextMatrix.js';
-
-/** 库中尚无 keyword_type 字典时的兜底行（与 index.js 种子一致） */
-const FALLBACK_KEYWORD_TYPE_ROWS = [
-  { data_key: '01', data_value: '品牌词', sort_order: 10 },
-  { data_key: '02', data_value: '产品词', sort_order: 20 },
-  { data_key: '03', data_value: '场景词', sort_order: 30 },
-  { data_key: '04', data_value: '企业词', sort_order: 40 },
-  { data_key: '05', data_value: '对比词', sort_order: 50 },
-  { data_key: '06', data_value: '价格词', sort_order: 60 },
-];
+import { fallbackKeywordTypeRowsForReport } from '../config/keywordTypeSemantics.js';
 
 function buildIntentPathsFromDictRows(rows) {
-  const src = rows && rows.length ? rows : FALLBACK_KEYWORD_TYPE_ROWS;
+  const src = rows && rows.length ? rows : fallbackKeywordTypeRowsForReport();
   const list = src.map((row) => {
     const key = String(row.data_key ?? '').trim();
     const dv = String(row.data_value ?? '').trim() || key;
@@ -79,7 +70,7 @@ function buildIntentPathsFromDictRows(rows) {
 }
 
 function keywordTypeLabelRecord(rows) {
-  const src = rows && rows.length ? rows : FALLBACK_KEYWORD_TYPE_ROWS;
+  const src = rows && rows.length ? rows : fallbackKeywordTypeRowsForReport();
   const m = {};
   for (const row of src) {
     const k = String(row.data_key ?? '').trim();

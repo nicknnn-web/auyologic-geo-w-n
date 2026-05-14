@@ -1329,6 +1329,7 @@ import {
 } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import { KEYWORD_TYPE_KEY_TO_REPORT_CATEGORY } from '../config/keywordTypeSemantics.js'
 import {
   readGeoHealthAvailableModelsCache,
   writeGeoHealthAvailableModelsCache,
@@ -1984,25 +1985,12 @@ const platforms = ref([
   // { key: 'spark',    name: '讯飞星火',   icon: '讯', color: '#F59E0B', simulated: true },
 ])
 
-/**
- * 默认矩阵行（骨架；接口返回 intentPaths / keywordTypeLabels 后以服务端 + sys_dict 为准）
- * category 与后端「无字典文案时」标准 data_key 语义一致
- */
-const DEFAULT_INTENT_CATEGORY_BY_KEY = {
-  '01': 'brand',
-  '02': 'open',
-  '03': 'open',
-  '04': 'brand',
-  '05': 'compare',
-  '06': 'open',
-}
-
 const intentPaths = ref(
   KEYWORD_TYPE_DEFAULT_OPTIONS.map((o) => ({
     key: o.dataKey,
     label: o.dataValue,
     type: o.dataValue,
-    category: DEFAULT_INTENT_CATEGORY_BY_KEY[o.dataKey] || 'open',
+    category: KEYWORD_TYPE_KEY_TO_REPORT_CATEGORY[o.dataKey] || 'open',
   }))
 )
 

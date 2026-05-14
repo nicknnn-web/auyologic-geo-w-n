@@ -17,7 +17,7 @@
  *   sentimentKeywords     语义情绪精炼词（string[]，模型可选输出；词云统计用 answer_tokens 服务端分词）
  *
  * category 由 question_type + sys_dict.keyword_type 的 data_value 在代码侧映射，不让 AI 判断。
- * 优先读字典文案（与后台「系统字典」一致）；无文案时再按标准 data_key 01–06 兜底。
+ * 优先读字典文案（与后台「系统字典」一致）；无文案时再按标准 data_key 01–05 兜底（与品牌体检报告 KPI / 矩阵口径一致）。
  */
 
 import { createAiClientByConnectionId } from './aiClientFactory.js';
@@ -27,23 +27,22 @@ import {
   GEO_HEALTH_ANALYSIS_DELAY_MS,
   GEO_HEALTH_ANALYSIS_TIMEOUT_MS,
 } from '../config/geoBrandTaskConfig.js';
+import { KEYWORD_TYPE_KEY_TO_REPORT_CATEGORY } from '../config/keywordTypeSemantics.js';
+import {
+  ANALYSIS_SYSTEM_PROMPT,
+  buildAnalysisPrompt,
+} from '../prompts/geoHealthAnalysis.js';
+import { extractProbeAnswerText } from './sentimentLexiconService.js';
+import { persistAiWordCloudForTask } from './geoHealthWordCloudPersistService.js';
+import { segmentAnswerText } from './answerTokenizer.js';
+export { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt };
 
 // ─────────────────────────────────────────────
 // category 映射（代码侧确定，不依赖 AI）
 // ─────────────────────────────────────────────
 
-/** 无字典文案时：与 index.js ensureSysDictAndMigrate 默认 keyword_type 键位语义一致 */
-const STANDARD_KEY_CATEGORY = {
-  '01': 'brand',
-  '02': 'open',
-  '03': 'open',
-  '04': 'brand',
-  '05': 'compare',
-  '06': 'open',
-};
-
-const LEGACY_BRAND = new Set(['brand', 'enterprise', '品牌词', '企业词', '品牌', '企业']);
-const LEGACY_COMPARE = new Set(['compare', '对比词', '对比']);
+const LEGACY_BRAND = new Set(['brand', 'enterprise']);
+const LEGACY_COMPARE = new Set(['compare']);
 
 /**
  * 将 question_type（sys_dict data_key）+ 字典 data_value 映射到分析 category。
@@ -59,31 +58,16 @@ export function inferCategory(questionType, dictDataValue) {
     const s = label.replace(/\s+/g, '');
     if (/(对比|竞品)/.test(s)) return 'compare';
     if (/(品牌|核心)词/.test(s) || s === '品牌' || s === '核心') return 'brand';
-    if (s.includes('企业词')) return 'brand';
-    if (s.includes('品牌') || s.includes('核心')) return 'brand';
     return 'open';
   }
 
-  if (STANDARD_KEY_CATEGORY[key]) return STANDARD_KEY_CATEGORY[key];
+  if (KEYWORD_TYPE_KEY_TO_REPORT_CATEGORY[key])
+    return KEYWORD_TYPE_KEY_TO_REPORT_CATEGORY[key];
 
   if (LEGACY_BRAND.has(key) || LEGACY_BRAND.has(key.toLowerCase())) return 'brand';
   if (LEGACY_COMPARE.has(key) || LEGACY_COMPARE.has(key.toLowerCase())) return 'compare';
   return 'open';
 }
-
-// ─────────────────────────────────────────────
-// 分析 prompt
-// ─────────────────────────────────────────────
-
-// Prompt 已迁至 backend/src/prompts/geoHealthAnalysis.js
-import {
-  ANALYSIS_SYSTEM_PROMPT,
-  buildAnalysisPrompt,
-} from '../prompts/geoHealthAnalysis.js';
-import { extractProbeAnswerText } from './sentimentLexiconService.js';
-import { persistAiWordCloudForTask } from './geoHealthWordCloudPersistService.js';
-import { segmentAnswerText } from './answerTokenizer.js';
-export { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt };
 
 // ─────────────────────────────────────────────
 // 核心分析：单条 answer → 写入 geo_health_analysis
