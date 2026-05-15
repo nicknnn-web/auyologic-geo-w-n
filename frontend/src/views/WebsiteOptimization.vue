@@ -411,6 +411,7 @@ const getDimByItem = (itemName) => {
 }
 
 const handleStartCheck = async () => {
+  console.log(inputUrl.value);
   if (!isValidUrl(inputUrl.value)) {
     ElMessage.error("请检查网站格式！")
     return
@@ -433,7 +434,7 @@ const handleStartCheck = async () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        url: targetUrl,
+        url: inputUrl.value,
         apiKey: 'dummy' // 后端服务目前不需要真实 key
       })
     })
@@ -477,7 +478,7 @@ const handleStartCheck = async () => {
     }))
 
     report.value = {
-      url: result.url || targetUrl,
+      url: result.url || inputUrl.value,
       score: totalScore,
       items: dimMap,
       issues: result.issues &&
@@ -523,15 +524,25 @@ function isValidUrl(url) {
   }
 
   try {
+    // 自动补协议
+    if (!/^https?:\/\//i.test(url)) {
+      url = `https://${url}`;
+    }
+
     const parsed = new URL(url);
 
-    // 只允许 http 和 https
+    // 仅允许 http/https
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return false;
     }
 
+    // hostname 必须包含 .
+    if (!parsed.hostname.includes('.')) {
+      return false;
+    }
+
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }

@@ -1094,7 +1094,7 @@
   <el-dialog
     v-model="sentimentSourceDialogVisible"
     class="sentiment-source-dialog"
-    
+
     align-center
     destroy-on-close
     title="词云数据来源明细"
@@ -3280,7 +3280,7 @@ const loadHealthReport = async () => {
 
     // 填充漏斗
     if (data.funnelStages) funnelStages.value = data.funnelStages
-
+    console.log(data);
     hasData.value = (data.rawData?.totalChecks || 0) > 0 || (data.rawData?.reportsCount || 0) > 0
 
     if (!hasData.value) {
