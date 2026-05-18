@@ -29,20 +29,23 @@
 
       <el-container>
         <!-- 手机端遮罩层 -->
-        <div 
-          v-if="mobileMenuOpen" 
+        <div
+          v-if="mobileMenuOpen"
           class="fixed inset-0 bg-black/50 z-40 md:hidden"
           @click="mobileMenuOpen = false"
         ></div>
 
         <!-- Sidebar - 桌面端 -->
-        <el-aside class="bg-white border-r pt-2 flex flex-col transition-all hidden md:flex" :style="{ width: isCollapse ? '64px' : '220px' }">
+        <el-aside
+            class="bg-white border-r pt-2 flex flex-col transition-all hidden md:flex overflow-hidden"
+            :style="{ width: isCollapse ? '64px' : '220px' }"
+        >
           <el-menu
-            :default-active="$route.path"
-            class="el-menu-vertical"
-            :router="true"
-            :collapse="isCollapse"
-            :collapse-transition="false"
+              :default-active="$route.path"
+              class="el-menu-vertical flex-1 overflow-y-auto"
+              :router="true"
+              :collapse="isCollapse"
+              :collapse-transition="false"
           >
             <!-- 首页 -->
             <el-menu-item index="/">
@@ -132,6 +135,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <template #title>改进方案报告</template>
             </el-menu-item>
+            <el-menu-item index="/geo-report-v2">
+              <el-icon><Histogram /></el-icon>
+              <template #title>改进方案报告2</template>
+            </el-menu-item>
             <el-menu-item index="/geo-health">
               <el-icon><TrendCharts /></el-icon>
               <template #title>品牌体检报告</template>
@@ -140,7 +147,7 @@
         </el-aside>
 
         <!-- 手机端弹出式侧边栏 -->
-        <div 
+        <div
           class="fixed top-0 left-0 h-full bg-white z-50 transition-transform duration-300 md:hidden"
           :class="mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'"
           style="width: 280px;"
@@ -243,6 +250,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <template #title>改进方案报告</template>
             </el-menu-item>
+            <el-menu-item index="/geo-report-v2">
+              <el-icon><Histogram /></el-icon>
+              <template #title>改进方案报告2</template>
+            </el-menu-item>
             <el-menu-item index="/geo-health">
               <el-icon><TrendCharts /></el-icon>
               <template #title>品牌体检报告</template>
@@ -261,7 +272,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Menu, Close, TrendCharts, Management, Comment, Connection } from '@element-plus/icons-vue'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Histogram, Menu, Close, TrendCharts, Management, Comment, Connection } from '@element-plus/icons-vue'
 
 const isCollapse = ref(false)
 const mobileMenuOpen = ref(false)
@@ -311,7 +322,13 @@ onMounted(async () => {
   background-color: #ecf5ff !important;
   color: #409eff !important;
 }
+.el-menu-vertical::-webkit-scrollbar {
+  display: none;
+}
 
+.el-menu-vertical {
+  scrollbar-width: none;
+}
 .el-menu-item {
   height: 40px;
   line-height: 40px;

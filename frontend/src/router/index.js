@@ -15,6 +15,7 @@ import EnterpriseSettings from '../views/EnterpriseSettings.vue'
 import GEODetection from '../views/GEODetection.vue'
 import WebsiteOptimization from '../views/WebsiteOptimization.vue'
 import GEOReport from '../views/GEOReport.vue'
+import GEOReportV2 from '../views/GEOReportV2.vue'
 import GEOHealthReport from '../views/GEOHealthReport.vue'
 import SysDictManage from '../views/SysDictManage.vue'
 import SentimentLexiconManage from '../views/SentimentLexiconManage.vue'
@@ -50,6 +51,7 @@ const routes = [
   { path: '/geo-detection', name: 'geo-detection', component: GEODetection },
   { path: '/website-optimization', name: 'website-optimization', component: WebsiteOptimization },
   { path: '/geo-report', name: 'geo-report', component: GEOReport },
+  { path: '/geo-report-v2', name: 'geo-report-v2', component: GEOReportV2 },
   { path: '/geo-health', name: 'geo-health', component: GEOHealthReport },
 ]
 

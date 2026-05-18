@@ -1,5 +1,5 @@
 <template>
-  <div class="health-page">
+  <div class="health-page" :class="{ 'health-page--pdf-export': pdfExporting }">
     <!-- 无数据提示 -->
     <div v-if="!hasData && !loading" class="no-data-banner">
       <div class="no-data-content">
@@ -39,7 +39,7 @@
       </div>
     </div>
 
-    <div v-if="hasData || loading">
+    <div v-if="hasData || loading" ref="healthReportCaptureRoot" class="health-report-capture-root">
       <!-- 顶部导航 -->
       <div class="health-nav">
       <div class="nav-left">
@@ -102,8 +102,8 @@
       </div>
     </div>
 
-    <!-- 主报告体 -->
-    <div class="report-body">
+    <!-- 主报告体（PDF 按子区块分别截屏，避免跨模块硬切分页） -->
+    <div ref="reportBodyPdfRef" class="report-body">
       <div class="section-model-visibility">
         <el-skeleton :loading="loading" animated>
           <template #template>
@@ -834,30 +834,68 @@
                   <div class="diagnosis-suggest-head">💡 优化建议：</div>
                   <ul class="diagnosis-ul">
                     <li
-                      v-for="(line, li) in item.suggestions"
+                      v-for="(_line, li) in item.suggestions"
                       :key="'sg' + item.id + '-' + li"
                       class="diagnosis-suggest-li"
                     >
-                      <textarea
-                        v-if="suggestionEditingKey === suggestionKey(item.id, li)"
-                        ref="suggestionEditInputRef"
-                        v-model="suggestionEditDraft"
-                        class="diagnosis-suggest-input"
-                        rows="2"
-                        @blur="commitSuggestionEdit"
-                        @keydown.escape.prevent="cancelSuggestionEdit"
-                      />
-                      <span
-                        v-else
-                        class="diagnosis-suggest-text"
-                        role="button"
-                        tabindex="0"
-                        title="点击编辑"
-                        @click="startSuggestionEdit(item, li)"
-                        @keydown.enter.prevent="startSuggestionEdit(item, li)"
-                      >{{ suggestionDisplayText(item, li) }}</span>
+                      <div class="diagnosis-suggest-row">
+                        <template v-if="suggestionEditingKey === suggestionKey(item.id, li)">
+                          <div class="diagnosis-suggest-editor" @keydown.escape.stop="cancelSuggestionEdit">
+                            <div class="diagnosis-suggest-toolbar" @pointerdown="cancelPendingSuggestionBlur">
+                              <el-button
+                                text
+                                type="primary"
+                                size="small"
+                                @mousedown.prevent
+                                @click="wrapSuggestionSelection('**', '**')"
+                              >加粗</el-button>
+                              <span class="diagnosis-suggest-toolbar-hint">Enter 换行；用 **文字** 表示粗体</span>
+                            </div>
+                            <textarea
+                              ref="suggestionEditInputRef"
+                              v-model="suggestionEditDraft"
+                              class="diagnosis-suggest-input"
+                              rows="4"
+                              @blur="onSuggestionEditBlur"
+                            />
+                          </div>
+                        </template>
+                        <div
+                          v-else
+                          class="diagnosis-suggest-readonly"
+                          role="button"
+                          tabindex="0"
+                          title="点击编辑"
+                          @click="startSuggestionEdit(item, li)"
+                          @keydown.enter.prevent="startSuggestionEdit(item, li)"
+                        >
+                          <template v-if="!String(item.suggestions[li] ?? '').trim()">
+                            <span class="diagnosis-suggest-placeholder">点击输入或编辑建议…</span>
+                          </template>
+                          <div
+                            v-else
+                            class="diagnosis-suggest-render"
+                            v-html="formatSuggestionRichHtml(item.suggestions[li])"
+                          />
+                        </div>
+                        <div
+                          v-if="suggestionEditingKey !== suggestionKey(item.id, li)"
+                          class="diagnosis-suggest-row-actions"
+                        >
+                          <el-button
+                            v-if="(item.suggestions || []).length > 1"
+                            text
+                            type="danger"
+                            size="small"
+                            @click.stop="removeSuggestionLine(item, li)"
+                          >删除</el-button>
+                        </div>
+                      </div>
                     </li>
                   </ul>
+                  <div class="diagnosis-suggest-add-row">
+                    <el-button text type="primary" size="small" @click="addSuggestionLine(item)">+ 添加一条建议</el-button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -928,7 +966,13 @@
         >
           <el-icon class="mr-1"><Document /></el-icon>提问与回答
         </el-button>
-        <el-button size="large" @click="exportReport" type="primary">
+        <el-button
+          size="large"
+          type="primary"
+          :loading="exportReportLoading"
+          :disabled="exportReportLoading || loading || !hasData"
+          @click="exportReport"
+        >
           <el-icon class="mr-1"><Download /></el-icon>导出报告
         </el-button>
         <el-button size="large" @click="shareReport" plain>
@@ -1328,6 +1372,7 @@ import {
   MagicStick, Loading, Rank
 } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
+import DOMPurify from 'dompurify'
 import { KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
 import { KEYWORD_TYPE_KEY_TO_REPORT_CATEGORY } from '../config/keywordTypeSemantics.js'
 import {
@@ -1400,12 +1445,20 @@ const confirmModelPicker = async () => {
     analysisConnectionId: pickedAnalysisId.value || undefined,
   })
 }
-import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
+import html2canvas from 'html2canvas'
+import { jsPDF } from 'jspdf'
+import { formatZhCnDateTime, nowZhCnDateTime, formatZhCnYmd } from '../utils/dateTime.js'
 import { getBrandStatusForModelCard } from '../utils/brandHealth.js'
 
 const router = useRouter()
 const route = useRoute()
 const loading = ref(false)
+/** 截屏导出 PDF：与导航+正文同级的捕获根（不含弹窗） */
+const healthReportCaptureRoot = ref(null)
+/** 报告正文容器：PDF 按直属子区块依次排版 */
+const reportBodyPdfRef = ref(null)
+const exportReportLoading = ref(false)
+const pdfExporting = ref(false)
 const hasData = ref(false)
 
 // ===== API 配置 =====
@@ -2300,7 +2353,7 @@ const disposeCompetitorParetoChart = () => {
   }
 }
 
-const buildCompetitorParetoOption = (mentions) => {
+const buildCompetitorParetoOption = (mentions, { forPdfExport = false } = {}) => {
   if (!mentions.length) return {}
   const names = mentions.map(r => r.name)
   const counts = mentions.map(r => r.count)
@@ -2321,12 +2374,19 @@ const buildCompetitorParetoOption = (mentions) => {
 
   const longLabel = names.some(n => String(n).length > 4)
   const useZoom = names.length > 10
+  const pdfBottom = useZoom ? 92 : names.length > 6 ? 84 : 76
+  const axisRotate = forPdfExport
+    ? (names.length > 6 ? 42 : names.length > 3 ? 34 : 0)
+    : (longLabel ? 28 : 0)
 
   return {
     backgroundColor: '#ffffff',
+    animation: forPdfExport ? false : undefined,
+    animationDurationUpdate: forPdfExport ? 0 : undefined,
     grid: {
       left: 56, right: 64,
-      top: 32, bottom: useZoom ? 72 : 56,
+      top: 32,
+      bottom: forPdfExport ? pdfBottom : (useZoom ? 72 : 56),
       containLabel: false,
     },
     ...(useZoom ? {
@@ -2369,9 +2429,18 @@ const buildCompetitorParetoOption = (mentions) => {
       axisTick: { show: false },
       axisLabel: {
         color: '#606266',
-        fontSize: 11,
-        rotate: longLabel ? 28 : 0,
+        fontSize: forPdfExport ? 9 : 11,
+        rotate: axisRotate,
         interval: 0,
+        ...(forPdfExport
+          ? {
+              hideOverlap: true,
+              formatter: (val) => {
+                const s = String(val ?? '')
+                return s.length > 8 ? `${s.slice(0, 7)}…` : s
+              },
+            }
+          : {}),
       },
       splitLine: { show: false },
     },
@@ -2746,44 +2815,159 @@ const diagnosticSuggestions = ref([])
 /** 综合语境矩阵 API 摘要（matrixContext） */
 const matrixContext = ref(null)
 
-const suggestionOverrides = ref({})
+let suggestionBlurTimer = null
+const cancelPendingSuggestionBlur = () => {
+  if (suggestionBlurTimer) {
+    clearTimeout(suggestionBlurTimer)
+    suggestionBlurTimer = null
+  }
+}
+
 const suggestionEditingKey = ref(null)
 const suggestionEditDraft = ref('')
 const suggestionEditInputRef = ref(null)
 
 const suggestionKey = (itemId, li) => `${itemId}::${li}`
 
-const suggestionDisplayText = (item, li) => {
-  const k = suggestionKey(item.id, li)
-  if (Object.prototype.hasOwnProperty.call(suggestionOverrides.value, k)) {
-    return suggestionOverrides.value[k]
-  }
-  const raw = item.suggestions?.[li]
-  return raw != null ? String(raw) : ''
+/** 展示用：换行 + **粗体**（内容已 DOMPurify） */
+const formatSuggestionRichHtml = (raw) => {
+  const s = String(raw ?? '')
+  if (!s.trim()) return ''
+  const escaped = s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  const bolded = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  const withBr = bolded.replace(/\r\n/g, '\n').replace(/\n/g, '<br />')
+  return DOMPurify.sanitize(withBr, { ALLOWED_TAGS: ['strong', 'br'], ALLOWED_ATTR: [] })
 }
 
 const startSuggestionEdit = async (item, li) => {
+  cancelPendingSuggestionBlur()
   suggestionEditingKey.value = suggestionKey(item.id, li)
-  suggestionEditDraft.value = suggestionDisplayText(item, li)
+  suggestionEditDraft.value = String(item.suggestions?.[li] ?? '')
   await nextTick()
   const el = suggestionEditInputRef.value
   if (el && typeof el.focus === 'function') el.focus()
-  if (el && typeof el.select === 'function') el.select()
 }
 
-const commitSuggestionEdit = () => {
-  const key = suggestionEditingKey.value
-  if (key) {
-    suggestionOverrides.value = {
-      ...suggestionOverrides.value,
-      [key]: suggestionEditDraft.value,
+const onSuggestionEditBlur = () => {
+  cancelPendingSuggestionBlur()
+  suggestionBlurTimer = setTimeout(() => {
+    suggestionBlurTimer = null
+    commitSuggestionEdit()
+  }, 200)
+}
+
+const wrapSuggestionSelection = (before, after) => {
+  cancelPendingSuggestionBlur()
+  const ta = suggestionEditInputRef.value
+  if (!ta || typeof ta.selectionStart !== 'number') return
+  const s = ta.selectionStart
+  const e = ta.selectionEnd
+  const v = suggestionEditDraft.value
+  const sel = v.slice(s, e)
+  suggestionEditDraft.value = v.slice(0, s) + before + sel + after + v.slice(e)
+  nextTick(() => {
+    try {
+      ta.focus()
+      const ns = s + before.length
+      const ne = ns + sel.length
+      ta.setSelectionRange(ns, ne)
+    } catch (_) {
+      /* ignore */
     }
+  })
+}
+
+const buildSuggestionsByItemPayload = () => {
+  const suggestionsByItem = {}
+  for (const it of diagnosticSuggestions.value) {
+    suggestionsByItem[it.id] = [...(it.suggestions || [])]
+  }
+  return suggestionsByItem
+}
+
+const persistDiagnosticSuggestions = async ({ silent = false } = {}) => {
+  const tid = reportTaskId.value
+  if (!tid) {
+    if (!silent) ElMessage.warning('缺少任务 ID，无法保存')
+    return false
+  }
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-health-report/diagnostic-suggestions`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-user-id': HEALTH_REPORT_USER_ID },
+      body: JSON.stringify({
+        taskId: tid,
+        suggestionsByItem: buildSuggestionsByItemPayload(),
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
+    if (!silent) ElMessage.success({ message: '建议已保存', offset: 80 })
+    return true
+  } catch (e) {
+    ElMessage.error('保存失败：' + (e.message || String(e)))
+    return false
+  }
+}
+
+const commitSuggestionEdit = async () => {
+  const key = suggestionEditingKey.value
+  if (!key) return
+  const sep = key.lastIndexOf('::')
+  const itemId = sep >= 0 ? key.slice(0, sep) : key
+  const li = sep >= 0 ? parseInt(key.slice(sep + 2), 10) : NaN
+  if (!Number.isFinite(li) || li < 0) {
+    suggestionEditingKey.value = null
+    return
+  }
+  const itemIdx = diagnosticSuggestions.value.findIndex((x) => x.id === itemId)
+  if (itemIdx >= 0) {
+    const item = diagnosticSuggestions.value[itemIdx]
+    const next = [...(item.suggestions || [])]
+    if (li < next.length) next[li] = suggestionEditDraft.value
+    diagnosticSuggestions.value[itemIdx] = { ...item, suggestions: next }
   }
   suggestionEditingKey.value = null
+  await persistDiagnosticSuggestions({ silent: false })
 }
 
 const cancelSuggestionEdit = () => {
+  cancelPendingSuggestionBlur()
   suggestionEditingKey.value = null
+}
+
+const addSuggestionLine = async (item) => {
+  cancelPendingSuggestionBlur()
+  const idx = diagnosticSuggestions.value.findIndex((x) => x.id === item.id)
+  if (idx < 0) return
+  const itemRef = diagnosticSuggestions.value[idx]
+  const next = [...(itemRef.suggestions || []), '']
+  diagnosticSuggestions.value[idx] = { ...itemRef, suggestions: next }
+  await persistDiagnosticSuggestions({ silent: true })
+  const newLi = next.length - 1
+  await startSuggestionEdit(diagnosticSuggestions.value[idx], newLi)
+}
+
+const removeSuggestionLine = async (item, li) => {
+  cancelPendingSuggestionBlur()
+  const idx = diagnosticSuggestions.value.findIndex((x) => x.id === item.id)
+  if (idx < 0) return
+  const itemRef = diagnosticSuggestions.value[idx]
+  const sugs = [...(itemRef.suggestions || [])]
+  if (sugs.length <= 1) {
+    sugs[0] = ''
+    diagnosticSuggestions.value[idx] = { ...itemRef, suggestions: sugs }
+  } else {
+    sugs.splice(li, 1)
+    diagnosticSuggestions.value[idx] = { ...itemRef, suggestions: sugs }
+  }
+  if (suggestionEditingKey.value === suggestionKey(item.id, li)) {
+    suggestionEditingKey.value = null
+  }
+  await persistDiagnosticSuggestions({ silent: true })
 }
 
 /** ECharts 词云：与 DOM/卸载时序解耦，避免 dispose 后仍 resize */
@@ -2837,8 +3021,26 @@ const rankToWordCloudTier = (rank1) => {
   return 3
 }
 
-const buildSentimentWordCloudOption = (list) => {
+const buildSentimentWordCloudOption = (list, { forPdfExport = false } = {}) => {
   const maxCount = Math.max(1, ...list.map(wordCloudCountForRank))
+
+  const tierStyleForExport = (tier) => {
+    const base = WORDCLOUD_TIER[tier]
+    if (!forPdfExport) return base
+    if (tier === 3) {
+      return {
+        ...base,
+        fontSize: 14,
+        fontWeight: 500,
+        opacity: 0.92,
+        layoutValue: Math.max(base.layoutValue, 14),
+      }
+    }
+    if (tier === 2) {
+      return { ...base, fontSize: 17, fontWeight: 500, opacity: 1 }
+    }
+    return base
+  }
 
   const ranked = list
     .map((w) => ({
@@ -2870,7 +3072,7 @@ const buildSentimentWordCloudOption = (list) => {
       e.w.polarity === 'positive' ? 'positive' : e.w.polarity === 'negative' ? 'negative' : 'neutral'
     const strength = e.cnt / maxCount
     const { color } = wordCloudStyleForPolarity(pol, strength)
-    const t = WORDCLOUD_TIER[e.tier]
+    const t = tierStyleForExport(e.tier)
     return {
       name: e.w.text,
       value: t.layoutValue,
@@ -2890,8 +3092,18 @@ const buildSentimentWordCloudOption = (list) => {
     }
   })
 
+  const animBlock = forPdfExport
+    ? {
+        animation: false,
+        animationDuration: 0,
+        animationDurationUpdate: 0,
+      }
+    : {
+        animationDurationUpdate: 480,
+      }
+
   return {
-    animationDurationUpdate: 480,
+    ...animBlock,
     tooltip: {
       confine: true,
       backgroundColor: 'rgba(255,255,255,0.96)',
@@ -2919,15 +3131,15 @@ const buildSentimentWordCloudOption = (list) => {
       {
         type: 'wordCloud',
         shape: 'card',
-        gridSize: 12,
-        sizeRange: [9, 88],
+        gridSize: forPdfExport ? 7 : 12,
+        sizeRange: forPdfExport ? [12, 78] : [9, 88],
         rotationRange: [0, 0],
         left: 'center',
         top: 'center',
         width: '94%',
         height: '90%',
         drawOutOfBound: false,
-        layoutAnimation: true,
+        layoutAnimation: !forPdfExport,
         textStyle: {
           fontFamily: '"Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif',
         },
@@ -3270,9 +3482,17 @@ const loadHealthReport = async () => {
     reportTaskId.value = data.rawData?.taskId ?? null
     lossTriggerTags.value = Array.isArray(data.lossTriggerTags) ? data.lossTriggerTags : []
     sentimentWordCloud.value = Array.isArray(data.sentimentWordCloud) ? data.sentimentWordCloud : []
-    suggestionOverrides.value = {}
     suggestionEditingKey.value = null
-    diagnosticSuggestions.value = Array.isArray(data.diagnosticSuggestions) ? data.diagnosticSuggestions : []
+    cancelPendingSuggestionBlur()
+    diagnosticSuggestions.value = (Array.isArray(data.diagnosticSuggestions) ? data.diagnosticSuggestions : []).map(
+      (it) => ({
+        ...it,
+        suggestions:
+          Array.isArray(it.suggestions) && it.suggestions.length
+            ? it.suggestions.map((t) => (t != null ? String(t) : ''))
+            : [''],
+      })
+    )
     matrixContext.value = data.matrixContext ?? null
 
     // 填充信源权威
@@ -3280,7 +3500,6 @@ const loadHealthReport = async () => {
 
     // 填充漏斗
     if (data.funnelStages) funnelStages.value = data.funnelStages
-    console.log(data);
     hasData.value = (data.rawData?.totalChecks || 0) > 0 || (data.rawData?.reportsCount || 0) > 0
 
     if (!hasData.value) {
@@ -3567,8 +3786,219 @@ const refreshReport = generateHealthReport
 const goBack = () => router.back()
 const goToGEODetection = () => router.push('/geo-detection')
 
-const exportReport = () => {
-  ElMessage.success('报告导出功能开发中')
+function waitAnimationFrames(n = 2) {
+  return new Promise((resolve) => {
+    let c = 0
+    const step = () => {
+      requestAnimationFrame(() => {
+        c += 1
+        if (c >= n) resolve()
+        else step()
+      })
+    }
+    step()
+  })
+}
+
+/** 等待 ECharts 一次渲染完成（词云布局/动画结束后再截屏） */
+function waitForChartFinished(chart, timeoutMs = 3500) {
+  return new Promise((resolve) => {
+    if (!chart || chart.isDisposed()) {
+      resolve()
+      return
+    }
+    let done = false
+    let tid = 0
+    const finish = () => {
+      if (done) return
+      done = true
+      try {
+        chart.off('finished', onFin)
+      } catch (_) {
+        /* ignore */
+      }
+      if (tid) clearTimeout(tid)
+      resolve()
+    }
+    const onFin = () => finish()
+    chart.on('finished', onFin)
+    tid = setTimeout(finish, timeoutMs)
+  })
+}
+
+/** 顶栏 + report-body 内各模块（排除底部操作区），顺序与页面一致 */
+function collectHealthReportPdfSectionEls(root, reportBody) {
+  const list = []
+  const nav = root.querySelector('.health-nav')
+  if (nav instanceof HTMLElement) list.push(nav)
+  if (reportBody instanceof HTMLElement) {
+    for (const el of reportBody.children) {
+      if (!(el instanceof HTMLElement)) continue
+      if (el.classList.contains('section-actions')) continue
+      list.push(el)
+    }
+  }
+  return list
+}
+
+/**
+ * 将单块截图排版进 PDF：尽量不劈开模块；仅当该块高于一页时才在块内纵向切片。
+ * @param {{ y: number }} state 当前页内下一块内容的 top（mm）
+ */
+function appendSectionCanvasToPdfFlow(pdf, state, canvas, marginMm, usableW, usableH, { sectionGapMm = 2 } = {}) {
+  const bottom = marginMm + usableH
+  const imgW = usableW
+  const imgH = (canvas.height * imgW) / canvas.width
+
+  if (imgH <= usableH + 0.02) {
+    if (state.y + imgH > bottom) {
+      pdf.addPage()
+      state.y = marginMm
+    }
+    const url = canvas.toDataURL('image/png')
+    pdf.addImage(url, 'PNG', marginMm, state.y, imgW, imgH)
+    state.y += imgH + sectionGapMm
+    return
+  }
+
+  if (state.y > marginMm) {
+    pdf.addPage()
+    state.y = marginMm
+  }
+
+  const pxPerMm = canvas.width / imgW
+  const pageSlicePx = Math.max(1, Math.floor(usableH * pxPerMm))
+  let yPx = 0
+  while (yPx < canvas.height) {
+    if (yPx > 0) {
+      pdf.addPage()
+      state.y = marginMm
+    }
+    const slicePx = Math.min(pageSlicePx, canvas.height - yPx)
+    const slice = document.createElement('canvas')
+    slice.width = canvas.width
+    slice.height = slicePx
+    const ctx = slice.getContext('2d')
+    if (!ctx) return
+    ctx.imageSmoothingEnabled = true
+    ctx.fillStyle = '#f5f6fa'
+    ctx.fillRect(0, 0, slice.width, slice.height)
+    ctx.drawImage(canvas, 0, yPx, canvas.width, slicePx, 0, 0, canvas.width, slicePx)
+    const url = slice.toDataURL('image/png')
+    const sliceH_mm = (slicePx * imgW) / canvas.width
+    pdf.addImage(url, 'PNG', marginMm, state.y, imgW, sliceH_mm)
+    state.y += sliceH_mm
+    yPx += slicePx
+  }
+  state.y += sectionGapMm
+  if (state.y > bottom) {
+    pdf.addPage()
+    state.y = marginMm
+  }
+}
+
+const exportReport = async () => {
+  if (!hasData.value) {
+    ElMessage.warning('暂无体检数据，无法导出')
+    return
+  }
+  if (loading.value) {
+    ElMessage.warning('报告加载中，请稍后再试')
+    return
+  }
+  const root = healthReportCaptureRoot.value
+  if (!root) {
+    ElMessage.error('导出区域未就绪')
+    return
+  }
+
+  const prevExpanded = mvGridExpanded.value
+  exportReportLoading.value = true
+  pdfExporting.value = true
+  mvGridExpanded.value = true
+
+  try {
+    await nextTick()
+    await waitAnimationFrames(2)
+    onWindowResizeForSentimentCloud()
+    await waitAnimationFrames(1)
+
+    const mentions = competitorMentions.value
+    if (competitorParetoChart && !competitorParetoChart.isDisposed() && mentions.length) {
+      try {
+        competitorParetoChart.setOption(buildCompetitorParetoOption(mentions, { forPdfExport: true }), true)
+        const el = competitorParetoChartDom.value
+        if (el?.clientWidth > 0 && el?.clientHeight > 0) competitorParetoChart.resize()
+        await waitForChartFinished(competitorParetoChart, 1200)
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    const wcList = sentimentWordCloud.value
+    if (sentimentWordCloudChart && !sentimentWordCloudChart.isDisposed() && wcList.length) {
+      try {
+        sentimentWordCloudChart.setOption(buildSentimentWordCloudOption(wcList, { forPdfExport: true }), true)
+        const elWc = sentimentCloudDom.value
+        if (elWc?.clientWidth > 0 && elWc?.clientHeight > 0) sentimentWordCloudChart.resize()
+        await waitForChartFinished(sentimentWordCloudChart, 4000)
+        await waitAnimationFrames(2)
+      } catch (_) {
+        /* ignore */
+      }
+    }
+
+    await waitAnimationFrames(1)
+    onWindowResizeForSentimentCloud()
+    await waitAnimationFrames(1)
+
+    const scale = Math.min(3, Math.max(2.25, window.devicePixelRatio || 2))
+    const h2cOpts = {
+      scale,
+      useCORS: true,
+      allowTaint: false,
+      logging: false,
+      backgroundColor: '#f5f6fa',
+      scrollX: 0,
+      scrollY: 0,
+    }
+
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const marginMm = 10
+    const usableW = pdf.internal.pageSize.getWidth() - 2 * marginMm
+    const usableH = pdf.internal.pageSize.getHeight() - 2 * marginMm
+    const flowState = { y: marginMm }
+
+    const sectionEls = collectHealthReportPdfSectionEls(root, reportBodyPdfRef.value || root.querySelector('.report-body'))
+    for (const el of sectionEls) {
+      if (!(el instanceof HTMLElement)) continue
+      if (el.offsetHeight < 2) continue
+      const canvas = await html2canvas(el, h2cOpts)
+      appendSectionCanvasToPdfFlow(pdf, flowState, canvas, marginMm, usableW, usableH, { sectionGapMm: 2 })
+    }
+
+    const namePart = enterpriseSettings.value?.companyName
+      ? String(enterpriseSettings.value.companyName).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)
+      : '品牌体检'
+    pdf.save(`品牌AI健康体检报告_${namePart}_${formatZhCnYmd()}.pdf`)
+    ElMessage.success({ message: '已导出 PDF', offset: 80 })
+  } catch (e) {
+    console.error('[geo-health] PDF export failed', e)
+    ElMessage.error('导出失败：' + (e?.message || String(e)))
+  } finally {
+    mvGridExpanded.value = prevExpanded
+    pdfExporting.value = false
+    exportReportLoading.value = false
+    await nextTick()
+    try {
+      syncMvRestBarChart()
+      syncCompetitorParetoChart()
+      syncSentimentWordCloudChart()
+    } catch (_) {
+      /* ignore */
+    }
+    onWindowResizeForSentimentCloud()
+  }
 }
 
 const shareReport = () => {
@@ -3598,6 +4028,7 @@ onActivated(async () => {
 
 onUnmounted(() => {
   sentimentWcScopeActive = false
+  cancelPendingSuggestionBlur()
   window.removeEventListener('resize', onWindowResizeForSentimentCloud)
   document.removeEventListener('visibilitychange', onDocumentVisibility)
   disposeSentimentWordCloudChart()
@@ -3613,6 +4044,12 @@ onUnmounted(() => {
   min-height: 100vh;
   background: #f5f6fa;
   font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
+}
+
+/* 导出 PDF 时隐藏操作按钮，减少截屏杂项 */
+.health-page--pdf-export .nav-gen-actions,
+.health-page--pdf-export .section-actions {
+  display: none !important;
 }
 
 /* ===== 体检模型选择弹窗 ===== */
@@ -5779,27 +6216,81 @@ onUnmounted(() => {
 }
 
 .diagnosis-suggest-li {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .diagnosis-suggest-li:last-child {
   margin-bottom: 0;
 }
 
-.diagnosis-suggest-text {
+.diagnosis-suggest-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.diagnosis-suggest-row > .diagnosis-suggest-editor,
+.diagnosis-suggest-row > .diagnosis-suggest-readonly {
+  flex: 1;
+  min-width: 0;
+}
+
+.diagnosis-suggest-row-actions {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.diagnosis-suggest-editor {
+  width: 100%;
+}
+
+.diagnosis-suggest-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.diagnosis-suggest-toolbar-hint {
+  font-size: 12px;
+  color: #909399;
+}
+
+.diagnosis-suggest-readonly {
   cursor: text;
-  border-bottom: 1px dashed transparent;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px dashed transparent;
   transition: border-color 0.15s ease, background 0.15s ease;
-  padding: 2px 0;
-  display: inline-block;
-  max-width: 100%;
+}
+
+.diagnosis-suggest-readonly:hover {
+  border-color: #dcdfe6;
+  background: rgba(64, 158, 255, 0.06);
+}
+
+.diagnosis-suggest-placeholder {
+  color: #c0c4cc;
+  font-size: 13px;
+  user-select: none;
+}
+
+.diagnosis-suggest-render {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.65;
   word-break: break-word;
 }
 
-.diagnosis-suggest-text:hover {
-  border-bottom-color: #c0c4cc;
-  background: rgba(64, 158, 255, 0.06);
-  border-radius: 4px;
+.diagnosis-suggest-render :deep(strong) {
+  font-weight: 700;
+  color: #303133;
+}
+
+.diagnosis-suggest-add-row {
+  margin-top: 4px;
+  padding-left: 18px;
 }
 
 .diagnosis-suggest-input {

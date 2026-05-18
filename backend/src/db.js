@@ -295,6 +295,9 @@ export async function initDB() {
     await client.query(
       `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS analysis_connection_id INTEGER`
     );
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS diagnostic_suggestion_overrides JSONB DEFAULT '{}'::jsonb`
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_health_question (
         id SERIAL PRIMARY KEY,

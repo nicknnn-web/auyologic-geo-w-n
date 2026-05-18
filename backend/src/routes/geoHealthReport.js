@@ -24,6 +24,9 @@
  *   diagnosticSuggestions[]（仅综合语境矩阵，无模型数据时为空数组）
  *   matrixContext：综合语境矩阵（16 档）摘要
  *   rawData{}
+ *
+ * PATCH /api/geo-health-report/diagnostic-suggestions
+ *   保存用户对「优化建议」列表的编辑（按 taskId 存 geo_health_task.diagnostic_suggestion_overrides）
  */
 
 import { Router } from 'express';
@@ -67,6 +70,50 @@ function buildIntentPathsFromDictRows(rows) {
     };
   });
   return list.sort((a, b) => a.sortOrder - b.sortOrder || String(a.key).localeCompare(String(b.key)));
+}
+
+const MAX_DIAG_SUGGEST_LINES = 24;
+const MAX_DIAG_SUGGEST_CHARS = 4000;
+
+/** 将 geo_health_task.diagnostic_suggestion_overrides 合并进报告 payload（按诊断项 id 整表替换 suggestions） */
+function applyDiagnosticSuggestionOverrides(payload, stored) {
+  if (!payload || !Array.isArray(payload.diagnosticSuggestions)) return;
+  if (!stored || typeof stored !== 'object') return;
+  payload.diagnosticSuggestions = payload.diagnosticSuggestions.map((it) => {
+    const custom = stored[it.id];
+    if (!Array.isArray(custom)) return it;
+    const lim = custom
+      .slice(0, MAX_DIAG_SUGGEST_LINES)
+      .map((t) => String(t ?? '').slice(0, MAX_DIAG_SUGGEST_CHARS));
+    return { ...it, suggestions: lim };
+  });
+}
+
+async function mergeDiagnosticSuggestionsFromDb(pool, taskId, userId, payload) {
+  if (!Number.isFinite(taskId) || taskId <= 0 || !payload) return;
+  try {
+    const { rows } = await pool.query(
+      `SELECT diagnostic_suggestion_overrides FROM geo_health_task WHERE id = $1 AND user_id = $2`,
+      [taskId, userId]
+    );
+    applyDiagnosticSuggestionOverrides(payload, rows[0]?.diagnostic_suggestion_overrides);
+  } catch (e) {
+    console.warn('[geo-health-report] merge diagnostic_suggestion_overrides:', e?.message || e);
+  }
+}
+
+function sanitizeSuggestionsByItem(body) {
+  if (!body || typeof body !== 'object') return null;
+  const out = {};
+  for (const [k, val] of Object.entries(body)) {
+    const id = String(k || '').slice(0, 160);
+    if (!id) continue;
+    if (!Array.isArray(val)) continue;
+    out[id] = val
+      .slice(0, MAX_DIAG_SUGGEST_LINES)
+      .map((t) => String(t ?? '').slice(0, MAX_DIAG_SUGGEST_CHARS));
+  }
+  return out;
 }
 
 function keywordTypeLabelRecord(rows) {
@@ -331,6 +378,12 @@ router.get('/geo-health-report', async (req, res) => {
     const cachedPayload = await getGeoTaskReportCache(pool, taskId, userId, cacheFps);
     if (cachedPayload) {
       applyFreshVendorLogos(cachedPayload, vendorLogoMap);
+      await mergeDiagnosticSuggestionsFromDb(
+        pool,
+        Number(cachedPayload.rawData?.taskId) || taskId,
+        userId,
+        cachedPayload
+      );
       return res.json(cachedPayload);
     }
 
@@ -697,10 +750,40 @@ router.get('/geo-health-report', async (req, res) => {
       payload,
     });
 
+    await mergeDiagnosticSuggestionsFromDb(pool, taskId, userId, payload);
+
     res.json(payload);
   } catch (err) {
     console.error('[geo-health-report]', err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.patch('/geo-health-report/diagnostic-suggestions', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.body?.taskId ?? ''), 10);
+    const suggestionsByItem = sanitizeSuggestionsByItem(req.body?.suggestionsByItem);
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId' });
+    }
+    if (!suggestionsByItem || Object.keys(suggestionsByItem).length === 0) {
+      return res.status(400).json({ success: false, error: 'suggestionsByItem 不能为空' });
+    }
+    const r = await pool.query(
+      `UPDATE geo_health_task
+       SET diagnostic_suggestion_overrides = $1::jsonb
+       WHERE id = $2 AND user_id = $3
+       RETURNING id`,
+      [JSON.stringify(suggestionsByItem), taskId, userId]
+    );
+    if (r.rowCount === 0) {
+      return res.status(404).json({ success: false, error: '任务不存在或无权访问' });
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[geo-health-report/diagnostic-suggestions]', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
