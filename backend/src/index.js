@@ -561,6 +561,85 @@ function normalizeImagesBodyImagePath(table, data) {
   if (v) data.image_path = normalizeImagePathForApi(v)
 }
 
+/**
+ * 知识库 knowledge.keywords / knowledge.key_points 为 JSONB。
+ * 模型可能返回字符串、嵌套对象或非合法 JSON 片段；先规范为 string[]，再 JSON.stringify
+ * 得到合法 JSON 文本，配合 SQL 中 $n::jsonb 写入（避免驱动把 JS 数组绑成 PG 数组导致 json 语法错误）。
+ */
+function normalizeKnowledgeJsonbColumns(data) {
+  const toStringArray = (raw) => {
+    if (raw == null) return []
+    if (Array.isArray(raw)) {
+      return raw
+        .map((x) => {
+          if (x == null) return ''
+          if (typeof x === 'string' || typeof x === 'number' || typeof x === 'boolean') return String(x)
+          if (typeof x === 'object') {
+            if (typeof x.keyword === 'string') return x.keyword
+            if (typeof x.text === 'string') return x.text
+            if (typeof x.title === 'string') return x.title
+            try {
+              return JSON.stringify(x)
+            } catch {
+              return ''
+            }
+          }
+          return String(x)
+        })
+        .map((s) => String(s).trim().replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' '))
+        .filter(Boolean)
+    }
+    if (typeof raw === 'object') {
+      if (Array.isArray(raw.keywords)) return toStringArray(raw.keywords)
+      if (Array.isArray(raw.keyPoints)) return toStringArray(raw.keyPoints)
+      if (Array.isArray(raw.key_points)) return toStringArray(raw.key_points)
+      return []
+    }
+    if (typeof raw === 'string') {
+      const s = raw.trim()
+      if (!s) return []
+      try {
+        const p = JSON.parse(s)
+        if (Array.isArray(p)) return toStringArray(p)
+        if (p && typeof p === 'object') return toStringArray(p)
+      } catch {
+        /* 非 JSON 则按分隔符拆 */
+      }
+      return s
+        .split(/[,，、;；\n]+/)
+        .map((t) => t.trim().replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' '))
+        .filter(Boolean)
+    }
+    return [String(raw)].filter(Boolean)
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'keywords')) {
+    const arr = toStringArray(data.keywords)
+    data.keywords = JSON.stringify(arr)
+  }
+  if (Object.prototype.hasOwnProperty.call(data, 'key_points')) {
+    const arr = toStringArray(data.key_points)
+    data.key_points = JSON.stringify(arr)
+  }
+}
+
+/**
+ * 占位符：knowledge 的 JSONB 列显式 ::jsonb，参数须为 JSON 文本（见 normalizeKnowledgeJsonbColumns）。
+ * 否则部分环境下驱动会把 JS 数组绑成 PG 数组，赋值给 jsonb 时触发 invalid input syntax for type json。
+ */
+function crudParamPlaceholder(table, column, index) {
+  if (table === 'knowledge' && (column === 'keywords' || column === 'key_points')) {
+    return `$${index}::jsonb`
+  }
+  return `$${index}`
+}
+
+function prepareGenericCrudWriteBody(table, data) {
+  normalizeImagesBodyImagePath(table, data)
+  if (table === 'knowledge') {
+    normalizeKnowledgeJsonbColumns(data)
+  }
+}
+
 /** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–05） */
 app.get('/api/sys-dict', async (req, res) => {
   try {
@@ -953,11 +1032,11 @@ tables.forEach(table => {
           const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
-        normalizeImagesBodyImagePath(table, data);
+        prepareGenericCrudWriteBody(table, data);
         const cols = Object.keys(data);
-        const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
+        const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
         const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
-        res.json(result.rows[0]);
+        res.json(toCamelCase(result.rows[0]));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.put(`${hyphenPath}/:id`, async (req, res) => {
@@ -968,11 +1047,12 @@ tables.forEach(table => {
           const snakeKey = key.replace(/([A-Z])/g, '_$1').toLowerCase();
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
-        normalizeImagesBodyImagePath(table, data);
-        const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
-        const result = await pool.query(`UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} RETURNING *`, [...Object.values(data), req.params.id]);
+        prepareGenericCrudWriteBody(table, data);
+        const keys = Object.keys(data);
+        const setClause = keys.map((k, i) => `${k} = ${crudParamPlaceholder(table, k, i + 1)}`).join(', ');
+        const result = await pool.query(`UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`, [...Object.values(data), req.params.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
-        res.json(result.rows[0]);
+        res.json(toCamelCase(result.rows[0]));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.delete(`${hyphenPath}/:id`, async (req, res) => {
@@ -998,11 +1078,11 @@ tables.forEach(table => {
           delete data[key];
         }
       }
-      normalizeImagesBodyImagePath(table, data);
+      prepareGenericCrudWriteBody(table, data);
       const cols = Object.keys(data);
-      const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
+      const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
       const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
-      res.json(result.rows[0]);
+      res.json(toCamelCase(result.rows[0]));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1017,14 +1097,15 @@ tables.forEach(table => {
           delete data[key];
         }
       }
-      normalizeImagesBodyImagePath(table, data);
-      const cols = Object.keys(data).map((k, i) => `${k} = $${i + 1}`).join(', ');
+      prepareGenericCrudWriteBody(table, data);
+      const keys = Object.keys(data);
+      const setClause = keys.map((k, i) => `${k} = ${crudParamPlaceholder(table, k, i + 1)}`).join(', ');
       const result = await pool.query(
-        `UPDATE ${table} SET ${cols} WHERE id = $${Object.keys(data).length + 1} RETURNING *`,
+        `UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
         [...Object.values(data), req.params.id]
       );
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
-      res.json(result.rows[0]);
+      res.json(toCamelCase(result.rows[0]));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 

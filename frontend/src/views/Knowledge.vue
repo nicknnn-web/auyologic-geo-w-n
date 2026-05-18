@@ -158,9 +158,18 @@
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="上传时间" width="180" />
-        <el-table-column label="操作" width="300" align="center">
+        <el-table-column label="操作" width="360" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="handlePreview(row)">查看</el-button>
+            <el-button link type="primary" size="small" @click="handlePreview(row)">预览</el-button>
+            <el-button
+              v-if="row.analyzedAt"
+              link
+              type="primary"
+              size="small"
+              @click="openAnalysisDialog(row)"
+            >
+              查看
+            </el-button>
             <el-button link type="success" size="small" @click="handleDownload(row)">下载</el-button>
             <el-button
               v-if="['pdf','doc','docx'].includes(row.type)"
@@ -207,11 +216,51 @@
         {{ previewContent }}
       </div>
     </el-dialog>
+
+    <!-- 分析结果弹窗（正文可滚动，高度随视口限制） -->
+    <el-dialog
+      v-model="analysisDialogVisible"
+      class="knowledge-analysis-dialog"
+      :title="analysisViewRow ? `分析结果 · ${analysisViewRow.name}` : '分析结果'"
+      width="min(92vw, 680px)"
+      align-center
+      destroy-on-close
+      @closed="onAnalysisDialogClosed"
+    >
+      <div v-if="analysisViewRow" class="analysis-dialog-inner text-sm text-gray-800 space-y-4">
+        <div v-if="displayAnalysisKeywords.length">
+          <div class="font-medium text-gray-600 mb-2">关键词</div>
+          <div class="flex flex-wrap gap-1.5">
+            <el-tag
+              v-for="(kw, i) in displayAnalysisKeywords"
+              :key="`${kw}-${i}`"
+              type="info"
+              size="small"
+            >
+              {{ kw }}
+            </el-tag>
+          </div>
+        </div>
+        <div v-if="analysisViewRow.summary">
+          <div class="font-medium text-gray-600 mb-2">摘要</div>
+          <p class="leading-relaxed whitespace-pre-wrap break-words">{{ analysisViewRow.summary }}</p>
+        </div>
+        <div v-if="displayAnalysisKeyPoints.length">
+          <div class="font-medium text-gray-600 mb-2">核心要点</div>
+          <ul class="list-disc list-inside space-y-1.5 leading-relaxed">
+            <li v-for="(p, i) in displayAnalysisKeyPoints" :key="i" class="break-words">{{ p }}</li>
+          </ul>
+        </div>
+        <div v-if="analysisViewRow.analyzedAt" class="text-xs text-gray-400 pt-2 border-t border-gray-100">
+          分析时间：{{ formatAnalyzedAtLabel(analysisViewRow.analyzedAt) }}
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, Document, InfoFilled } from '@element-plus/icons-vue'
 import { marked } from 'marked'
@@ -227,6 +276,58 @@ const tableData = ref([])
 const previewVisible = ref(false)
 const previewContent = ref('')
 const selectedDocs = ref([])
+
+/** 已分析文档：弹窗展示关键词 / 摘要 / 要点 */
+const analysisDialogVisible = ref(false)
+const analysisViewRow = ref(null)
+
+const parseStringArrayField = (raw) => {
+  if (raw == null) return []
+  if (Array.isArray(raw)) return raw.map((x) => String(x)).filter(Boolean)
+  if (typeof raw === 'string') {
+    const s = raw.trim()
+    if (!s) return []
+    try {
+      const p = JSON.parse(s)
+      if (Array.isArray(p)) return p.map((x) => String(x)).filter(Boolean)
+    } catch {
+      /* 非 JSON */
+    }
+    return s
+      .split(/[,，、;；\n]+/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+  }
+  return [String(raw)].filter(Boolean)
+}
+
+const displayAnalysisKeywords = computed(() =>
+  analysisViewRow.value ? parseStringArrayField(analysisViewRow.value.keywords) : []
+)
+const displayAnalysisKeyPoints = computed(() =>
+  analysisViewRow.value ? parseStringArrayField(analysisViewRow.value.keyPoints) : []
+)
+
+const formatAnalyzedAtLabel = (v) => {
+  if (v == null || v === '') return ''
+  try {
+    const d = typeof v === 'string' ? new Date(v) : v
+    if (Number.isNaN(d.getTime())) return String(v)
+    return formatZhCnDateTime(d)
+  } catch {
+    return String(v)
+  }
+}
+
+const openAnalysisDialog = (row) => {
+  if (!row?.analyzedAt) return
+  analysisViewRow.value = row
+  analysisDialogVisible.value = true
+}
+
+const onAnalysisDialogClosed = () => {
+  analysisViewRow.value = null
+}
 
 // localStorage 持久化
 const STORAGE_KEY = 'auyologic-knowledge'
@@ -626,33 +727,35 @@ const handleAIAnalyze = async (row) => {
   
   try {
     const result = await analyzeWithDeepSeek(content)
-    
-    // 更新记录
+    const analyzedAt = new Date().toISOString()
+
+    // 必须先写入数据库，再改本地；否则刷新页面会从接口读到「未分析」
+    try {
+      await knowledgeAPI.update(row.id, {
+        keywords: result.keywords || [],
+        summary: result.summary || '',
+        keyPoints: result.keyPoints || [],
+        analyzedAt
+      })
+    } catch (e) {
+      console.error('同步分析结果到后端失败:', e)
+      ElMessage.error(
+        `分析已完成，但未能保存到服务器，刷新后会丢失本次结果。请检查网络与后端接口。${e?.message || ''}`
+      )
+      return
+    }
+
     const index = tableData.value.findIndex(item => item.id === row.id)
     if (index !== -1) {
-      const updatedDoc = {
+      tableData.value[index] = {
         ...tableData.value[index],
         keywords: result.keywords || [],
         summary: result.summary || '',
         keyPoints: result.keyPoints || [],
-        analyzedAt: new Date().toISOString()
+        analyzedAt
       }
-      tableData.value[index] = updatedDoc
-      
-      // 同步到后端 API
-      try {
-        await knowledgeAPI.update(row.id, {
-          keywords: result.keywords || [],
-          summary: result.summary || '',
-          keyPoints: result.keyPoints || [],
-          analyzedAt: updatedDoc.analyzedAt
-        })
-      } catch (e) {
-        console.warn('同步分析结果到后端失败:', e)
-      }
-      
       saveToStorage()
-      ElMessage.success('AI 分析完成')
+      ElMessage.success('AI 分析完成并已保存')
     }
   } catch (error) {
     console.error('AI 分析失败:', error)
@@ -697,33 +800,35 @@ const handleBatchAIAnalyze = async () => {
         const content = doc.content || ''
         if (content && content.length >= 10) {
           const result = await analyzeWithDeepSeek(content)
-          
+          const analyzedAt = new Date().toISOString()
+          try {
+            await knowledgeAPI.update(doc.id, {
+              keywords: result.keywords || [],
+              summary: result.summary || '',
+              keyPoints: result.keyPoints || [],
+              analyzedAt
+            })
+          } catch (e) {
+            console.error(`同步文档 ${doc.name} 分析结果到后端失败:`, e)
+            ElMessage.error(
+              `「${doc.name}」分析成功但保存失败，刷新后仍为未分析。${e?.message || ''}`
+            )
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            continue
+          }
           const index = tableData.value.findIndex(item => item.id === doc.id)
           if (index !== -1) {
-            const analyzedAt = new Date().toISOString()
             tableData.value[index] = {
               ...tableData.value[index],
               keywords: result.keywords || [],
               summary: result.summary || '',
               keyPoints: result.keyPoints || [],
-              analyzedAt: analyzedAt
+              analyzedAt
             }
             successCount++
-            
-            // 同步到后端 API
-            try {
-              await knowledgeAPI.update(doc.id, {
-                keywords: result.keywords || [],
-                summary: result.summary || '',
-                keyPoints: result.keyPoints || [],
-                analyzedAt: analyzedAt
-              })
-            } catch (e) {
-              console.warn(`同步文档 ${doc.name} 分析结果到后端失败:`, e)
-            }
           }
         }
-        
+
         // 间隔 2 秒避免 API 限流
         await new Promise(resolve => setTimeout(resolve, 2000))
       } catch (error) {
@@ -735,7 +840,7 @@ const handleBatchAIAnalyze = async () => {
     
     saveToStorage()
     batchAnalyzing.value = false
-    ElMessage.success(`批量分析完成，成功分析 ${successCount} 个文档`)
+    ElMessage.success(`批量分析完成，成功保存 ${successCount} 个文档`)
     selectedDocs.value = [] // 清空选择
   } else {
     // 分析所有未分析的文档
@@ -749,33 +854,35 @@ const handleBatchAIAnalyze = async () => {
         const content = doc.content || ''
         if (content && content.length >= 10) {
           const result = await analyzeWithDeepSeek(content)
-          
+          const analyzedAt = new Date().toISOString()
+          try {
+            await knowledgeAPI.update(doc.id, {
+              keywords: result.keywords || [],
+              summary: result.summary || '',
+              keyPoints: result.keyPoints || [],
+              analyzedAt
+            })
+          } catch (e) {
+            console.error(`同步文档 ${doc.name} 分析结果到后端失败:`, e)
+            ElMessage.error(
+              `「${doc.name}」分析成功但保存失败，刷新后仍为未分析。${e?.message || ''}`
+            )
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            continue
+          }
           const index = tableData.value.findIndex(item => item.id === doc.id)
           if (index !== -1) {
-            const analyzedAt = new Date().toISOString()
             tableData.value[index] = {
               ...tableData.value[index],
               keywords: result.keywords || [],
               summary: result.summary || '',
               keyPoints: result.keyPoints || [],
-              analyzedAt: analyzedAt
+              analyzedAt
             }
             successCount++
-            
-            // 同步到后端 API
-            try {
-              await knowledgeAPI.update(doc.id, {
-                keywords: result.keywords || [],
-                summary: result.summary || '',
-                keyPoints: result.keyPoints || [],
-                analyzedAt: analyzedAt
-              })
-            } catch (e) {
-              console.warn(`同步文档 ${doc.name} 分析结果到后端失败:`, e)
-            }
           }
         }
-        
+
         // 间隔 2 秒避免 API 限流
         await new Promise(resolve => setTimeout(resolve, 2000))
       } catch (error) {
@@ -787,7 +894,7 @@ const handleBatchAIAnalyze = async () => {
     
     saveToStorage()
     batchAnalyzing.value = false
-    ElMessage.success(`批量分析完成，成功分析 ${successCount} 个文档`)
+    ElMessage.success(`批量分析完成，成功保存 ${successCount} 个文档`)
   }
 }
 
@@ -944,4 +1051,11 @@ const handleBatchDelete = async () => {
 .prose pre code { background: transparent; padding: 0; }
 .prose strong { font-weight: 600; }
 .prose a { color: #3b82f6; text-decoration: underline; }
+
+/* 分析结果弹窗：限制高度、正文区域滚动 */
+:deep(.knowledge-analysis-dialog .el-dialog__body) {
+  max-height: min(72vh, 560px);
+  overflow-y: auto;
+  padding-top: 4px;
+}
 </style>
