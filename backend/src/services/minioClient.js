@@ -400,6 +400,47 @@ export function objectNameFromPublicUrl(fullUrl) {
   }
 }
 
+/**
+ * 从 MinIO 公网 URL（或与本项目规则一致的地址）下载对象到 Buffer。
+ */
+export async function getObjectBufferByPublicUrl(fullUrl) {
+  const key = objectNameFromPublicUrl(fullUrl);
+  if (!key) {
+    throw new Error('无法从文件地址解析 MinIO 对象键，请检查 file_path / MINIO_PUBLIC_URL');
+  }
+  const c = getMinioConfig();
+  if (!c.bucket) throw new Error('未配置 MINIO_BUCKET');
+  const client = getMinioClient();
+  const stream = await client.getObject(c.bucket, key);
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * 下载知识库文件：优先走 MinIO SDK；解析失败时再尝试 HTTP GET（公网直链场景）。
+ */
+export async function downloadKnowledgeFileBuffer(filePath) {
+  const raw = String(filePath ?? '').trim();
+  if (!raw) throw new Error('缺少文件地址');
+  const normalized = normalizeImagePathForApi(raw);
+  try {
+    return await getObjectBufferByPublicUrl(normalized);
+  } catch (e1) {
+    try {
+      const res = await fetch(normalized, { redirect: 'follow' });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}；MinIO: ${e1?.message || e1}`);
+      }
+      return Buffer.from(await res.arrayBuffer());
+    } catch (e2) {
+      throw new Error(e2?.message || String(e2));
+    }
+  }
+}
+
 /** 与历史代码兼容：端口按当前 env 计算 */
 export function resolveMinioPort() {
   const c = getMinioConfig();

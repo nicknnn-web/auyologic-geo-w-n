@@ -29,7 +29,7 @@
         <span class="text-blue-500 font-medium">点击上传</span> 或拖拽文件到此处
       </div>
       <div class="text-xs text-gray-400">
-        支持 PDF、TXT、Word、HTML、Markdown 文件，单个文件最大 10MB
+        支持 PDF、TXT、Word、HTML、Markdown 文件；PDF/Word 上传后会自动抽取正文供 AI 分析。单个文件最大 10MB
       </div>
     </div>
 
@@ -158,10 +158,20 @@
           </template>
         </el-table-column>
         <el-table-column prop="createdAt" label="上传时间" width="180" />
-        <el-table-column label="操作" width="220" align="center">
+        <el-table-column label="操作" width="300" align="center">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="handlePreview(row)">查看</el-button>
             <el-button link type="success" size="small" @click="handleDownload(row)">下载</el-button>
+            <el-button
+              v-if="['pdf','doc','docx'].includes(row.type)"
+              link
+              type="primary"
+              size="small"
+              :loading="extractTextIds.has(row.id)"
+              @click="handleExtractText(row)"
+            >
+              抽取正文
+            </el-button>
             <!-- AI 分析按钮 -->
             <el-button 
               link 
@@ -257,6 +267,7 @@ const loadKnowledgeDocs = async () => {
         type: doc.type || doc.fileType || 'txt',
         size: doc.size || 0,
         content: doc.content || '',
+        file_path: doc.file_path || doc.filePath || '',
         words: (doc.content || '').toString().length,
         keywords: doc.keywords || [],
         summary: doc.summary || '',
@@ -418,6 +429,7 @@ const uploadFileToMinIO = (file) => {
             size: file.size,
             url: uploadResult.url,
             objectName: uploadResult.objectName,
+            file_path: uploadResult.url,
             words: 0,
             status: '已上传',
             createdAt: nowZhCnDateTime()
@@ -437,6 +449,24 @@ const uploadFileToMinIO = (file) => {
             console.log('知识库保存成功:', savedDoc)
             fileData.id = savedDoc.id
             ElMessage.success('文档已保存到服务器')
+
+            if (['pdf', 'doc', 'docx'].includes(ext) && savedDoc?.id != null) {
+              try {
+                const ex = await knowledgeAPI.extractText(savedDoc.id)
+                const body = ex?.content != null ? String(ex.content) : ''
+                if (body.length >= 10) {
+                  fileData.content = body
+                  fileData.words = ex.words ?? body.length
+                  fileData.status = '已处理'
+                  ElMessage.success('已抽取正文，可进行 AI 分析')
+                }
+              } catch (exErr) {
+                console.warn('抽取正文失败:', exErr)
+                ElMessage.warning(
+                  `正文抽取未成功：${exErr?.message || String(exErr)}。可稍后重试或使用可复制文字的 PDF。`
+                )
+              }
+            }
           } catch (e) {
             console.error('保存到后端失败:', e.message || e)
             ElMessage.warning('保存到服务器失败，仅保留在本地')
@@ -499,6 +529,7 @@ const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/ge
 
 // AI 分析状态
 const analyzingIds = ref(new Set()) // 正在分析的文档ID集合
+const extractTextIds = ref(new Set()) // 正在抽取 PDF/Word 正文的文档 ID
 const batchAnalyzing = ref(false) // 批量分析中
 
 /**
@@ -538,6 +569,37 @@ const analyzeWithDeepSeek = async (content) => {
   } catch (e) {
     console.error('解析分析结果失败:', e, resultText)
     throw new Error('解析分析结果失败')
+  }
+}
+
+/**
+ * PDF / Word：从服务器拉取原文件并抽取正文（失败时可重试）
+ */
+const handleExtractText = async (row) => {
+  if (!['pdf', 'doc', 'docx'].includes(String(row.type || '').toLowerCase())) return
+  extractTextIds.value.add(row.id)
+  try {
+    const ex = await knowledgeAPI.extractText(row.id)
+    const body = ex?.content != null ? String(ex.content) : ''
+    if (body.length < 10) {
+      ElMessage.warning('抽取结果过短，可能是扫描版 PDF 或加密文档')
+      return
+    }
+    const idx = tableData.value.findIndex((item) => item.id === row.id)
+    if (idx !== -1) {
+      tableData.value[idx] = {
+        ...tableData.value[idx],
+        content: body,
+        words: ex.words ?? body.length,
+      }
+    }
+    saveToStorage()
+    ElMessage.success('正文抽取完成，可进行 AI 分析')
+  } catch (error) {
+    console.error('抽取正文失败:', error)
+    ElMessage.error(`抽取失败：${error.message || String(error)}`)
+  } finally {
+    extractTextIds.value.delete(row.id)
   }
 }
 

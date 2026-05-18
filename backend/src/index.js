@@ -6,7 +6,8 @@ import archiver from 'archiver';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs';
-import { normalizeImagePathForApi } from './services/minioClient.js';
+import { normalizeImagePathForApi, downloadKnowledgeFileBuffer } from './services/minioClient.js';
+import { extractKnowledgeTextFromBuffer } from './services/knowledgeDocumentExtract.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -369,7 +370,13 @@ const ensureTable = async (table) => {
       await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS content TEXT`).catch(() => {});
       await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS type VARCHAR(50)`).catch(() => {});
       await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS size INTEGER`).catch(() => {});
-    } catch (e) { console.log('Knowledge migration:', e.message); }
+      await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS file_path TEXT`).catch(() => {});
+      await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS keywords JSONB`).catch(() => {});
+      await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS key_points JSONB`).catch(() => {});
+      await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMP`).catch(() => {});
+    } catch (e) {
+      console.log('Knowledge migration:', e.message);
+    }
   }
   if (table === 'images') {
     try {
@@ -890,6 +897,46 @@ app.post('/api/keywords/delete-all', async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
+
+/** 知识库：从 MinIO 上的 PDF/Word 抽取正文写入 content（供 AI 分析） */
+app.post('/api/knowledge/:id/extract-text', async (req, res) => {
+  try {
+    await ensureTable('knowledge');
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ success: false, error: '无效的文档 id' });
+    }
+    const r = await pool.query(`SELECT * FROM knowledge WHERE id = $1`, [id]);
+    if (!r.rows.length) {
+      return res.status(404).json({ success: false, error: '记录不存在' });
+    }
+    const row = r.rows[0];
+    const filePath = row.file_path != null ? String(row.file_path).trim() : '';
+    const type = String(row.file_type || row.type || '')
+      .toLowerCase()
+      .replace(/^\./, '');
+    if (!['pdf', 'doc', 'docx'].includes(type)) {
+      return res.status(400).json({ success: false, error: '仅支持对 PDF、Word（.doc/.docx）抽取正文' });
+    }
+    if (!filePath) {
+      return res.status(400).json({ success: false, error: '该记录缺少 file_path，无法下载原文件' });
+    }
+    const buf = await downloadKnowledgeFileBuffer(filePath);
+    const text = await extractKnowledgeTextFromBuffer(buf, type);
+    if (!text || text.length < 10) {
+      return res.status(422).json({
+        success: false,
+        error: '未能从文件中解析出有效正文（内容为空或过短）。扫描件 PDF 可能无法识别文字。',
+      });
+    }
+    const u = await pool.query(`UPDATE knowledge SET content = $1 WHERE id = $2 RETURNING *`, [text, id]);
+    const out = toCamelCase(u.rows[0]);
+    res.json({ success: true, ...out, words: text.length });
+  } catch (err) {
+    console.error('[knowledge extract-text]', err);
+    res.status(500).json({ success: false, error: err.message || String(err) });
+  }
+});
 
 tables.forEach(table => {
   const routePath = `/api/${table}`;
@@ -1726,6 +1773,7 @@ import aiProxyRouter from './routes/aiProxy.js';
 import fileUploadRouter from './routes/fileUpload.js';
 import geoBrandTaskRouter from './routes/geoBrandTask.js';
 import geoHealthReportRouter from './routes/geoHealthReport.js';
+import geoHealthReportTemplatePdfRouter from './routes/geoHealthReportTemplatePdf.js';
 import sentimentLexiconRouter from './routes/sentimentLexicon.js';
 import aiProviderConnectionsRouter from './routes/aiProviderConnections.js';
 
@@ -1736,6 +1784,7 @@ app.use('/api', websiteAnalyzerRouter);
 app.use('/api/ai', aiProxyRouter);
 app.use('/api', geoBrandTaskRouter);
 app.use('/api', geoHealthReportRouter);
+app.use('/api', geoHealthReportTemplatePdfRouter);
 app.use('/api', sentimentLexiconRouter);
 app.use('/api', aiProviderConnectionsRouter);
 

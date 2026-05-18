@@ -43,7 +43,13 @@ const createAPI = (path) => ({
 // ========== 各模块 API ==========
 export const keywordsAPI = createAPI('keywords')
 export const questionsAPI = createAPI('questions')
-export const knowledgeAPI = createAPI('knowledge')
+const knowledgeBase = createAPI('knowledge')
+/** 企业知识库：含 PDF/Word 正文抽取 */
+export const knowledgeAPI = {
+  ...knowledgeBase,
+  extractText: (id) =>
+    api.post(`/api/knowledge/${encodeURIComponent(String(id))}/extract-text`, {}, { timeout: 120000 }),
+}
 export const imagesAPI = createAPI('images')
 export const commandsAPI = createAPI('instruction-templates')
 export const draftsAPI = createAPI('drafts')

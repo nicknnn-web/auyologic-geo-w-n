@@ -18,8 +18,8 @@
       <div class="mb-6">
         <div class="text-sm text-gray-500 mb-3">快速开始（点击自动填充配置）</div>
         <div class="flex flex-wrap gap-3">
-          <div 
-            v-for="scene in quickScenes" 
+          <div
+            v-for="scene in quickScenes"
             :key="scene.id"
             class="scene-card"
             :class="{ 'scene-card-active': activeScene === scene.id }"
@@ -34,11 +34,21 @@
       <!-- 基础配置：默认展开 -->
       <div class="bg-gray-50 rounded-lg p-4 mb-4">
         <div class="text-sm font-medium text-gray-600 mb-3">基础配置</div>
-        
+
         <el-form-item label="选择关键词">
-          <el-select v-model="form.keyword" placeholder="请选择品牌/产品关键词" style="width: 300px;" @change="onKeywordChange">
+          <el-select
+            v-model="form.keywords"
+            multiple
+            filterable
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="可选多个品牌/产品关键词"
+            style="width: 220px;"
+            @change="onKeywordChange"
+          >
             <el-option v-for="kw in keywords" :key="kw.id" :label="kw.keyword" :value="kw.keyword" />
           </el-select>
+          <span class="ml-2 text-sm text-gray-500">已选 {{ form.keywords?.length || 0 }} 个</span>
         </el-form-item>
 
         <el-form-item label="内容类型">
@@ -71,18 +81,18 @@
       <el-collapse class="mb-4" :model-value="['advanced']">
         <el-collapse-item title="高级配置（可选）" name="advanced">
           <el-form-item label="关联文档">
-            <el-select 
-              v-model="form.selectedDocs" 
-              multiple 
-              placeholder="选择知识库文档(可多选)" 
+            <el-select
+              v-model="form.selectedDocs"
+              multiple
+              placeholder="选择知识库文档(可多选)"
               style="width: 400px;"
               collapse-tags
               collapse-tags-tooltip
             >
               <template #label="{ label }">
                 <div class="flex items-center gap-1">
-                  <el-tag 
-                    v-for="docId in form.selectedDocs" 
+                  <el-tag
+                    v-for="docId in form.selectedDocs"
                     :key="docId"
                     :type="getDocAnalyzedType(docId)"
                     size="small"
@@ -92,26 +102,26 @@
                   </el-tag>
                 </div>
               </template>
-              <el-option 
-                v-for="doc in knowledgeDocs" 
-                :key="doc.docId" 
-                :label="doc.docName" 
+              <el-option
+                v-for="doc in knowledgeDocs"
+                :key="doc.docId"
+                :label="doc.docName"
                 :value="doc.docId"
               >
                 <div class="flex items-center justify-between w-full">
                   <span>{{ doc.docName }}</span>
-                  <el-tag 
-                    v-if="doc.analyzedAt" 
-                    type="success" 
-                    size="small" 
+                  <el-tag
+                    v-if="doc.analyzedAt"
+                    type="success"
+                    size="small"
                     effect="plain"
                   >
                     已分析
                   </el-tag>
-                  <el-tag 
-                    v-else 
-                    type="warning" 
-                    size="small" 
+                  <el-tag
+                    v-else
+                    type="warning"
+                    size="small"
                     effect="plain"
                   >
                     待分析
@@ -123,18 +133,18 @@
           </el-form-item>
 
           <el-form-item label="选择配图">
-            <el-select 
-              v-model="form.selectedImages" 
-              multiple 
-              placeholder="选择配图(可多选)" 
+            <el-select
+              v-model="form.selectedImages"
+              multiple
+              placeholder="选择配图(可多选)"
               style="width: 400px;"
               collapse-tags
               collapse-tags-tooltip
             >
-              <el-option 
-                v-for="img in images" 
-                :key="img.id" 
-                :label="img.name || '图片 ' + img.id" 
+              <el-option
+                v-for="img in images"
+                :key="img.id"
+                :label="img.name || '图片 ' + img.id"
                 :value="img.url"
               >
                 <div class="flex items-center">
@@ -164,7 +174,7 @@
         <el-button type="primary" @click="handleGenerate" :loading="isGenerating" size="large">
           {{ isGenerating ? '生成中...' : '开始生成' }}
         </el-button>
-        <el-button @click="togglePromptPreview" :disabled="!form.keyword || !form.command" size="default">
+        <el-button @click="togglePromptPreview" :disabled="!selectedKeywordPhrase || !form.command" size="default">
           {{ showPromptPreview ? '隐藏预览' : '预览 prompt' }}
         </el-button>
       </el-form-item>
@@ -192,7 +202,7 @@
           </span>
           <span class="text-sm text-gray-500">可在此处直接编辑</span>
         </div>
-        
+
         <!-- 分段优化按钮 -->
         <div class="flex gap-2">
           <el-button size="small" type="info" plain @click="regenerateSection('开头')">重写开头</el-button>
@@ -202,7 +212,7 @@
           <el-button size="small" type="info" plain @click="adjustLength('扩展')">扩展版</el-button>
         </div>
       </div>
-      
+
       <div class="flex gap-2 mb-3">
         <el-button size="small" @click="copyContent" type="primary" plain>
           <el-icon class="mr-1"><CopyDocument /></el-icon>复制
@@ -218,28 +228,28 @@
         <el-tag type="warning" effect="plain" size="small">GEO评分: {{ qualityScores.geoScore }}</el-tag>
         <el-tag type="info" effect="plain" size="small">E-E-A-T: {{ qualityScores.eeat }}</el-tag>
       </div>
-      
+
       <div v-if="generatedTitle" class="text-lg font-bold text-purple-600 mb-3">{{ generatedTitle }}</div>
-      
+
       <!-- Step 3: 图库集成 - 展示配图 -->
       <div v-if="form.selectedImages?.length" class="mb-4">
         <div class="text-sm text-gray-500 mb-2">配图预览：</div>
         <div class="flex flex-wrap gap-2">
-          <img 
-            v-for="(imgUrl, idx) in form.selectedImages" 
+          <img
+            v-for="(imgUrl, idx) in form.selectedImages"
             :key="idx"
-            :src="imgUrl" 
+            :src="imgUrl"
             class="w-32 h-32 object-cover rounded-lg border"
           />
         </div>
       </div>
-      
+
       <!-- 选中文字重写提示 -->
       <div v-if="selectedText" class="mb-2 p-2 bg-yellow-50 border border-yellow-200 rounded flex items-center justify-between">
         <span class="text-sm text-yellow-700">已选中 {{ selectedText.length }} 字</span>
         <el-button size="small" type="warning" @click="regenerateSelection">AI重写选中文字</el-button>
       </div>
-      
+
       <textarea
         v-model="generatedContent"
         ref="contentTextarea"
@@ -260,8 +270,8 @@
           </div>
         </template>
         <div class="space-y-2">
-          <div 
-            v-for="item in generateHistory" 
+          <div
+            v-for="item in generateHistory"
             :key="item.id"
             class="flex items-center justify-between p-2 border rounded hover:bg-gray-50 cursor-pointer"
             @click="loadHistoryRecord(item)"
@@ -274,9 +284,9 @@
               </div>
               <div class="text-base font-medium truncate">{{ item.title || '(无标题)' }}</div>
             </div>
-            <el-button 
-              size="small" 
-              type="danger" 
+            <el-button
+              size="small"
+              type="danger"
               text
               @click.stop="deleteHistory(item.id)"
               class="ml-2"
@@ -310,7 +320,7 @@ const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
 
 const router = useRouter()
 const form = ref({
-  keyword: '',
+  keywords: [],
   audience: '',
   platforms: [],
   command: '',
@@ -319,6 +329,22 @@ const form = ref({
   selectedDocs: [],    // Step 2: 选中的知识库文档
   selectedImages: []   // Step 3: 选中的配图
 })
+/** 多选关键词拼成一句（用于 prompt、历史、草稿 brand 字段） */
+const selectedKeywordPhrase = computed(() =>
+  (form.value.keywords || []).map((k) => String(k).trim()).filter(Boolean).join('、')
+)
+
+function parseKeywordsFromStored(raw) {
+  if (raw == null || raw === '') return []
+  if (Array.isArray(raw)) {
+    return raw.map((k) => String(k).trim()).filter(Boolean)
+  }
+  const s = String(raw).trim()
+  if (!s) return []
+  if (s.includes('、')) return s.split('、').map((x) => x.trim()).filter(Boolean)
+  if (s.includes(',')) return s.split(',').map((x) => x.trim()).filter(Boolean)
+  return [s]
+}
 const generatedContent = ref('')
 const generatedTitle = ref('')
 const isGenerating = ref(false)
@@ -435,12 +461,12 @@ const knowledgeDocs = ref([])
 const checkDocsAnalyzed = () => {
   const selected = form.value.selectedDocs || []
   if (selected.length === 0) return { valid: true }
-  
+
   // 筛选出未分析的文档
-  const unanalyzed = knowledgeDocs.value.filter(doc => 
+  const unanalyzed = knowledgeDocs.value.filter(doc =>
     selected.includes(doc.docId) && !doc.analyzedAt
   )
-  
+
   if (unanalyzed.length > 0) {
     return {
       valid: false,
@@ -497,7 +523,7 @@ const loadHistory = async () => {
   } catch (e) {
     console.warn('从后端加载历史记录失败，尝试从 localStorage 加载:', e)
   }
-  
+
   // 回退到 localStorage
   try {
     const historyData = localStorage.getItem(HISTORY_STORAGE_KEY)
@@ -531,15 +557,15 @@ const addToHistory = async (title, content, keyword, audience, platforms, comman
     commandId: commandId,
     createdAt: nowZhCnDateTime()
   }
-  
+
   // 添加到列表顶部
   generateHistory.value.unshift(newRecord)
-  
+
   // 超出数量限制时删除最早的记录
   if (generateHistory.value.length > MAX_HISTORY_COUNT) {
     generateHistory.value = generateHistory.value.slice(0, MAX_HISTORY_COUNT)
   }
-  
+
   // 同步到后端 API
   try {
     await historyAPI.create({
@@ -554,7 +580,7 @@ const addToHistory = async (title, content, keyword, audience, platforms, comman
   } catch (e) {
     console.warn('同步历史记录到后端失败:', e)
   }
-  
+
   saveHistory()
 }
 
@@ -566,7 +592,7 @@ const deleteHistory = async (id) => {
   } catch (e) {
     console.warn('从后端删除历史记录失败:', e)
   }
-  
+
   generateHistory.value = generateHistory.value.filter(item => item.id !== id)
   saveHistory()
   ElMessage.success('已删除该历史记录')
@@ -575,17 +601,17 @@ const deleteHistory = async (id) => {
 // 加载历史记录到编辑区
 const loadHistoryRecord = (record) => {
   // 恢复表单数据
-  form.value.keyword = record.keyword || ''
+  form.value.keywords = parseKeywordsFromStored(record.keyword)
   form.value.audience = resolveToDataValue(audienceDictRows.value, record.audience) || ''
   form.value.platforms = (record.platforms || [])
     .map((p) => resolveToDataValue(platformDictRows.value, p) || p)
     .filter(Boolean)
   form.value.command = record.commandId || ''
-  
+
   // 恢复生成结果
   generatedTitle.value = record.title || ''
   generatedContent.value = record.content
-  
+
   ElMessage.success('已加载历史记录')
 }
 
@@ -634,22 +660,22 @@ onMounted(async () => {
     commands.value = []
     ElMessage.warning('指令模板加载失败，请检查网络')
   }
-  
+
   // Step 2: 加载知识库文档
   await loadKnowledgeDocs()
-  
+
   // Step 3: 加载图库
   loadImages()
-  
+
   // 加载生成历史
   await loadHistory()
-  
+
   // 检查是否有草稿要编辑
   const savedDraft = sessionStorage.getItem('editDraft')
   if (savedDraft) {
     try {
       const draft = JSON.parse(savedDraft)
-      form.value.keyword = draft.brand || ''
+      form.value.keywords = parseKeywordsFromStored(draft.brand)
       form.value.command = draft.commandId || ''
       form.value.audience = resolveToDataValue(audienceDictRows.value, draft.audience) || ''
       form.value.platforms = (draft.platforms || [])
@@ -690,7 +716,7 @@ const loadKnowledgeDocs = async () => {
   } catch (e) {
     console.warn('从后端加载知识库失败，尝试从 localStorage 加载:', e)
   }
-  
+
   // 回退到 localStorage
   let docs = localStorage.getItem('auyologic-knowledge')
   if (!docs) {
@@ -745,35 +771,35 @@ const loadKnowledgeDocs = async () => {
  * 流程：用户选关键词 → 匹配知识库文档 keywords → 拿 summary + keyPoints
  */
 const buildContentPrompt = () => {
-  const selectedKeyword = form.value.keyword  // 用户选的关键词
+  const userKws = (form.value.keywords || []).map((k) => String(k).trim()).filter(Boolean)
   const selectedDocIds = form.value.selectedDocs || []
-  
-  if (!selectedKeyword) return ''
-  
-  // 1. 找出所有已分析且有关键词匹配的文档
-  const matchedDocs = knowledgeDocs.value.filter(doc => {
-    // 必须有分析结果才走精准匹配逻辑
+
+  if (!userKws.length) return ''
+
+  // 1. 找出所有已分析且有关键词匹配的文档（任一已选关键词命中文档关键词即算匹配）
+  const matchedDocs = knowledgeDocs.value.filter((doc) => {
     if (!doc.analyzedAt) return false
-    // 如果用户手动选了文档，优先使用选中的文档
     if (selectedDocIds.length > 0 && !selectedDocIds.includes(doc.docId)) return false
-    // 模糊匹配：文档关键词包含用户选的品牌词/产品词
     const docKeywords = doc.keywords || []
-    return docKeywords.some(kw => 
-      selectedKeyword.toLowerCase().includes(kw.toLowerCase()) ||
-      kw.toLowerCase().includes(selectedKeyword.toLowerCase())
+    return docKeywords.some((kw) =>
+      userKws.some(
+        (uk) =>
+          uk.toLowerCase().includes(String(kw).toLowerCase()) ||
+          String(kw).toLowerCase().includes(uk.toLowerCase())
+      )
     )
   })
-  
+
   // 2. 拼素材内容
   if (matchedDocs.length === 0) return ''  // 没有匹配则返回空
-  
+
   const materials = matchedDocs.map(doc => {
     return `【${doc.docName}】
 摘要：${doc.summary || ''}
 核心要点：${(doc.keyPoints || []).join('、')}
 关键词：${(doc.keywords || []).join('、')}`
   }).join('\n\n')
-  
+
   return `\n\n## 参考知识素材\n${materials}`
 }
 
@@ -817,13 +843,13 @@ const loadImages = () => {
  */
 const migrateCommands = (cmds) => {
   if (!cmds || cmds.length === 0) return []
-  
+
   const migratedCmds = cmds.map(cmd => {
     const prompt = cmd.prompt || cmd.content || ''
-    
+
     // 检查是否包含旧变量（需要迁移的标志）
     const hasOldVars = /\{(brand|keyword|knowledge|images)\}/.test(prompt)
-    
+
     if (hasOldVars) {
       // 提取"写作风格/类型"相关的描述，移除具体变量
       let newPrompt = prompt
@@ -843,21 +869,21 @@ const migrateCommands = (cmds) => {
         .replace(/\{platforms\}/gi, '')
         .replace(/\{extra\}/gi, '')
         .trim()
-      
+
       // 保留关于"怎么写"的描述（风格、结构、要求等）
       // 这些是纯类型特征，不是具体话题
-      
+
       // 如果处理后为空或太短，提供一个默认类型描述
       if (!newPrompt || newPrompt.length < 20) {
         newPrompt = getDefaultTypePrompt()
       }
-      
+
       return { ...cmd, prompt: newPrompt }
     }
-    
+
     return cmd
   })
-  
+
   return migratedCmds
 }
 
@@ -918,24 +944,27 @@ const getRandomOutro = () => {
  */
 const buildGeoPrompt = () => {
   const cmd = selectedCommand.value
-  const keyword = form.value.keyword  // 关键词 = 文章主题（核心驱动）
+  const phrase = selectedKeywordPhrase.value
   const audienceLabel = form.value.audience || '目标用户'
   const platformLabelsForPrompt = (form.value.platforms || []).filter(Boolean)
   const extra = form.value.extra || ''
   const templateName = cmd?.name || '软文'  // 模板名称 = 类型标签
-  
-  if (!keyword) {
+
+  if (!phrase) {
     return '请先选择关键词'
   }
-  
-  // ===== 1. 核心驱动：关键词 = 文章要写什么 =====
-  const coreDriver = `请为【${keyword}】写一篇【${templateName}】`
-  
+
+  const kws = (form.value.keywords || []).map((k) => String(k).trim()).filter(Boolean)
+  const coreDriver =
+    kws.length <= 1
+      ? `请为【${phrase}】写一篇【${templateName}】`
+      : `请围绕以下关键词/主题撰写一篇【${templateName}】：${phrase}。\n要求：自然融合多个主题，避免生硬堆砌；可适当分节或分场景展开。`
+
   // ===== 2. 知识库素材：根据关键词匹配 =====
   // 先尝试精准匹配：基于关键词匹配分析结果
   let contextContent = ''
   const matchedMaterial = buildContentPrompt()
-  
+
   if (matchedMaterial) {
     // 有精准匹配结果，使用摘要+要点格式
     contextContent = `\n\n## 📚 知识库素材（参考）\n${matchedMaterial}`
@@ -946,19 +975,19 @@ const buildGeoPrompt = () => {
         const doc = knowledgeDocs.value.find(d => d.docId === docId)
         return doc ? `【${doc.docName}】\n${doc.docContent}` : ''
       }).filter(Boolean)
-      
+
       if (selectedDocContents.length > 0) {
         contextContent = `\n\n## 📚 知识库文档（参考）\n${selectedDocContents.join('\n\n')}`
       }
     }
   }
-  
+
   // ===== 3. 拼入选中的图片信息 =====
   let imageContext = ''
   if (form.value.selectedImages?.length) {
     imageContext = `\n\n## 🖼️ 配图要求\n请在适当位置插入以下配图（Markdown格式）：\n${form.value.selectedImages.map(url => `![](${url})`).join('\n')}`
   }
-  
+
   // ===== 4. 目标受众约束 =====
   const audienceConstraint = `\n\n## 👥 目标受众\n${audienceLabel}`
 
@@ -967,10 +996,10 @@ const buildGeoPrompt = () => {
   if (platformLabelsForPrompt.length) {
     platformStyle = `\n\n## 发布平台\n请兼顾以下平台的表达习惯与篇幅节奏：${platformLabelsForPrompt.join('、')}\n`
   }
-  
+
   // ===== 6. 补充说明（额外要求）=====
   const extraConstraint = extra ? `\n\n## 📋 额外要求\n${extra}` : ''
-  
+
   // ===== 7. 模板类型特征（只描述类型，不含具体话题）=====
   // 提取模板 prompt 中关于"怎么写"的描述，忽略变量替换
   let templateStyle = ''
@@ -978,7 +1007,7 @@ const buildGeoPrompt = () => {
     // 模板 prompt 描述的是"类型特征"，不是具体话题
     templateStyle = `\n\n## 📝 写作风格要求\n${cmd.prompt}`
   }
-  
+
   // ===== 8. 随机获取写作风格和结构偏好 =====
   const randomStyle = getRandomStyle()
   const randomIntro = getRandomIntro()
@@ -1060,12 +1089,12 @@ const callDeepSeekAPI = async (prompt) => {
         max_tokens: 2000
       })
     })
-    
+
     if (!response.ok) {
       const errorData = await response.json()
       throw new Error(errorData.error?.message || `API请求失败: ${response.status}`)
     }
-    
+
     const data = await response.json()
     return data.content || ''
   } catch (error) {
@@ -1078,38 +1107,39 @@ const callDeepSeekAPI = async (prompt) => {
 const parseGeneratedContent = (rawContent) => {
   let title = ''
   let content = rawContent
-  
+
   // 尝试提取标题（通常是第一行或者用 # 标记的）
-  const titleMatch = rawContent.match(/^#\s*(.+)$/m) || 
+  const titleMatch = rawContent.match(/^#\s*(.+)$/m) ||
                      rawContent.match(/^标题[：:]\s*(.+)$/m) ||
                      rawContent.match(/^【(.+?)】$/m)
-  
+
   if (titleMatch) {
     title = titleMatch[1].trim()
     // 移除标题行
     content = rawContent.replace(titleMatch[0], '').trim()
   }
-  
+
   // 如果没有提取到标题，尝试生成一个
-  if (!title && form.value.keyword) {
+  if (!title && selectedKeywordPhrase.value) {
+    const k = selectedKeywordPhrase.value
     const titleOptions = [
-      `深度测评：${form.value.keyword}到底值不值得买？`,
-      `${form.value.audience || '目标用户'}必看：${form.value.keyword}使用体验分享`,
-      `关于${form.value.keyword}，你需要知道的那些事`
+      `深度测评：${k}到底值不值得买？`,
+      `${form.value.audience || '目标用户'}必看：${k}使用体验分享`,
+      `关于${k}，你需要知道的那些事`
     ]
     title = titleOptions[Math.floor(Math.random() * titleOptions.length)]
   }
-  
+
   return { title, content }
 }
 
 // Step 1: 主要生成函数
 const handleGenerate = async () => {
-  if (!form.value.keyword || !form.value.command) {
+  if (!selectedKeywordPhrase.value || !form.value.command) {
     ElMessage.warning('请填写必填信息')
     return
   }
-  
+
   // ========== 检查文档是否都已AI分析 ==========
   const check = checkDocsAnalyzed()
   if (!check.valid) {
@@ -1117,57 +1147,57 @@ const handleGenerate = async () => {
     return
   }
   // ========== 校验结束 ==========
-  
+
   isGenerating.value = true
   progressPercent.value = 10
   progressText.value = '正在准备内容...'
-  
+
   try {
     // Step 4: 构建 GEO 增强后的 prompt
     progressPercent.value = 20
     progressText.value = '正在AI自动生成，请等待...'
-    
+
     const geoPrompt = buildGeoPrompt()
-    
+
     // Step 1: 调用 DeepSeek API
     const rawContent = await callDeepSeekAPI(geoPrompt)
-    
+
     progressPercent.value = 80
     progressText.value = '正在整理内容...'
-    
+
     // 解析内容
     const parsed = parseGeneratedContent(rawContent)
     generatedTitle.value = parsed.title
     generatedContent.value = parsed.content
-    
+
     // Step 3: 在内容中加入配图（如果还没加入的话）
     if (form.value.selectedImages?.length && !rawContent.includes('![](')) {
       // 如果API返回的内容没有包含图片，在适当位置插入
       const imageMarkdown = '\n\n' + form.value.selectedImages.map(url => `![](${url})`).join('\n')
       generatedContent.value += imageMarkdown
     }
-    
+
     progressPercent.value = 100
     progressStatus.value = 'success'
     progressText.value = '生成完成！'
-    
+
     // 保存到生成历史
     addToHistory(
       parsed.title,
       parsed.content,
-      form.value.keyword,
+      selectedKeywordPhrase.value,
       form.value.audience,
       form.value.platforms,
       form.value.command
     )
-    
+
     ElMessage.success('生成成功！点击上方「保存草稿」查看')
-    
+
   } catch (error) {
     progressPercent.value = 0
     progressStatus.value = 'exception'
     progressText.value = '生成失败'
-    
+
     console.error('生成失败:', error)
     ElMessage.error('生成失败: ' + error.message)
   } finally {
@@ -1205,32 +1235,32 @@ const checkSelection = () => {
 // AI 重写选中文字
 const regenerateSelection = async () => {
   if (!selectedText.value) return
-  
+
   isGenerating.value = true
   progressText.value = '正在重写选中文字...'
-  
+
   try {
     // 提取选中文字在全文中的位置，获取上下文
     const content = generatedContent.value
     const selectStart = content.indexOf(selectedText.value)
     const selectEnd = selectStart + selectedText.value.length
-    
+
     const before = content.slice(Math.max(0, selectStart - 100), selectStart)
     const after = content.slice(selectEnd, Math.min(content.length, selectEnd + 100))
-    
+
     const prompt = `参考前文："${before}"
 需要重写的段落："${selectedText.value}"
 参考后文："${after}"
 
 要求：保持前后文风格一致，重写这段文字使更吸引人。只输出重写后的内容，不要其他解释。`
-    
+
     const result = await callDeepSeekAPI(prompt)
-    
+
     // 替换选中的文字
     const newContent = content.slice(0, selectStart) + result.trim() + content.slice(selectEnd)
     generatedContent.value = newContent
     selectedText.value = ''
-    
+
     ElMessage.success('重写完成')
   } catch (e) {
     ElMessage.error('重写失败：' + e.message)
@@ -1243,23 +1273,23 @@ const regenerateSelection = async () => {
 // 重写开头/结尾
 const regenerateSection = async (section) => {
   if (!generatedContent.value) return
-  
+
   isGenerating.value = true
   progressText.value = `正在重写${section}...`
-  
+
   try {
     const content = generatedContent.value
     let prompt = ''
-    
+
     if (section === '开头') {
       const firstPara = content.split('\n')[0]
       prompt = `请重写以下文案的开头部分，要求：\n1. 更加吸睛、有吸引力\n2. 与原文案风格一致\n3. 50字以内\n\n当前文案：\n${content}\n\n请只输出重写后的开头，不要输出其他内容。`
     } else if (section === '结尾') {
       prompt = `请重写以下文案的结尾部分，要求：\n1. 有行动号召或互动引导\n2. 与原文案风格一致\n3. 30字以内\n\n当前文案：\n${content}\n\n请只输出重写后的结尾，不要输出其他内容。`
     }
-    
+
     const result = await callDeepSeekAPI(prompt)
-    
+
     if (section === '开头') {
       const lines = content.split('\n')
       lines[0] = result.trim()
@@ -1267,7 +1297,7 @@ const regenerateSection = async (section) => {
     } else {
       generatedContent.value = content.trim() + '\n\n' + result.trim()
     }
-    
+
     ElMessage.success(`${section}重写完成`)
   } catch (e) {
     ElMessage.error('重写失败：' + e.message)
@@ -1280,10 +1310,10 @@ const regenerateSection = async (section) => {
 // 切换风格
 const switchStyle = async () => {
   if (!generatedContent.value) return
-  
+
   isGenerating.value = true
   progressText.value = '正在切换风格...'
-  
+
   try {
     const styles = [
       { name: '小红书种草', style: '口语化、真实感、emoji点缀、行动号召' },
@@ -1292,9 +1322,9 @@ const switchStyle = async () => {
       { name: '品牌故事', style: '情感丰富、画面感强、情怀满满' }
     ]
     const target = styles[Math.floor(Math.random() * styles.length)]
-    
+
     const prompt = `请将以下文案改写为【${target.name}】风格，要求：\n风格：${target.style}\n\n原文案：\n${generatedContent.value}\n\n请直接输出改写后的文案。`
-    
+
     const result = await callDeepSeekAPI(prompt)
     generatedContent.value = result.trim()
     ElMessage.success(`已切换为${target.name}风格`)
@@ -1309,10 +1339,10 @@ const switchStyle = async () => {
 // 精简/扩展
 const adjustLength = async (type) => {
   if (!generatedContent.value) return
-  
+
   isGenerating.value = true
   progressText.value = `正在生成${type}版本...`
-  
+
   try {
     let prompt = ''
     if (type === '精简') {
@@ -1320,7 +1350,7 @@ const adjustLength = async (type) => {
     } else {
       prompt = `请将以下文案扩展为更详细版本，要求：\n1. 增加更多细节和案例\n2. 丰富内容但不要啰嗦\n3. 控制在300字以内\n\n原文案：\n${generatedContent.value}`
     }
-    
+
     const result = await callDeepSeekAPI(prompt)
     generatedContent.value = result.trim()
     ElMessage.success(`${type}版生成完成`)
@@ -1334,8 +1364,8 @@ const adjustLength = async (type) => {
 
 const handleSaveDraft = async () => {
   const draftData = {
-    title: generatedTitle.value || form.value.keyword + ' 软文',
-    brand: form.value.keyword,
+    title: generatedTitle.value || selectedKeywordPhrase.value + ' 软文',
+    brand: selectedKeywordPhrase.value,
     content: generatedContent.value,
     audience: form.value.audience,
     platforms: form.value.platforms,
@@ -1345,7 +1375,7 @@ const handleSaveDraft = async () => {
     selectedImages: form.value.selectedImages,
     status: '草稿'
   }
-  
+
   if (form.value.editId) {
     const editId = Number(form.value.editId)
     const userId = 'default_user'
@@ -1386,8 +1416,8 @@ const handleSaveDraft = async () => {
 
 const handleSaveAsNew = async () => {
   const draftData = {
-    title: generatedTitle.value || form.value.keyword + ' 软文',
-    brand: form.value.keyword,
+    title: generatedTitle.value || selectedKeywordPhrase.value + ' 软文',
+    brand: selectedKeywordPhrase.value,
     content: generatedContent.value,
     audience: form.value.audience,
     platforms: form.value.platforms,

@@ -1,5 +1,8 @@
 <template>
-  <div class="health-page" :class="{ 'health-page--pdf-export': pdfExporting }">
+  <div
+    class="health-page"
+    :class="{ 'health-page--pdf-export': pdfExporting || playwrightPdfQuietUi }"
+  >
     <!-- 无数据提示 -->
     <div v-if="!hasData && !loading" class="no-data-banner">
       <div class="no-data-content">
@@ -970,10 +973,19 @@
           size="large"
           type="primary"
           :loading="exportReportLoading"
-          :disabled="exportReportLoading || loading || !hasData"
+          :disabled="exportReportLoading || playwrightExportLoading || loading || !hasData"
           @click="exportReport"
         >
           <el-icon class="mr-1"><Download /></el-icon>导出报告
+        </el-button>
+        <el-button
+          size="large"
+          plain
+          :loading="playwrightExportLoading"
+          :disabled="exportReportLoading || playwrightExportLoading || loading || !hasData"
+          @click="exportReportTemplatePdf"
+        >
+          <el-icon class="mr-1"><Printer /></el-icon>模板 PDF
         </el-button>
         <el-button size="large" @click="shareReport" plain>
           <el-icon class="mr-1"><Share /></el-icon>分享链接
@@ -1368,9 +1380,13 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import {
   RefreshRight, Top, WarnTriangleFilled, ArrowLeft, ArrowDown, ArrowUp,
-  Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram,
+  Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram, Printer,
   MagicStick, Loading, Rank
 } from '@element-plus/icons-vue'
+import html2canvas from 'html2canvas'
+import { jsPDF } from 'jspdf'
+import { formatZhCnDateTime, nowZhCnDateTime, formatZhCnYmd } from '../utils/dateTime.js'
+import { getBrandStatusForModelCard } from '../utils/brandHealth.js'
 import draggable from 'vuedraggable'
 import DOMPurify from 'dompurify'
 import { KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
@@ -1445,10 +1461,6 @@ const confirmModelPicker = async () => {
     analysisConnectionId: pickedAnalysisId.value || undefined,
   })
 }
-import html2canvas from 'html2canvas'
-import { jsPDF } from 'jspdf'
-import { formatZhCnDateTime, nowZhCnDateTime, formatZhCnYmd } from '../utils/dateTime.js'
-import { getBrandStatusForModelCard } from '../utils/brandHealth.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -1458,6 +1470,9 @@ const healthReportCaptureRoot = ref(null)
 /** 报告正文容器：PDF 按直属子区块依次排版 */
 const reportBodyPdfRef = ref(null)
 const exportReportLoading = ref(false)
+const playwrightExportLoading = ref(false)
+/** Playwright 打开 /geo-health?pwPdf=1 时与截屏导出共用「隐藏操作区」样式 */
+const playwrightPdfQuietUi = computed(() => String(route.query.pwPdf || '') === '1')
 const pdfExporting = ref(false)
 const hasData = ref(false)
 
@@ -1650,6 +1665,14 @@ watch(
   () => {
     mvGridExpanded.value = false
   }
+)
+
+watch(
+  playwrightPdfQuietUi,
+  (on) => {
+    if (on) mvGridExpanded.value = true
+  },
+  { immediate: true }
 )
 
 const persistAiHealthCardOrder = () => {
@@ -2353,7 +2376,25 @@ const disposeCompetitorParetoChart = () => {
   }
 }
 
-const buildCompetitorParetoOption = (mentions, { forPdfExport = false } = {}) => {
+/** 读取帕累托图当前 dataZoom 窗口（与滑块拖动一致），无滑块或未就绪时返回 null */
+function readCompetitorParetoDataZoomState(chart) {
+  if (!chart || (typeof chart.isDisposed === 'function' && chart.isDisposed())) return null
+  try {
+    const opt = chart.getOption?.() || {}
+    const raw = opt.dataZoom
+    if (raw == null) return null
+    const dz0 = Array.isArray(raw) ? raw[0] : raw
+    if (!dz0 || typeof dz0 !== 'object') return null
+    const start = Number(dz0.start)
+    const end = Number(dz0.end)
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null
+    return { start, end }
+  } catch {
+    return null
+  }
+}
+
+const buildCompetitorParetoOption = (mentions, { forPdfExport = false, dataZoom: dataZoomOverride = null } = {}) => {
   if (!mentions.length) return {}
   const names = mentions.map(r => r.name)
   const counts = mentions.map(r => r.count)
@@ -2374,10 +2415,18 @@ const buildCompetitorParetoOption = (mentions, { forPdfExport = false } = {}) =>
 
   const longLabel = names.some(n => String(n).length > 4)
   const useZoom = names.length > 10
-  const pdfBottom = useZoom ? 92 : names.length > 6 ? 84 : 76
+  /** 导出时无滑条，底部可略收紧；屏上保留原 72+ 滑条区 */
+  const pdfBottom = useZoom ? (forPdfExport ? 64 : 92) : names.length > 6 ? 84 : 76
   const axisRotate = forPdfExport
     ? (names.length > 6 ? 42 : names.length > 3 ? 34 : 0)
     : (longLabel ? 28 : 0)
+
+  const dzStart = dataZoomOverride != null && Number.isFinite(Number(dataZoomOverride.start))
+    ? Math.max(0, Math.min(100, Number(dataZoomOverride.start)))
+    : 0
+  const dzEnd = dataZoomOverride != null && Number.isFinite(Number(dataZoomOverride.end))
+    ? Math.max(0, Math.min(100, Number(dataZoomOverride.end)))
+    : 100
 
   return {
     backgroundColor: '#ffffff',
@@ -2391,8 +2440,13 @@ const buildCompetitorParetoOption = (mentions, { forPdfExport = false } = {}) =>
     },
     ...(useZoom ? {
       dataZoom: [{
-        type: 'slider', show: true, xAxisIndex: 0,
-        height: 18, bottom: 6,
+        type: 'slider',
+        show: !forPdfExport,
+        xAxisIndex: 0,
+        start: dzStart,
+        end: dzEnd,
+        height: 18,
+        bottom: 6,
         borderColor: 'transparent',
         fillerColor: 'rgba(255, 122, 0, 0.12)',
         handleStyle: { color: '#ff7a00' },
@@ -3937,7 +3991,11 @@ const exportReport = async () => {
     const mentions = competitorMentions.value
     if (competitorParetoChart && !competitorParetoChart.isDisposed() && mentions.length) {
       try {
-        competitorParetoChart.setOption(buildCompetitorParetoOption(mentions, { forPdfExport: true }), true)
+        const dzState = mentions.length > 10 ? readCompetitorParetoDataZoomState(competitorParetoChart) : null
+        competitorParetoChart.setOption(
+          buildCompetitorParetoOption(mentions, { forPdfExport: true, dataZoom: dzState || undefined }),
+          true
+        )
         const el = competitorParetoChartDom.value
         if (el?.clientWidth > 0 && el?.clientHeight > 0) competitorParetoChart.resize()
         await waitForChartFinished(competitorParetoChart, 1200)
@@ -4017,6 +4075,81 @@ const exportReport = async () => {
   }
 }
 
+const exportReportTemplatePdf = async () => {
+  if (!hasData.value) {
+    ElMessage.warning('暂无体检数据，无法导出')
+    return
+  }
+  if (loading.value) {
+    ElMessage.warning('报告加载中，请稍后再试')
+    return
+  }
+  playwrightExportLoading.value = true
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+  let n = null
+  try {
+    n = ElNotification.info({
+      title: '正在生成模板 PDF',
+      message: '服务端按固定版式排版，请稍候…',
+      position: 'top-right',
+      duration: 0,
+      showClose: false,
+      offset: 72,
+    })
+    const u = new URL(`${API_BASE_URL}/api/geo-health-report/template-pdf`)
+    if (
+      competitorMentions.value.length > 10 &&
+      competitorParetoChart &&
+      !competitorParetoChart.isDisposed()
+    ) {
+      const dz = readCompetitorParetoDataZoomState(competitorParetoChart)
+      if (dz && Number.isFinite(dz.start) && Number.isFinite(dz.end)) {
+        u.searchParams.set('competitorDzStart', String(dz.start))
+        u.searchParams.set('competitorDzEnd', String(dz.end))
+      }
+    }
+    const res = await fetch(u.toString(), {
+      method: 'GET',
+      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+    })
+    const ct = res.headers.get('content-type') || ''
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`
+      try {
+        const j = await res.json()
+        if (j?.error) msg = j.error
+      } catch {
+        /* ignore */
+      }
+      throw new Error(msg)
+    }
+    if (!ct.includes('pdf')) {
+      const text = await res.text()
+      throw new Error(text.slice(0, 200) || '响应不是 PDF')
+    }
+    const blob = await res.blob()
+    const namePart = enterpriseSettings.value?.companyName
+      ? String(enterpriseSettings.value.companyName).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40)
+      : '品牌体检'
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `品牌AI健康体检报告_模板_${namePart}_${formatZhCnYmd()}.pdf`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    ElMessage.success({ message: '已下载模板 PDF', offset: 80 })
+  } catch (e) {
+    console.error('[geo-health] template PDF failed', e)
+    ElMessage.error('模板 PDF 导出失败：' + (e?.message || String(e)))
+  } finally {
+    try {
+      n?.close?.()
+    } catch {
+      /* ignore */
+    }
+    playwrightExportLoading.value = false
+  }
+}
+
 const shareReport = () => {
   ElMessage.success('分享链接已复制到剪贴板')
 }
@@ -4062,9 +4195,14 @@ onUnmounted(() => {
   font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
 }
 
-/* 导出 PDF 时隐藏操作按钮，减少截屏杂项 */
+/* 导出 PDF 时隐藏操作与引导类控件，减少截屏杂项 */
 .health-page--pdf-export .nav-gen-actions,
-.health-page--pdf-export .section-actions {
+.health-page--pdf-export .section-actions,
+.health-page--pdf-export .mv-grid-expand,
+.health-page--pdf-export .competitor-click-hint,
+.health-page--pdf-export .sentiment-source-detail-btn,
+.health-page--pdf-export .diagnosis-suggest-row-actions,
+.health-page--pdf-export .diagnosis-suggest-add-row {
   display: none !important;
 }
 
