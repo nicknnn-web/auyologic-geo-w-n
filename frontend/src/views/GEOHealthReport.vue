@@ -1365,7 +1365,7 @@ import { ref, computed, onMounted, onUnmounted, onActivated, watch, nextTick } f
 import * as echarts from 'echarts'
 import 'echarts-wordcloud'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import {
   RefreshRight, Top, WarnTriangleFilled, ArrowLeft, ArrowDown, ArrowUp,
   Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram,
@@ -3913,11 +3913,22 @@ const exportReport = async () => {
   }
 
   const prevExpanded = mvGridExpanded.value
+  window.scrollTo({ top: 0, behavior: 'smooth' })
   exportReportLoading.value = true
   pdfExporting.value = true
   mvGridExpanded.value = true
 
+  let pdfExportNotify = null
   try {
+    await nextTick()
+    pdfExportNotify = ElNotification.info({
+      title: '正在导出',
+      message: '请稍候，正在生成 PDF…',
+      position: 'top-right',
+      duration: 0,
+      showClose: false,
+      offset: 72,
+    })
     await nextTick()
     await waitAnimationFrames(2)
     onWindowResizeForSentimentCloud()
@@ -3986,6 +3997,11 @@ const exportReport = async () => {
     console.error('[geo-health] PDF export failed', e)
     ElMessage.error('导出失败：' + (e?.message || String(e)))
   } finally {
+    try {
+      pdfExportNotify?.close?.()
+    } catch (_) {
+      /* ignore */
+    }
     mvGridExpanded.value = prevExpanded
     pdfExporting.value = false
     exportReportLoading.value = false
