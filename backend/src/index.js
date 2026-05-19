@@ -896,6 +896,52 @@ app.post('/api/sys-dict/entries/batch-delete', async (req, res) => {
 
 /** 拓展问题：批量删除、按筛选条件删除（须注册在通用 `/api/questions/:id` 之前） */
 const QUESTIONS_BATCH_DELETE_MAX = 20000
+const QUESTIONS_BATCH_UPDATE_STATUS_MAX = 20000
+
+/** 拓展问题：批量修改审核状态 */
+app.post('/api/questions/batch-update-status', async (req, res) => {
+  try {
+    await ensureTable('questions')
+    await ensureQuestionStatusDictAndMigrate()
+    const raw = req.body?.ids
+    const status = String(req.body?.status ?? '').trim()
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: '请提供非空 ids 数组' })
+    }
+    if (!status) {
+      return res.status(400).json({ error: '请选择审核状态' })
+    }
+    const statusOk = await pool.query(
+      `SELECT 1 FROM sys_dict
+       WHERE dict_type = $1 AND data_key = $2 AND COALESCE(enabled, true) = true
+       LIMIT 1`,
+      [QUESTION_STATUS_DICT_TYPE, status]
+    )
+    if (!statusOk.rows.length) {
+      return res.status(400).json({ error: '无效的审核状态' })
+    }
+    const ids = [
+      ...new Set(
+        raw
+          .map((x) => parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ]
+    if (ids.length === 0) return res.status(400).json({ error: 'ids 中无有效正整数' })
+    if (ids.length > QUESTIONS_BATCH_UPDATE_STATUS_MAX) {
+      return res.status(400).json({ error: `单次最多更新 ${QUESTIONS_BATCH_UPDATE_STATUS_MAX} 条` })
+    }
+    const r = await pool.query(
+      `UPDATE questions SET status = $1 WHERE id = ANY($2::int[]) RETURNING id`,
+      [status, ids]
+    )
+    res.json({ ok: true, updatedCount: r.rowCount })
+  } catch (err) {
+    console.error('questions batch-update-status:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.post('/api/questions/batch-delete', async (req, res) => {
   try {
     await ensureTable('questions')

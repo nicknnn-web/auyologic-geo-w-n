@@ -1,45 +1,11 @@
 /**
- * 品牌体检报告：模板 HTML → Playwright 打印 PDF（不打开 SPA，版式稳定）。
+ * 品牌体检报告：模板 PDF
+ * 默认 pdfmake（无需 Chromium，适合 Zeabur）；GEO_HEALTH_PDF_ENGINE=playwright 可回退旧实现。
  */
 import { Router } from 'express';
-import { chromium } from 'playwright';
-import fs from 'fs';
-import { buildHealthReportPdfHtml } from '../services/geoHealthReportPdfTemplate.js';
+import { buildHealthReportPdfBuffer } from '../services/geoHealthReportPdfMake.js';
 
 const router = Router();
-
-function findSystemChrome() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-  ].filter(Boolean);
-  return candidates.find((p) => fs.existsSync(p)) || null;
-}
-
-function buildLaunchOptions() {
-  const executablePath = findSystemChrome();
-  const headless =
-    process.env.PLAYWRIGHT_HEADED === 'true'
-      ? false
-      : process.env.NODE_ENV === 'production' || !executablePath;
-  const args = [
-    '--disable-blink-features=AutomationControlled',
-    '--disable-infobars',
-    '--lang=zh-CN',
-  ];
-  if (process.env.PW_CHROME_NO_SANDBOX === '1') {
-    args.push('--no-sandbox', '--disable-setuid-sandbox');
-  }
-  const opts = {
-    headless,
-    args,
-    ignoreDefaultArgs: ['--enable-automation'],
-  };
-  if (executablePath) opts.executablePath = executablePath;
-  return opts;
-}
 
 async function fetchReportPayload(req) {
   const userId = (req.get('x-user-id') || 'default_user').trim() || 'default_user';
@@ -75,9 +41,39 @@ function parseCompetitorDataZoomQuery(req) {
   return { start, end };
 }
 
-async function renderTemplatePdf(payload, templateOpts) {
+async function renderTemplatePdfPlaywright(payload, templateOpts) {
+  const { buildHealthReportPdfHtml } = await import('../services/geoHealthReportPdfTemplate.js');
+  const { chromium } = await import('playwright');
+  const fs = await import('fs');
+
+  function findSystemChrome() {
+    const candidates = [
+      process.env.CHROME_PATH,
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+    ].filter(Boolean);
+    return candidates.find((p) => fs.existsSync(p)) || null;
+  }
+
+  const executablePath = findSystemChrome();
+  const headless =
+    process.env.PLAYWRIGHT_HEADED === 'true'
+      ? false
+      : process.env.NODE_ENV === 'production' || !executablePath;
+  const args = ['--disable-blink-features=AutomationControlled', '--disable-infobars', '--lang=zh-CN'];
+  if (process.env.PW_CHROME_NO_SANDBOX === '1') {
+    args.push('--no-sandbox', '--disable-setuid-sandbox');
+  }
+  const launchOpts = {
+    headless,
+    args,
+    ignoreDefaultArgs: ['--enable-automation'],
+  };
+  if (executablePath) launchOpts.executablePath = executablePath;
+
   const html = buildHealthReportPdfHtml(payload, templateOpts || {});
-  const browser = await chromium.launch(buildLaunchOptions());
+  const browser = await chromium.launch(launchOpts);
   try {
     const context = await browser.newContext({
       viewport: { width: 1100, height: 1600 },
@@ -94,10 +90,20 @@ async function renderTemplatePdf(payload, templateOpts) {
       preferCSSPageSize: false,
     });
     await context.close();
-    return pdfBuf;
+    return Buffer.from(pdfBuf);
   } finally {
     await browser.close();
   }
+}
+
+async function renderTemplatePdf(payload, templateOpts) {
+  const engine = String(process.env.GEO_HEALTH_PDF_ENGINE || 'pdfmake')
+    .trim()
+    .toLowerCase();
+  if (engine === 'playwright') {
+    return renderTemplatePdfPlaywright(payload, templateOpts);
+  }
+  return buildHealthReportPdfBuffer(payload, templateOpts);
 }
 
 async function handleTemplatePdf(req, res) {
@@ -120,7 +126,7 @@ async function handleTemplatePdf(req, res) {
       'Content-Disposition',
       `attachment; filename*=UTF-8''${encodeURIComponent(`品牌AI健康体检报告_模板_${stamp}.pdf`)}`
     );
-    res.send(Buffer.from(pdfBuf));
+    res.send(pdfBuf);
   } catch (e) {
     console.error('[geo-health-report/template-pdf]', e);
     if (!res.headersSent) {
@@ -129,10 +135,10 @@ async function handleTemplatePdf(req, res) {
   }
 }
 
-/** 模板 PDF（推荐） */
+/** 模板 PDF（默认 pdfmake，Zeabur 无需 Chromium） */
 router.get('/geo-health-report/template-pdf', handleTemplatePdf);
 
-/** 兼容旧路径：与 template-pdf 相同实现 */
+/** 兼容旧路径 */
 router.get('/geo-health-report/playwright-pdf', handleTemplatePdf);
 
 export default router;

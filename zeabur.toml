@@ -5,7 +5,7 @@ name = "auyologic-geo"
 name = "auyologic-backend"
 path = "backend"
 runtime = "node"
-# postinstall 会执行 playwright install（PLAYWRIGHT_BROWSERS_PATH=0，浏览器进 node_modules）
+# postinstall：下载 pdfmake 中文字体 +（可选）playwright 浏览器
 buildCommand = "npm install"
 startCommand = "npm start"
 

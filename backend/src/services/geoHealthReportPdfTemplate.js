@@ -3,6 +3,7 @@
  */
 
 import { sliceCompetitorMentionsByDataZoom } from '../utils/competitorParetoDataZoomSlice.js';
+import { sortSentimentWordCloudForExport } from '../utils/sentimentWordCloudExportSort.js';
 
 function escapeHtml(s) {
   return String(s ?? '')
@@ -195,9 +196,8 @@ function buildWordCloudTags(list) {
   if (!Array.isArray(list) || !list.length) {
     return '<p class="muted">暂无词云词条</p>';
   }
-  const sorted = [...list].sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
-  const top = sorted.slice(0, 48);
-  return `<div class="word-tags">${top
+  const sorted = sortSentimentWordCloudForExport(list);
+  return `<div class="word-tags">${sorted
     .map((w) => {
       const { bg, fg } = wordPolarityColor(w.polarity);
       return `<span class="word-tag" style="background:${bg};color:${fg}">${escapeHtml(w.text)} <small>${w.count ?? ''}</small></span>`;

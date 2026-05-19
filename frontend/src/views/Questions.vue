@@ -38,11 +38,35 @@
             :value="d.dataKey"
           />
         </el-select>
+        <el-select
+          v-model="batchReviewStatus"
+          placeholder="批量审核状态"
+          class="w-32"
+          clearable
+          :disabled="selectedRows.length === 0 || mutationLoading || listLoading"
+        >
+          <el-option
+            v-for="d in questionStatusOptions"
+            :key="d.dataKey"
+            :label="d.dataValue"
+            :value="d.dataKey"
+          />
+        </el-select>
+        <el-button
+          type="success"
+          plain
+          class="ml-0"
+          :disabled="selectedRows.length === 0 || !batchReviewStatus || mutationLoading || listLoading"
+          :loading="mutationKind === 'review'"
+          @click="handleBatchUpdateStatus"
+        >
+          保存审核 ({{ selectedRows.length }})
+        </el-button>
         <el-button
           type="danger"
           class="ml-0"
           :disabled="selectedRows.length === 0 || isLoading || mutationLoading || listLoading"
-          :loading="mutationLoading"
+          :loading="mutationKind === 'delete'"
           @click="handleBatchDelete"
         >
           批量删除 ({{ selectedRows.length }})
@@ -53,7 +77,7 @@
           class="ml-2"
           @click="handleClearAll"
           :disabled="total === 0 || isLoading || mutationLoading || listLoading"
-          :loading="mutationLoading"
+          :loading="mutationKind === 'clear'"
         >
           <el-icon class="mr-1"><Delete /></el-icon>
           清空全部
@@ -361,8 +385,19 @@ const page = ref(1)
 const pageSize = ref(DEFAULT_PAGE_SIZE)
 const listLoading = ref(false)
 /** 批量/清空/行删除等写操作，与 loadData 的 listLoading 区分，避免无反馈 */
-const mutationLoading = ref(false)
-const tableLoadingText = computed(() => (mutationLoading.value ? '正在删除…' : '加载中…'))
+const mutationKind = ref(null) // 'review' | 'delete' | 'clear' | 'row-delete'
+const mutationLoading = computed(() => mutationKind.value != null)
+const MUTATION_LOADING_TEXT = {
+  review: '正在保存审核…',
+  delete: '正在删除…',
+  clear: '正在清空…',
+  'row-delete': '正在删除…',
+}
+const tableLoadingText = computed(() => {
+  if (listLoading.value) return '加载中…'
+  const k = mutationKind.value
+  return (k && MUTATION_LOADING_TEXT[k]) || (k ? '处理中…' : '加载中…')
+})
 const approvedTotal = ref(0)
 const questionSortOrder = ref('') // '' | 'asc' | 'desc' — 仅对当前页排序
 
@@ -391,6 +426,8 @@ const form = ref({ question: '', keywordType: '' })
 const filterKeywordType = ref('')
 const filterStatus = ref('')
 const selectedRows = ref([])
+/** 批量审核：目标状态（question_status 字典 data_key） */
+const batchReviewStatus = ref('')
 const exportQuestionsLoading = ref(false)
 
 const keywordTypeOptions = ref([])
@@ -1127,12 +1164,58 @@ const handleSelectionChange = (selection) => {
   selectedRows.value = selection
 }
 
+const handleBatchUpdateStatus = async () => {
+  if (selectedRows.value.length === 0) return
+  const status = String(batchReviewStatus.value || '').trim()
+  if (!status) {
+    ElMessage.warning('请选择审核状态')
+    return
+  }
+  const statusName =
+    questionStatusOptions.value.find((d) => (d.dataKey || d.data_key) === status)?.dataValue ||
+    questionStatusOptions.value.find((d) => (d.dataKey || d.data_key) === status)?.data_value ||
+    status
+  const ids = selectedRows.value.map((r) => r.id)
+  const userId = 'default_user'
+
+  mutationKind.value = 'review'
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/questions/batch-update-status`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': userId,
+      },
+      body: JSON.stringify({ ids, status }),
+    })
+    let data = {}
+    try {
+      data = await res.json()
+    } catch {
+      /* ignore */
+    }
+    if (!res.ok) {
+      ElMessage.error(data.error || '批量审核失败')
+      return
+    }
+    const updated = data.updatedCount ?? ids.length
+    selectedRows.value = []
+    await loadData()
+    ElMessage.success(`已将 ${updated} 条问题设为「${statusName}」`)
+  } catch (e) {
+    console.warn(e)
+    ElMessage.error('批量审核失败，请检查网络')
+  } finally {
+    mutationKind.value = null
+  }
+}
+
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   const userId = 'default_user'
   const idsToDelete = selectedRows.value.map((r) => r.id)
 
-  mutationLoading.value = true
+  mutationKind.value = 'delete'
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions/batch-delete`, {
       method: 'POST',
@@ -1160,7 +1243,7 @@ const handleBatchDelete = async () => {
     console.warn(e)
     ElMessage.error('批量删除失败，请检查网络')
   } finally {
-    mutationLoading.value = false
+    mutationKind.value = null
   }
 }
 
@@ -1188,7 +1271,7 @@ const handleClearAll = async () => {
   if (filterKeywordType.value) body.keywordType = filterKeywordType.value
   if (filterStatus.value) body.status = filterStatus.value
 
-  mutationLoading.value = true
+  mutationKind.value = 'clear'
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions/delete-matching`, {
       method: 'POST',
@@ -1216,7 +1299,7 @@ const handleClearAll = async () => {
     console.warn(e)
     ElMessage.error('清空失败，请检查网络')
   } finally {
-    mutationLoading.value = false
+    mutationKind.value = null
   }
 }
 
@@ -1272,7 +1355,7 @@ const handleSubmit = async () => {
 
 const handleDelete = async (id) => {
   const userId = 'default_user'
-  mutationLoading.value = true
+  mutationKind.value = 'row-delete'
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions/${id}`, {
       method: 'DELETE',
@@ -1294,7 +1377,7 @@ const handleDelete = async (id) => {
     console.warn(e)
     ElMessage.error('删除失败，请检查网络')
   } finally {
-    mutationLoading.value = false
+    mutationKind.value = null
   }
 }
 

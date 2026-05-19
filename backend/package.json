@@ -8,7 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test:sys-dict-put": "node scripts/test-sys-dict-put-http.mjs",
-    "postinstall": "node scripts/playwright-install.mjs"
+    "postinstall": "node scripts/ensure-pdf-fonts.mjs && node scripts/playwright-install.mjs"
   },
   "dependencies": {
     "@node-rs/jieba": "^2.0.1",
@@ -21,6 +21,7 @@
     "multer": "^1.4.5-lts.1",
     "openai": "^4.20.0",
     "pdf-parse": "^1.1.1",
+    "pdfmake": "^0.2.23",
     "pg": "^8.11.3",
     "playwright": "^1.58.2",
     "uuid": "^9.0.0",
