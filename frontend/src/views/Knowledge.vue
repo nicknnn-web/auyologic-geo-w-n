@@ -3,10 +3,68 @@
     <div class="flex justify-between items-center mb-4">
       <div>
         <div class="text-lg font-bold">企业知识库</div>
-        <div class="text-sm text-gray-500">管理企业知识文档，用于AI创作参考</div>
+        <div class="text-sm text-gray-500">管理企业知识文档，用于 AI 创作参考；支持文件夹与搜索</div>
       </div>
     </div>
 
+    <div class="knowledge-layout">
+      <aside class="knowledge-sidebar">
+        <div class="knowledge-sidebar-search">
+          <el-input
+            v-model="docSearchQ"
+            clearable
+            placeholder="搜索文档名称、摘要、正文…"
+            @keyup.enter="onDocSearch"
+            @clear="onDocSearch"
+          >
+            <template #append>
+              <el-button :loading="listLoading" @click="onDocSearch">搜索</el-button>
+            </template>
+          </el-input>
+        </div>
+        <div class="knowledge-sidebar-actions">
+          <el-button type="primary" size="small" plain @click="openCreateFolderDialog">
+            <el-icon class="mr-1"><FolderAdd /></el-icon>
+            新建文件夹
+          </el-button>
+          <el-button
+            size="small"
+            plain
+            :disabled="!isRealFolderId(currentFolderId)"
+            @click="openRenameFolderDialog"
+          >
+            重命名
+          </el-button>
+        </div>
+        <el-tree
+          v-loading="folderTreeLoading"
+          class="knowledge-folder-tree"
+          :data="folderTreeData"
+          node-key="id"
+          :props="{ label: 'label', children: 'children' }"
+          highlight-current
+          :expand-on-click-node="false"
+          default-expand-all
+          :current-node-key="currentFolderId"
+          @node-click="onFolderNodeClick"
+        >
+          <template #default="{ node, data }">
+            <div class="folder-tree-node">
+              <span class="folder-tree-node-label" :title="node.label">{{ node.label }}</span>
+              <el-icon
+                v-if="isRealFolderId(data.id)"
+                class="folder-tree-node-delete"
+                title="删除文件夹"
+                @click.stop="handleDeleteFolderNode(data)"
+              >
+                <Delete />
+              </el-icon>
+            </div>
+          </template>
+        </el-tree>
+      </aside>
+
+      <div class="knowledge-main">
     <!-- 上传区域 -->
     <div 
       class="border-2 border-dashed border-gray-300 rounded-lg p-8 mb-6 text-center hover:border-blue-400 transition-colors cursor-pointer"
@@ -73,7 +131,10 @@
     <!-- 文档列表 -->
     <div v-if="tableData.length > 0">
       <div class="flex justify-between items-center mb-3">
-        <div class="text-sm font-medium text-gray-600">知识库文档 ({{ tableData.length }})</div>
+        <div class="text-sm font-medium text-gray-600">
+          知识库文档 ({{ tableData.length }})
+          <span v-if="currentFolderLabel" class="text-gray-400 font-normal"> · {{ currentFolderLabel }}</span>
+        </div>
         <div class="flex gap-2">
           <el-button 
             type="success" 
@@ -103,6 +164,11 @@
               </el-icon>
               <span class="font-medium">{{ row.name }}</span>
             </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="文件夹" width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.folderName || '未分类' }}
           </template>
         </el-table-column>
         <el-table-column prop="type" label="类型" width="100">
@@ -217,6 +283,9 @@
       </div>
     </el-dialog>
 
+      </div>
+    </div>
+
     <!-- 分析结果弹窗（正文可滚动，高度随视口限制） -->
     <el-dialog
       v-model="analysisDialogVisible"
@@ -256,15 +325,37 @@
         </div>
       </div>
     </el-dialog>
+
+    <el-dialog
+      v-model="folderDialogVisible"
+      :title="folderDialogMode === 'create' ? '新建文件夹' : '重命名文件夹'"
+      width="400px"
+      destroy-on-close
+      @closed="folderFormName = ''"
+    >
+      <el-input
+        v-model="folderFormName"
+        maxlength="255"
+        show-word-limit
+        placeholder="文件夹名称"
+        @keyup.enter="submitFolderDialog"
+      />
+      <template #footer>
+        <el-button @click="folderDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="folderDialogSubmitting" @click="submitFolderDialog">
+          确定
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
-import { ElMessage } from 'element-plus'
-import { UploadFilled, Document, InfoFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { UploadFilled, Document, InfoFilled, FolderAdd, Delete } from '@element-plus/icons-vue'
 import { marked } from 'marked'
-import { knowledgeAPI } from '../utils/api'
+import { knowledgeAPI, knowledgeFolderAPI } from '../utils/api'
 import { uploadFile, downloadFromMinIO, deleteFromMinIO } from '../services/uploadService'
 import { buildKnowledgeAnalyzePrompt } from '../prompts/index.js'
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
@@ -273,6 +364,127 @@ const fileInput = ref(null)
 const isDragging = ref(false)
 const uploadingFiles = ref([])
 const tableData = ref([])
+const listLoading = ref(false)
+const folderTreeLoading = ref(false)
+const folderTreeData = ref([])
+const currentFolderId = ref('__all__')
+const docSearchQ = ref('')
+const folderDialogVisible = ref(false)
+const folderDialogMode = ref('create')
+const folderFormName = ref('')
+const folderDialogSubmitting = ref(false)
+
+const isRealFolderId = (id) => {
+  const n = Number(id)
+  return Number.isFinite(n) && n > 0
+}
+
+const resolveFolderIdForUpload = () => {
+  if (isRealFolderId(currentFolderId.value)) return Number(currentFolderId.value)
+  if (currentFolderId.value === '__uncategorized__') return null
+  return null
+}
+
+const currentFolderLabel = computed(() => {
+  const find = (nodes) => {
+    for (const n of nodes || []) {
+      if (String(n.id) === String(currentFolderId.value)) return n.label
+      const c = find(n.children)
+      if (c) return c
+    }
+    return null
+  }
+  return find(folderTreeData.value) || ''
+})
+
+const loadFolderTree = async () => {
+  folderTreeLoading.value = true
+  try {
+    const res = await knowledgeFolderAPI.tree()
+    folderTreeData.value = Array.isArray(res?.tree) ? res.tree : []
+  } catch (e) {
+    console.warn('加载文件夹失败', e)
+    folderTreeData.value = [
+      { id: '__all__', label: '全部文档', children: [] },
+      { id: '__uncategorized__', label: '未分类', children: [] },
+    ]
+  } finally {
+    folderTreeLoading.value = false
+  }
+}
+
+const onFolderNodeClick = (node) => {
+  if (!node?.id) return
+  currentFolderId.value = node.id
+  docSearchQ.value = ''
+  loadKnowledgeDocs()
+}
+
+const onDocSearch = () => {
+  loadKnowledgeDocs()
+}
+
+const openCreateFolderDialog = () => {
+  folderDialogMode.value = 'create'
+  folderFormName.value = ''
+  folderDialogVisible.value = true
+}
+
+const openRenameFolderDialog = () => {
+  if (!isRealFolderId(currentFolderId.value)) return
+  folderDialogMode.value = 'rename'
+  folderFormName.value = currentFolderLabel.value || ''
+  folderDialogVisible.value = true
+}
+
+const submitFolderDialog = async () => {
+  const name = folderFormName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入文件夹名称')
+    return
+  }
+  folderDialogSubmitting.value = true
+  try {
+    if (folderDialogMode.value === 'create') {
+      let parentId = null
+      if (isRealFolderId(currentFolderId.value)) parentId = Number(currentFolderId.value)
+      await knowledgeFolderAPI.create({ name, parentId })
+      ElMessage.success('文件夹已创建')
+    } else {
+      await knowledgeFolderAPI.update(Number(currentFolderId.value), { name })
+      ElMessage.success('已重命名')
+    }
+    folderDialogVisible.value = false
+    await loadFolderTree()
+  } catch (e) {
+    ElMessage.error(e?.message || '操作失败')
+  } finally {
+    folderDialogSubmitting.value = false
+  }
+}
+
+const handleDeleteFolderNode = async (data) => {
+  if (!isRealFolderId(data?.id)) return
+  const id = Number(data.id)
+  const label = data.label || ''
+  try {
+    await ElMessageBox.confirm(
+      `确定删除文件夹「${label}」？其中文档将变为未分类。`,
+      '删除文件夹',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+    await knowledgeFolderAPI.delete(id)
+    ElMessage.success('已删除文件夹')
+    if (String(currentFolderId.value) === String(id)) {
+      currentFolderId.value = '__all__'
+      await loadKnowledgeDocs()
+    }
+    await loadFolderTree()
+  } catch (e) {
+    if (e === 'cancel' || e?.message === 'cancel') return
+    ElMessage.error(e?.message || '删除失败')
+  }
+}
 const previewVisible = ref(false)
 const previewContent = ref('')
 const selectedDocs = ref([])
@@ -352,38 +564,46 @@ const loadFromStorage = () => {
   }
 }
 
-onMounted(() => {
-  loadKnowledgeDocs()
+onMounted(async () => {
+  await loadFolderTree()
+  await loadKnowledgeDocs()
+})
+
+const mapKnowledgeDocRow = (doc) => ({
+  id: doc.id,
+  name: doc.name || doc.filename || '未命名文档',
+  type: doc.type || doc.fileType || 'txt',
+  size: doc.size || 0,
+  content: doc.content || '',
+  file_path: doc.file_path || doc.filePath || '',
+  folderId: doc.folderId ?? doc.folder_id ?? null,
+  folderName: doc.folderName || doc.folder_name || '',
+  words: doc.words ?? (doc.content || '').toString().length,
+  keywords: doc.keywords || [],
+  summary: doc.summary || '',
+  keyPoints: doc.keyPoints || [],
+  analyzedAt: doc.analyzedAt || null,
+  createdAt: doc.createdAt ? formatZhCnDateTime(doc.createdAt) : nowZhCnDateTime(),
 })
 
 // 从后端 API 加载知识库文档（API优先，回退到localStorage）
 const loadKnowledgeDocs = async () => {
+  listLoading.value = true
   try {
-    // 优先从后端 API 加载
-    const { list } = await knowledgeAPI.list()
-    if (Array.isArray(list) && list.length > 0) {
-      tableData.value = list.map(doc => ({
-        id: doc.id,
-        name: doc.name || doc.filename || '未命名文档',
-        type: doc.type || doc.fileType || 'txt',
-        size: doc.size || 0,
-        content: doc.content || '',
-        file_path: doc.file_path || doc.filePath || '',
-        words: (doc.content || '').toString().length,
-        keywords: doc.keywords || [],
-        summary: doc.summary || '',
-        keyPoints: doc.keyPoints || [],
-        analyzedAt: doc.analyzedAt || null,
-        createdAt: doc.createdAt ? formatZhCnDateTime(doc.createdAt) : nowZhCnDateTime()
-      }))
-      // 同步到 localStorage 作为备份
+    const params = { folderId: currentFolderId.value }
+    const q = docSearchQ.value.trim()
+    if (q) params.q = q
+    const { list } = await knowledgeAPI.list(params)
+    if (Array.isArray(list)) {
+      tableData.value = list.map(mapKnowledgeDocRow)
       saveToStorage()
-      return
+      if (list.length > 0) return
     }
   } catch (e) {
     console.warn('从后端加载知识库失败，尝试从 localStorage 加载:', e)
+  } finally {
+    listLoading.value = false
   }
-  // 回退到 localStorage
   loadFromStorage()
 }
 
@@ -480,7 +700,8 @@ const uploadFileToMinIO = (file) => {
               fileType: ext,
               size: file.size,
               content: content,
-              file_path: uploadResult.url
+              file_path: uploadResult.url,
+              folderId: resolveFolderIdForUpload(),
             })
             fileData.id = savedDoc.id
             ElMessage.success('文档已保存到服务器')
@@ -545,7 +766,8 @@ const uploadFileToMinIO = (file) => {
               type: ext,
               fileType: ext,
               size: file.size,
-              file_path: uploadResult.url // MinIO URL
+              file_path: uploadResult.url,
+              folderId: resolveFolderIdForUpload(),
             })
             console.log('知识库保存成功:', savedDoc)
             fileData.id = savedDoc.id
@@ -902,13 +1124,24 @@ const handleBatchAIAnalyze = async () => {
 const previewHtml = ref('')
 
 const handlePreview = async (row) => {
-  // 读取真实文件内容
-  const content = row.content || ''
-  
-  console.log('Preview:', row.type, content.length)
-  
+  let content = row.content || ''
+  if (!content && row.id) {
+    try {
+      const full = await knowledgeAPI.get(row.id)
+      content = full?.content || ''
+      if (content) {
+        const idx = tableData.value.findIndex((d) => d.id === row.id)
+        if (idx >= 0) {
+          tableData.value[idx] = { ...tableData.value[idx], content, words: content.length }
+        }
+      }
+    } catch (e) {
+      console.warn('拉取文档正文失败', e)
+    }
+  }
+
   if (!content) {
-    ElMessage.warning('文件内容已丢失（可能因 localStorage 满），请重新上传')
+    ElMessage.warning('暂无正文，请先抽取或重新上传')
     return
   }
   
@@ -1051,6 +1284,68 @@ const handleBatchDelete = async () => {
 .prose pre code { background: transparent; padding: 0; }
 .prose strong { font-weight: 600; }
 .prose a { color: #3b82f6; text-decoration: underline; }
+
+.knowledge-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.knowledge-sidebar {
+  flex: 0 0 260px;
+  max-width: 280px;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fafbfc;
+}
+.knowledge-sidebar-search {
+  margin-bottom: 10px;
+}
+.knowledge-sidebar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.knowledge-folder-tree {
+  max-height: calc(100vh - 320px);
+  overflow: auto;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 4px;
+}
+.knowledge-folder-tree :deep(.el-tree-node__content) {
+  height: 32px;
+}
+.folder-tree-node {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding-right: 4px;
+}
+.folder-tree-node-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-tree-node-delete {
+  flex-shrink: 0;
+  margin-left: 6px;
+  font-size: 14px;
+  color: #909399;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.folder-tree-node-delete:hover {
+  color: #f56c6c;
+}
+.knowledge-main {
+  flex: 1;
+  min-width: 0;
+}
 
 /* 分析结果弹窗：限制高度、正文区域滚动 */
 :deep(.knowledge-analysis-dialog .el-dialog__body) {

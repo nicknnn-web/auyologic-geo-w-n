@@ -44,15 +44,33 @@ const createAPI = (path) => ({
 export const keywordsAPI = createAPI('keywords')
 export const questionsAPI = createAPI('questions')
 const knowledgeBase = createAPI('knowledge')
-/** 企业知识库：含 PDF/Word 正文抽取 */
+/** 企业知识库：含 PDF/Word 正文抽取；list 支持 folderId、q */
 export const knowledgeAPI = {
   ...knowledgeBase,
+  list: (params = {}) =>
+    api.get('/api/knowledge', { params }).then((data) => unwrapListPayload(data)),
   extractText: (id) =>
     api.post(`/api/knowledge/${encodeURIComponent(String(id))}/extract-text`, {}, { timeout: 120000 }),
+}
+
+/** 知识库文件夹 */
+export const knowledgeFolderAPI = {
+  tree: () => api.get('/api/knowledge-folders/tree'),
+  create: (data) => api.post('/api/knowledge-folders', data),
+  update: (id, data) => api.put(`/api/knowledge-folders/${id}`, data),
+  delete: (id) => api.delete(`/api/knowledge-folders/${id}`),
 }
 export const imagesAPI = createAPI('images')
 export const commandsAPI = createAPI('instruction-templates')
 export const draftsAPI = createAPI('drafts')
+
+/** 草稿箱文件夹 */
+export const draftFolderAPI = {
+  tree: () => api.get('/api/draft-folders/tree'),
+  create: (data) => api.post('/api/draft-folders', data),
+  update: (id, data) => api.put(`/api/draft-folders/${id}`, data),
+  delete: (id) => api.delete(`/api/draft-folders/${id}`),
+}
 export const historyAPI = createAPI('history')
 export const mediaAccountsAPI = createAPI('platform-accounts')
 export const publishTasksAPI = createAPI('publish-tasks')

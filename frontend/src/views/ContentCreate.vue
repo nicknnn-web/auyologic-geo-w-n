@@ -217,7 +217,7 @@
         <el-button size="small" @click="copyContent" type="primary" plain>
           <el-icon class="mr-1"><CopyDocument /></el-icon>复制
         </el-button>
-        <el-button size="small" @click="handleSaveDraft" type="success" plain>
+        <el-button size="small" @click="openSaveDraftDialog('save')" type="success" plain>
           <el-icon class="mr-1"><Folder /></el-icon>保存草稿
         </el-button>
       </div>
@@ -299,19 +299,74 @@
     </el-collapse>
 
     <el-empty v-else-if="!isGenerating" description="选择关键词和内容类型，点击开始生成" />
+
+    <el-dialog
+      v-model="saveDraftDialogVisible"
+      title="保存到草稿箱"
+      width="440px"
+      destroy-on-close
+      @open="onSaveDraftDialogOpen"
+    >
+      <p class="text-sm text-gray-500 mb-3">选择现有文件夹，或新建文件夹后保存</p>
+      <div class="save-draft-new-folder flex gap-2 mb-4">
+        <el-input
+          v-model="newFolderName"
+          clearable
+          placeholder="输入新文件夹名称"
+          maxlength="50"
+          @keyup.enter="createFolderAndSelect"
+        />
+        <el-button plain :loading="newFolderCreating" @click="createFolderAndSelect">新建</el-button>
+        <el-button
+          type="primary"
+          :loading="newFolderCreating || saveDraftSubmitting"
+          @click="createFolderAndSave"
+        >
+          新建并保存
+        </el-button>
+      </div>
+      <el-tree
+        v-loading="saveDraftFolderLoading"
+        class="save-draft-folder-tree"
+        :data="saveDraftFolderTree"
+        node-key="id"
+        :props="{ label: 'label', children: 'children' }"
+        highlight-current
+        :expand-on-click-node="false"
+        default-expand-all
+        :current-node-key="saveDraftSelectedFolderId"
+        @node-click="onSaveDraftFolderClick"
+      >
+        <template #default="{ node, data }">
+          <span
+            class="save-draft-folder-label"
+            :class="{ 'is-disabled': data.id === '__all__' }"
+          >
+            {{ node.label }}
+            <span v-if="data.id === '__all__'" class="text-xs text-gray-400 ml-1">（不可选）</span>
+          </span>
+        </template>
+      </el-tree>
+      <template #footer>
+        <el-button @click="saveDraftDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saveDraftSubmitting" @click="confirmSaveDraft">
+          保存到此文件夹
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { knowledgeAPI, historyAPI } from '../utils/api'
+import { knowledgeAPI, historyAPI, draftFolderAPI } from '../utils/api'
 import { fetchAllPages } from '../utils/pagedApi.js'
 import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
-import { Folder, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
+import { Folder, FolderAdd, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 
 // ========== API 配置 ==========
@@ -319,6 +374,143 @@ const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
 
 const router = useRouter()
+const route = useRoute()
+
+const isRealFolderId = (id) => {
+  const n = Number(id)
+  return Number.isFinite(n) && n > 0
+}
+
+const resolveSaveFolderId = () => {
+  const saved = form.value.saveFolderId
+  if (saved != null && Number(saved) > 0) return Number(saved)
+  const q = route.query.folderId
+  const n = Number(q)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+const saveDraftDialogVisible = ref(false)
+const saveDraftFolderLoading = ref(false)
+const saveDraftFolderTree = ref([])
+const saveDraftSelectedFolderId = ref('__uncategorized__')
+const saveDraftSubmitting = ref(false)
+const newFolderName = ref('')
+const newFolderCreating = ref(false)
+/** 'save' 更新或新建；'asNew' 强制另存为新草稿 */
+const saveDraftMode = ref('save')
+
+const folderIdFromSelection = (selectedId) => {
+  const id = selectedId ?? saveDraftSelectedFolderId.value
+  if (id === '__uncategorized__' || id == null || id === '') return null
+  if (isRealFolderId(id)) return Number(id)
+  return null
+}
+
+const loadSaveDraftFolderTree = async () => {
+  saveDraftFolderLoading.value = true
+  try {
+    const res = await draftFolderAPI.tree()
+    saveDraftFolderTree.value = Array.isArray(res?.tree) ? res.tree : []
+  } catch (e) {
+    console.warn('加载草稿文件夹失败', e)
+    saveDraftFolderTree.value = [
+      { id: '__all__', label: '全部草稿', children: [] },
+      { id: '__uncategorized__', label: '未分类', children: [] },
+    ]
+  } finally {
+    saveDraftFolderLoading.value = false
+  }
+}
+
+const onSaveDraftDialogOpen = async () => {
+  await loadSaveDraftFolderTree()
+  const existing = resolveSaveFolderId()
+  saveDraftSelectedFolderId.value = existing ? String(existing) : '__uncategorized__'
+}
+
+const onSaveDraftFolderClick = (data) => {
+  if (!data?.id || data.id === '__all__') {
+    ElMessage.info('请选择具体文件夹或「未分类」')
+    return
+  }
+  saveDraftSelectedFolderId.value = data.id
+}
+
+const createDraftFolder = async (name) => {
+  let parentId = null
+  if (isRealFolderId(saveDraftSelectedFolderId.value)) {
+    parentId = Number(saveDraftSelectedFolderId.value)
+  }
+  const res = await draftFolderAPI.create({ name, parentId })
+  const newId = res?.folder?.id
+  if (!newId) throw new Error('创建文件夹失败')
+  await loadSaveDraftFolderTree()
+  saveDraftSelectedFolderId.value = String(newId)
+  form.value.saveFolderId = Number(newId)
+  newFolderName.value = ''
+  return Number(newId)
+}
+
+const createFolderAndSelect = async () => {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入文件夹名称')
+    return
+  }
+  newFolderCreating.value = true
+  try {
+    await createDraftFolder(name)
+    ElMessage.success(`已创建文件夹「${name}」，可点击「保存到此文件夹」完成保存`)
+  } catch (e) {
+    ElMessage.error(e?.message || '新建文件夹失败')
+  } finally {
+    newFolderCreating.value = false
+  }
+}
+
+const createFolderAndSave = async () => {
+  const name = newFolderName.value.trim()
+  if (!name) {
+    ElMessage.warning('请输入文件夹名称')
+    return
+  }
+  newFolderCreating.value = true
+  saveDraftSubmitting.value = true
+  try {
+    const folderId = await createDraftFolder(name)
+    const result = await performSaveDraft(folderId)
+    if (saveDraftMode.value === 'asNew') form.value.editId = null
+    const msg =
+      result === 'updated'
+        ? `草稿已更新并保存到新文件夹「${name}」`
+        : `已保存到新文件夹「${name}」`
+    ElMessage.success(msg)
+    saveDraftDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error(e?.message || '新建并保存失败')
+  } finally {
+    newFolderCreating.value = false
+    saveDraftSubmitting.value = false
+  }
+}
+
+const findFolderLabelInTree = (nodes, targetId) => {
+  for (const n of nodes || []) {
+    if (String(n.id) === String(targetId)) return n.label
+    const child = findFolderLabelInTree(n.children, targetId)
+    if (child) return child
+  }
+  return null
+}
+
+const openSaveDraftDialog = (mode = 'save') => {
+  if (!generatedContent.value?.trim()) {
+    ElMessage.warning('请先生成内容再保存草稿')
+    return
+  }
+  saveDraftMode.value = mode
+  saveDraftDialogVisible.value = true
+}
 const form = ref({
   keywords: [],
   audience: '',
@@ -326,23 +518,46 @@ const form = ref({
   command: '',
   extra: '',
   editId: null,
+  saveFolderId: null,
   selectedDocs: [],    // Step 2: 选中的知识库文档
   selectedImages: []   // Step 3: 选中的配图
 })
 /** 多选关键词拼成一句（用于 prompt、历史、草稿 brand 字段） */
-const selectedKeywordPhrase = computed(() =>
-  (form.value.keywords || []).map((k) => String(k).trim()).filter(Boolean).join('、')
-)
+const selectedKeywordPhrase = computed(() => uniqueKeywordStrings(form.value.keywords).join('、'))
+
+/** 已选关键词去重（保持顺序） */
+function uniqueKeywordStrings(list) {
+  const seen = new Set()
+  const out = []
+  for (const item of list || []) {
+    const k = String(item).trim()
+    if (!k || seen.has(k)) continue
+    seen.add(k)
+    out.push(k)
+  }
+  return out
+}
+
+/** 下拉选项按 keyword 文本去重，避免同文案多 id 导致多选框重复选中 */
+function dedupeKeywordOptions(rows) {
+  const seen = new Set()
+  return (rows || []).filter((kw) => {
+    const text = String(kw?.keyword ?? '').trim()
+    if (!text || seen.has(text)) return false
+    seen.add(text)
+    return true
+  })
+}
 
 function parseKeywordsFromStored(raw) {
   if (raw == null || raw === '') return []
   if (Array.isArray(raw)) {
-    return raw.map((k) => String(k).trim()).filter(Boolean)
+    return uniqueKeywordStrings(raw.map((k) => String(k).trim()).filter(Boolean))
   }
   const s = String(raw).trim()
   if (!s) return []
-  if (s.includes('、')) return s.split('、').map((x) => x.trim()).filter(Boolean)
-  if (s.includes(',')) return s.split(',').map((x) => x.trim()).filter(Boolean)
+  if (s.includes('、')) return uniqueKeywordStrings(s.split('、').map((x) => x.trim()))
+  if (s.includes(',')) return uniqueKeywordStrings(s.split(',').map((x) => x.trim()))
   return [s]
 }
 const generatedContent = ref('')
@@ -420,9 +635,13 @@ const applyScene = (scene) => {
   ElMessage.success(`已应用「${scene.name}」：${suffix}`)
 }
 
-// 关键词变化时清除场景选中状态
+// 关键词变化时去重并清除场景选中状态
 const onKeywordChange = () => {
   activeScene.value = null
+  const deduped = uniqueKeywordStrings(form.value.keywords)
+  if (deduped.length !== (form.value.keywords?.length ?? 0)) {
+    form.value.keywords = deduped
+  }
 }
 
 // 内容类型变化时清除场景选中状态
@@ -640,10 +859,11 @@ onMounted(async () => {
 
   // 从后端 API 加载关键词（分页接口，多页合并）
   try {
-    keywords.value = await fetchAllPages(
+    const rawKeywords = await fetchAllPages(
       (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
       { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
     )
+    keywords.value = dedupeKeywordOptions(rawKeywords)
   } catch {
     keywords.value = []
     ElMessage.warning('关键词加载失败，请检查网络')
@@ -670,6 +890,12 @@ onMounted(async () => {
   // 加载生成历史
   await loadHistory()
 
+  const qFolder = route.query.folderId
+  const qn = Number(qFolder)
+  if (Number.isFinite(qn) && qn > 0) {
+    form.value.saveFolderId = qn
+  }
+
   // 检查是否有草稿要编辑
   const savedDraft = sessionStorage.getItem('editDraft')
   if (savedDraft) {
@@ -685,6 +911,9 @@ onMounted(async () => {
       generatedContent.value = draft.content || ''
       generatedTitle.value = draft.title || ''
       form.value.editId = draft.id
+      const fid = draft.folderId ?? draft.folder_id
+      form.value.saveFolderId =
+        fid != null && Number(fid) > 0 ? Number(fid) : null
       // 恢复选中的文档和图片
       form.value.selectedDocs = draft.selectedDocs || []
       form.value.selectedImages = draft.selectedImages || []
@@ -1362,7 +1591,7 @@ const adjustLength = async (type) => {
   }
 }
 
-const handleSaveDraft = async () => {
+const performSaveDraft = async (folderId) => {
   const draftData = {
     title: generatedTitle.value || selectedKeywordPhrase.value + ' 软文',
     brand: selectedKeywordPhrase.value,
@@ -1373,82 +1602,82 @@ const handleSaveDraft = async () => {
     extra: form.value.extra,
     selectedDocs: form.value.selectedDocs,
     selectedImages: form.value.selectedImages,
-    status: '草稿'
-  }
-
-  if (form.value.editId) {
-    const editId = Number(form.value.editId)
-    const userId = 'default_user'
-    try {
-      await fetch(`${API_BASE_URL}/api/drafts/${editId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': userId
-        },
-        body: JSON.stringify(draftData)
-      })
-      ElMessage.success('草稿已更新')
-    } catch (e) {
-      ElMessage.error('草稿更新失败，请重试')
-    }
-  } else {
-    const userId = 'default_user'
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/drafts`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': userId
-        },
-        body: JSON.stringify(draftData)
-      })
-      if (res.ok) {
-        ElMessage.success('已保存到草稿箱')
-      } else {
-        ElMessage.error('保存失败，请重试')
-      }
-    } catch (e) {
-      ElMessage.error('保存失败，请检查网络')
-    }
-  }
-}
-
-const handleSaveAsNew = async () => {
-  const draftData = {
-    title: generatedTitle.value || selectedKeywordPhrase.value + ' 软文',
-    brand: selectedKeywordPhrase.value,
-    content: generatedContent.value,
-    audience: form.value.audience,
-    platforms: form.value.platforms,
-    commandId: form.value.command,
-    extra: form.value.extra,
-    selectedDocs: form.value.selectedDocs,
-    selectedImages: form.value.selectedImages,
-    status: '草稿'
+    status: '草稿',
+    ...(folderId != null ? { folderId } : {}),
   }
 
   const userId = 'default_user'
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/drafts`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-user-id': userId
-      },
-      body: JSON.stringify(draftData)
-    })
-    if (res.ok) {
-      ElMessage.success('已另存为新草稿')
-    } else {
-      ElMessage.error('保存失败，请重试')
-    }
-  } catch (e) {
-    ElMessage.error('保存失败，请检查网络')
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-user-id': userId,
   }
 
-  form.value.editId = null
+  const isUpdate =
+    saveDraftMode.value === 'save' && form.value.editId != null && Number(form.value.editId) > 0
+
+  if (isUpdate) {
+    const editId = Number(form.value.editId)
+    const res = await fetch(`${API_BASE_URL}/api/drafts/${editId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(draftData),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || '草稿更新失败')
+    }
+    return 'updated'
+  }
+
+  const res = await fetch(`${API_BASE_URL}/api/drafts`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(draftData),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || '保存失败')
+  }
+  const created = await res.json().catch(() => null)
+  if (created?.id) form.value.editId = created.id
+  return 'created'
 }
+
+const confirmSaveDraft = async () => {
+  if (saveDraftSelectedFolderId.value === '__all__') {
+    ElMessage.warning('请选择具体文件夹或「未分类」')
+    return
+  }
+  const folderId = folderIdFromSelection()
+  form.value.saveFolderId = folderId
+
+  saveDraftSubmitting.value = true
+  try {
+    const result = await performSaveDraft(folderId)
+    if (saveDraftMode.value === 'asNew') {
+      form.value.editId = null
+    }
+    const folderLabel =
+      saveDraftSelectedFolderId.value === '__uncategorized__'
+        ? '未分类'
+        : findFolderLabelInTree(saveDraftFolderTree.value, saveDraftSelectedFolderId.value) ||
+          '所选文件夹'
+    if (result === 'updated') {
+      ElMessage.success(`草稿已更新并保存到「${folderLabel}」`)
+    } else {
+      ElMessage.success(`已保存到草稿箱「${folderLabel}」`)
+    }
+    saveDraftDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error(e?.message || '保存失败，请重试')
+  } finally {
+    saveDraftSubmitting.value = false
+  }
+}
+
+const handleSaveDraft = () => openSaveDraftDialog('save')
+
+const handleSaveAsNew = () => openSaveDraftDialog('asNew')
 </script>
 
 <style scoped>
@@ -1478,5 +1707,21 @@ const handleSaveAsNew = async () => {
   border-color: #8b5cf6;
   background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
   box-shadow: 0 4px 12px rgba(139, 92, 246, 0.2);
+}
+
+.save-draft-folder-tree {
+  max-height: 280px;
+  overflow: auto;
+  border: 1px solid #ebeef5;
+  border-radius: 6px;
+  padding: 6px 4px;
+  background: #fafbfc;
+}
+.save-draft-folder-tree :deep(.el-tree-node__content) {
+  height: 32px;
+}
+.save-draft-folder-label.is-disabled {
+  color: #c0c4cc;
+  cursor: not-allowed;
 }
 </style>

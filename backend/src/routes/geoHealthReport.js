@@ -1,5 +1,7 @@
 /**
- * GET /api/geo-health-report
+ * GET /api/geo-health-report?taskId=  可选，指定已完成任务；缺省为当前企业最新一条
+ * GET /api/geo-health-report/history?brand=&dateFrom=&dateTo=&page=&pageSize=
+ * DELETE /api/geo-health-report/history/:taskId
  * GET /api/geo-health-report/sentiment-sources?taskId=&page=&pageSize=&q=
  * GET /api/geo-health-report/source-articles?taskId=&page=&pageSize=&q=
  * GET /api/geo-health-report/task-qa?taskId=
@@ -318,12 +320,58 @@ function buildCompetitorDetailPayload(name, count, pct, detailRows) {
   };
 }
 
+const FINISHED_TASK_JOIN = `
+  INNER JOIN (
+    SELECT task_id, MAX(created_at) AS last_analysis_at
+    FROM geo_health_analysis
+    GROUP BY task_id
+  ) finished ON finished.task_id = t.id
+`;
+
+/**
+ * 解析可出报告的已完成任务：指定 taskId，或当前企业 keyword 下最新一条。
+ * @returns {Promise<{ task_id: number, check_time: Date, task_keyword: string } | null>}
+ */
+async function resolveCompletedReportTask(pool, userId, { taskId: requestedTaskId, brandKey } = {}) {
+  const tid = Number(requestedTaskId);
+  if (Number.isFinite(tid) && tid > 0) {
+    const r = await pool.query(
+      `SELECT t.id AS task_id, finished.last_analysis_at AS check_time,
+              trim(coalesce(t.keyword, '')) AS task_keyword
+       FROM geo_health_task t
+       ${FINISHED_TASK_JOIN}
+       WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
+       LIMIT 1`,
+      [tid, userId]
+    );
+    return r.rows[0] || null;
+  }
+  const r = await pool.query(
+    `SELECT t.id AS task_id, finished.last_analysis_at AS check_time,
+            trim(coalesce(t.keyword, '')) AS task_keyword
+     FROM geo_health_task t
+     ${FINISHED_TASK_JOIN}
+     WHERE t.user_id = $1 AND t.status = 'completed'
+       AND (
+         trim(coalesce(t.keyword, '')) = $2
+         OR trim(coalesce(t.keyword, '')) = ''
+       )
+     ORDER BY finished.last_analysis_at DESC NULLS LAST, t.id DESC
+     LIMIT 1`,
+    [userId, brandKey]
+  );
+  return r.rows[0] || null;
+}
+
 // ─────────────────────────────────────────────
 // 主路由
 // ─────────────────────────────────────────────
 router.get('/geo-health-report', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'] || 'default_user';
+    const requestedTaskId = parseInt(String(req.query.taskId ?? ''), 10);
+    const explicitTaskId =
+      Number.isFinite(requestedTaskId) && requestedTaskId > 0 ? requestedTaskId : null;
 
     // 企业信息
     const enterpriseRes = await pool.query(
@@ -331,7 +379,7 @@ router.get('/geo-health-report', async (req, res) => {
       [userId]
     );
     const enterprise = enterpriseRes.rows[0] || {};
-    const brandName = String(enterprise.company_name || '品牌').trim();
+    let brandName = String(enterprise.company_name || '品牌').trim();
     const brandDomain = String(enterprise.website || '').trim();
     const industry = String(enterprise.industry || '').trim();
     const brandDescription = String(enterprise.description || '').trim();
@@ -339,32 +387,23 @@ router.get('/geo-health-report', async (req, res) => {
     /** 与 geo_health_task.keyword 比对用（创建任务时写入的企业名称）；空字符串与库内空 keyword 对齐 */
     const brandKey = brandName.slice(0, 500);
 
-    // 取当前企业名称下「分析流水线最后写入时间」最晚的已完成任务；keyword 为空视为历史数据（迁移前）仍参与匹配
-    const taskRes = await pool.query(
-      `SELECT t.id AS task_id, finished.last_analysis_at AS check_time
-       FROM geo_health_task t
-       INNER JOIN (
-         SELECT task_id, MAX(created_at) AS last_analysis_at
-         FROM geo_health_analysis
-         GROUP BY task_id
-       ) finished ON finished.task_id = t.id
-       WHERE t.user_id = $1 AND t.status = 'completed'
-         AND (
-           trim(coalesce(t.keyword, '')) = $2
-           OR trim(coalesce(t.keyword, '')) = ''
-         )
-       ORDER BY finished.last_analysis_at DESC NULLS LAST, t.id DESC
-       LIMIT 1`,
-      [userId, brandKey]
-    );
+    const taskRow = await resolveCompletedReportTask(pool, userId, {
+      taskId: explicitTaskId,
+      brandKey,
+    });
 
-    // 如果没有任何分析数据，返回空白报告
-    if (taskRes.rows.length === 0) {
+    if (!taskRow) {
+      if (explicitTaskId) {
+        return res.status(404).json({ success: false, error: '报告不存在或无权访问' });
+      }
       return res.json(emptyReport({ brandName, brandDomain }));
     }
 
-    const taskId = taskRes.rows[0].task_id;
-    const checkTime = taskRes.rows[0].check_time;
+    const taskId = taskRow.task_id;
+    const checkTime = taskRow.check_time;
+    if (String(taskRow.task_keyword || '').trim()) {
+      brandName = String(taskRow.task_keyword).trim();
+    }
 
     const logoConnRes = await pool.query(
       `SELECT vendor_name, logo_relpath, logo_bg_color
@@ -1161,6 +1200,128 @@ function buildModelBullets({ score, total, visibleCount }) {
   }
   return bullets;
 }
+
+/**
+ * 历史报告列表（已完成且有分析数据的任务）
+ */
+router.get('/geo-health-report/history', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const brandQ = String(req.query.brand ?? req.query.q ?? '').trim();
+    const dateFrom = String(req.query.dateFrom ?? '').trim();
+    const dateTo = String(req.query.dateTo ?? '').trim();
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const pageSize = Math.min(50, Math.max(1, parseInt(String(req.query.pageSize ?? '10'), 10) || 10));
+    const offset = (page - 1) * pageSize;
+
+    const params = [userId];
+    const where = [`t.user_id = $1`, `t.status = 'completed'`];
+    let pi = 2;
+
+    if (brandQ) {
+      where.push(
+        `(trim(coalesce(t.keyword, '')) ILIKE '%' || $${pi} || '%'
+          OR trim(coalesce(u.company_name, '')) ILIKE '%' || $${pi} || '%')`
+      );
+      params.push(brandQ);
+      pi += 1;
+    }
+    if (dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) {
+      where.push(`finished.last_analysis_at >= $${pi}::date`);
+      params.push(dateFrom);
+      pi += 1;
+    }
+    if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) {
+      where.push(`finished.last_analysis_at < ($${pi}::date + interval '1 day')`);
+      params.push(dateTo);
+      pi += 1;
+    }
+
+    const whereSql = where.join(' AND ');
+    const fromSql = `
+      FROM geo_health_task t
+      ${FINISHED_TASK_JOIN}
+      LEFT JOIN users u ON u.user_id = t.user_id
+      WHERE ${whereSql}
+    `;
+
+    const countRes = await pool.query(`SELECT COUNT(*)::int AS total ${fromSql}`, params);
+    const total = countRes.rows[0]?.total ?? 0;
+
+    const listRes = await pool.query(
+      `SELECT t.id AS task_id,
+              COALESCE(NULLIF(trim(t.keyword), ''), NULLIF(trim(u.company_name), ''), '品牌') AS brand_name,
+              finished.last_analysis_at AS check_time,
+              t.created_at,
+              (SELECT (c.report_payload->>'healthScore')::float
+               FROM geo_task_cache c WHERE c.task_id = t.id LIMIT 1) AS health_score,
+              (SELECT COUNT(*)::int FROM geo_health_analysis a
+               WHERE a.task_id = t.id AND a.error_text IS NULL) AS analysis_count
+       ${fromSql}
+       ORDER BY finished.last_analysis_at DESC NULLS LAST, t.id DESC
+       LIMIT $${pi} OFFSET $${pi + 1}`,
+      [...params, pageSize, offset]
+    );
+
+    res.json({
+      success: true,
+      page,
+      pageSize,
+      total,
+      items: listRes.rows.map((r) => ({
+        taskId: r.task_id,
+        brandName: r.brand_name,
+        checkTime: r.check_time,
+        createdAt: r.created_at,
+        healthScore:
+          r.health_score != null && Number.isFinite(Number(r.health_score))
+            ? Math.round(Number(r.health_score) * 10) / 10
+            : null,
+        analysisCount: r.analysis_count ?? 0,
+      })),
+    });
+  } catch (err) {
+    console.error('[geo-health-report/history]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 删除已完成的历史报告任务（级联分析、词云、缓存等）
+ */
+router.delete('/geo-health-report/history/:taskId', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.params.taskId ?? ''), 10);
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '无效的任务 id' });
+    }
+    const del = await pool.query(
+      `DELETE FROM geo_health_task
+       WHERE id = $1 AND user_id = $2 AND status = 'completed'
+       RETURNING id`,
+      [taskId, userId]
+    );
+    if (!del.rows.length) {
+      const chk = await pool.query(`SELECT id, status FROM geo_health_task WHERE id = $1 AND user_id = $2`, [
+        taskId,
+        userId,
+      ]);
+      if (!chk.rows.length) {
+        return res.status(404).json({ success: false, error: '报告不存在' });
+      }
+      return res.status(400).json({
+        success: false,
+        error: '仅可删除已完成的报告；进行中的任务请使用「中止生成」',
+        status: chk.rows[0].status,
+      });
+    }
+    res.json({ success: true, deletedTaskId: del.rows[0].id });
+  } catch (err) {
+    console.error('[geo-health-report/history DELETE]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 function emptyReport({ brandName, brandDomain }) {
   return {

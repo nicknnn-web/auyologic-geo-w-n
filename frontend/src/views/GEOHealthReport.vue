@@ -27,6 +27,10 @@
             <el-icon><MagicStick /></el-icon>
             {{ generating ? generatingText : '生成体检报告' }}
           </el-button>
+          <el-button size="small" plain :disabled="generating" @click="openHistoryDialog">
+            <el-icon><Clock /></el-icon>
+            查看历史报告
+          </el-button>
           <el-button
             v-if="generating && activeTaskId"
             size="small"
@@ -90,6 +94,10 @@
             <el-icon><MagicStick /></el-icon>
             {{ generating ? generatingText : '生成体检报告' }}
           </el-button>
+          <el-button size="small" plain :disabled="generating" @click="openHistoryDialog">
+            <el-icon><Clock /></el-icon>
+            查看历史报告
+          </el-button>
           <el-button
             v-if="generating && activeTaskId"
             size="small"
@@ -131,6 +139,82 @@
             </div>
           </template>
           <template #default>
+            <div
+              v-if="showWebsiteScanBlock"
+              class="mv-rest-chart-block website-scan-block"
+              role="region"
+              aria-label="官网技术扫描"
+            >
+              <div class="mv-rest-chart-head">
+                <div class="section-title-row">
+                  <h2 class="section-title">官网技术扫描</h2>
+                  <span class="section-tag">WEBSITE TECH SCAN</span>
+                </div>
+              </div>
+              <p class="ai-health-block-hint">
+                数据来自「网站优化检测」中与<strong>企业设置官网</strong>域名匹配的最新记录。
+              </p>
+              <div v-loading="websiteScanLoading" class="website-scan-compact">
+                <template v-if="websiteScanMatch">
+                  <div class="website-scan-score-col">
+                    <div class="website-scan-score-label">综合技术分</div>
+                    <div
+                      class="website-scan-score-value"
+                      :class="'website-scan-score-value--' + websiteScanScoreTone"
+                    >
+                      {{ websiteScanMatch.score }}
+                    </div>
+                    <div class="website-scan-score-sub">/ 100</div>
+
+                  </div>
+                  <div class="website-scan-dims">
+                    <div v-for="dim in websiteScanDims" :key="dim.key" class="website-scan-dim">
+                      <div class="website-scan-dim-head">
+                        <span>{{ dim.label }}</span>
+                        <span class="website-scan-dim-val"><strong>{{ dim.score }}</strong>/{{ dim.max }}</span>
+                      </div>
+                      <div class="website-scan-dim-bar">
+                        <div
+                          class="website-scan-dim-fill"
+                          :class="'website-scan-dim-fill--' + websiteScanScoreTone"
+                          :style="{ width: dim.pct + '%' }"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div class="website-scan-issues">
+                    <div class="website-scan-issues-title">
+                      待改进摘要
+                      <span v-if="websiteScanIssuesTop.length > 2" class="website-scan-issues-hint">可滚动查看</span>
+                    </div>
+                    <div
+                      v-if="websiteScanIssuesTop.length"
+                      class="website-scan-issues-scroll"
+                      tabindex="0"
+                      role="region"
+                      aria-label="待改进摘要列表"
+                    >
+                      <ul class="website-scan-issue-list">
+                        <li v-for="(w, i) in websiteScanIssuesTop" :key="i" :title="w.title + '：' + w.desc">
+                          <span class="website-scan-issue-dot" />
+                          <span class="website-scan-issue-text">{{ w.title }}：{{ w.desc }}</span>
+                        </li>
+                      </ul>
+                    </div>
+                    <p v-else class="website-scan-issues-empty">暂无 warn 级问题</p>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="website-scan-empty">
+                    <p v-if="enterpriseSettings.website">
+                      未匹配到与 <strong>{{ enterpriseSettings.website }}</strong> 同域名的检测记录，请先在「网站优化检测」完成扫描。
+                    </p>
+                    <p v-else>请先在「企业设置」填写官网地址，并在「网站优化检测」执行扫描。</p>
+                  </div>
+                </template>
+              </div>
+            </div>
+
             <div v-if="aiHealthDisplayCards.length" class="mv-rest-chart-block" role="region" aria-label="各模型 AI 健康分与可见度">
               <div class="mv-rest-chart-head">
                 <div class="section-title-row">
@@ -995,6 +1079,72 @@
     </div>
   </div>
 
+  <!-- 历史报告列表 -->
+  <el-dialog
+    v-model="historyDialogVisible"
+    title="历史体检报告"
+    width="880px"
+    class="history-report-dialog"
+    destroy-on-close
+    align-center
+  >
+    <div class="history-report-toolbar">
+      <el-input
+        v-model="historyBrandQ"
+        clearable
+        placeholder="按品牌名模糊搜索"
+        style="width: 220px"
+        @keyup.enter="onHistorySearch"
+      />
+      <el-date-picker
+        v-model="historyDateRange"
+        type="daterange"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        value-format="YYYY-MM-DD"
+        clearable
+        style="width: 280px"
+      />
+      <el-button type="primary" :loading="historyLoading" @click="onHistorySearch">查询</el-button>
+      <el-button :disabled="historyLoading" @click="resetHistoryFilters">重置</el-button>
+    </div>
+    <el-table v-loading="historyLoading" :data="historyItems" stripe border empty-text="暂无历史报告">
+      <el-table-column prop="taskId" label="任务 ID" width="88" align="center" />
+      <el-table-column prop="brandName" label="品牌" min-width="140" show-overflow-tooltip />
+      <el-table-column label="体检时间" min-width="168">
+        <template #default="{ row }">
+          {{ formatHistoryCheckTime(row.checkTime) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="健康分" width="88" align="center">
+        <template #default="{ row }">
+          {{ row.healthScore != null ? row.healthScore : '—' }}
+        </template>
+      </el-table-column>
+      <el-table-column prop="analysisCount" label="分析条数" width="96" align="center" />
+      <el-table-column label="操作" width="220" fixed="right" align="center">
+        <template #default="{ row }">
+          <el-button type="primary" link disabled title="即将上线">下载 PDF</el-button>
+          <el-button type="primary" link @click="viewHistoryReport(row)">查看</el-button>
+          <el-button type="danger" link @click="deleteHistoryReport(row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <div class="history-report-pagination">
+      <el-pagination
+        v-model:current-page="historyPage"
+        v-model:page-size="historyPageSize"
+        :total="historyTotal"
+        :page-sizes="[10, 20, 50]"
+        layout="total, sizes, prev, pager, next"
+        background
+        @current-change="fetchHistoryList"
+        @size-change="onHistoryPageSizeChange"
+      />
+    </div>
+  </el-dialog>
+
   <!-- 选择体检模型弹窗：API Key 来源完全是数据库 ai_provider_connection -->
   <el-dialog
     v-model="modelPickerVisible"
@@ -1381,7 +1531,7 @@ import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import {
   RefreshRight, Top, WarnTriangleFilled, ArrowLeft, ArrowDown, ArrowUp,
   Download, Share, Aim, Warning, List, DataLine, Document, View, Histogram, Printer,
-  MagicStick, Loading, Rank
+  MagicStick, Loading, Rank, Clock
 } from '@element-plus/icons-vue'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
@@ -1395,6 +1545,10 @@ import {
   readGeoHealthAvailableModelsCache,
   writeGeoHealthAvailableModelsCache,
 } from '../utils/geoHealthAvailableModelsCache.js'
+import {
+  pickOfficialWebsiteReport,
+  websiteScoreTone,
+} from '../utils/websiteScanReport.js'
 import * as XLSX from 'xlsx'
 
 // ===== 体检模型选择弹窗状态 =====
@@ -1600,6 +1754,92 @@ const loadEnterpriseSettings = async () => {
     console.warn('[GEOHealthReport] 加载企业信息 /api/settings 失败', e)
   }
 }
+
+/** 官网技术扫描（改进方案报告 2 同源数据） */
+const websiteScanLoading = ref(false)
+const websiteScanMatch = ref(null)
+
+const loadWebsiteScan = async () => {
+  const official = String(enterpriseSettings.value.website || '').trim()
+  if (!official) {
+    websiteScanMatch.value = null
+    return
+  }
+  websiteScanLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/website-reports`, {
+      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const list = await res.json()
+    websiteScanMatch.value = pickOfficialWebsiteReport(
+      Array.isArray(list) ? list : [],
+      official
+    )
+  } catch (e) {
+    console.warn('[GEOHealthReport] 加载官网技术扫描失败', e)
+    websiteScanMatch.value = null
+  } finally {
+    websiteScanLoading.value = false
+  }
+}
+
+const showWebsiteScanBlock = computed(
+  () => hasData.value || loading.value || !!enterpriseSettings.value.website || websiteScanLoading.value
+)
+
+const websiteScanScoreTone = computed(() =>
+  websiteScoreTone(websiteScanMatch.value?.score)
+)
+
+const websiteScanDims = computed(() => {
+  const items = websiteScanMatch.value?.items || {}
+  const defs = [
+    { key: 'schema', label: '结构化 Schema', itemKey: 'schema' },
+    { key: 'tech', label: '技术基础', itemKey: 'tech' },
+    { key: 'aiFriendly', label: 'AI 亲和性', itemKey: 'aiFriendly' },
+  ]
+  return defs
+    .map((d) => {
+      const raw = items[d.itemKey]?.score
+      const score = Number(raw)
+      if (!Number.isFinite(score)) return null
+      const max = 25
+      return {
+        key: d.key,
+        label: d.label,
+        score,
+        max,
+        pct: Math.min(100, Math.max(0, Math.round((score / max) * 100))),
+      }
+    })
+    .filter(Boolean)
+})
+
+const websiteScanIssuesTop = computed(() => {
+  const warn = websiteScanMatch.value?.issues?.warn
+  if (!Array.isArray(warn)) return []
+  return warn.slice(0, 3)
+})
+
+const websiteScanCheckedAtText = computed(() => {
+  const t = websiteScanMatch.value?.checkedAt
+  if (!t) return '检测时间：—'
+  return `检测：${formatZhCnDateTime(t)}`
+})
+
+const websiteScanUrlShort = computed(() => {
+  const u = String(websiteScanMatch.value?.url || '')
+  if (!u) return ''
+  try {
+    const url = new URL(u.startsWith('http') ? u : `https://${u}`)
+    const path = url.pathname === '/' ? '' : url.pathname
+    const s = url.host + path
+    return s.length > 36 ? `${s.slice(0, 34)}…` : s
+  } catch {
+    return u.length > 36 ? `${u.slice(0, 34)}…` : u
+  }
+})
 
 /** 报告 API 未返回品牌名/域名时，用企业设置补齐（便于页内展示与后续逻辑） */
 const applyEnterpriseContextToReport = () => {
@@ -3460,17 +3700,110 @@ const riskFactors = computed(() => [
   },
 ])
 
-// ===== 加载真实数据 =====
-const loadHealthReport = async () => {
-  loading.value = true
-  try {
-    const res = await fetch(`${API_BASE_URL}/api/geo-health-report`, {
-      headers: { 'x-user-id': 'default_user' }
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
+// ===== 历史报告 =====
+const historyDialogVisible = ref(false)
+const historyLoading = ref(false)
+const historyItems = ref([])
+const historyTotal = ref(0)
+const historyPage = ref(1)
+const historyPageSize = ref(10)
+const historyBrandQ = ref('')
+const historyDateRange = ref(null)
+/** 当前页面展示的报告对应任务 id（含从历史列表加载） */
+const viewingReportTaskId = ref(null)
 
-    if (!data.success) throw new Error(data.error || '加载失败')
+const formatHistoryCheckTime = (v) => {
+  if (v == null || v === '') return '—'
+  return formatZhCnDateTime(v)
+}
+
+const fetchHistoryList = async () => {
+  historyLoading.value = true
+  try {
+    const params = new URLSearchParams({
+      page: String(historyPage.value),
+      pageSize: String(historyPageSize.value),
+    })
+    const bq = historyBrandQ.value.trim()
+    if (bq) params.set('brand', bq)
+    if (Array.isArray(historyDateRange.value) && historyDateRange.value.length === 2) {
+      params.set('dateFrom', historyDateRange.value[0])
+      params.set('dateTo', historyDateRange.value[1])
+    }
+    const res = await fetch(`${API_BASE_URL}/api/geo-health-report/history?${params.toString()}`, {
+      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
+    historyItems.value = Array.isArray(data.items) ? data.items : []
+    historyTotal.value = Number(data.total) || 0
+  } catch (e) {
+    console.error('[geo-health] history list failed', e)
+    ElMessage.error('加载历史报告失败：' + (e?.message || String(e)))
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const openHistoryDialog = () => {
+  historyDialogVisible.value = true
+  historyPage.value = 1
+  fetchHistoryList()
+}
+
+const onHistorySearch = () => {
+  historyPage.value = 1
+  fetchHistoryList()
+}
+
+const resetHistoryFilters = () => {
+  historyBrandQ.value = ''
+  historyDateRange.value = null
+  historyPage.value = 1
+  fetchHistoryList()
+}
+
+const onHistoryPageSizeChange = () => {
+  historyPage.value = 1
+  fetchHistoryList()
+}
+
+const viewHistoryReport = async (row) => {
+  if (!row?.taskId) return
+  historyDialogVisible.value = false
+  await loadHealthReport({ taskId: row.taskId })
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+  ElMessage.success(`已加载报告：${row.brandName || '品牌'}`)
+}
+
+const deleteHistoryReport = async (row) => {
+  if (!row?.taskId) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除「${row.brandName || '品牌'}」的体检报告（任务 #${row.taskId}）？删除后不可恢复。`,
+      '删除历史报告',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+    const res = await fetch(`${API_BASE_URL}/api/geo-health-report/history/${row.taskId}`, {
+      method: 'DELETE',
+      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
+    ElMessage.success('已删除')
+    if (viewingReportTaskId.value === row.taskId || reportTaskId.value === row.taskId) {
+      viewingReportTaskId.value = null
+      await loadHealthReport()
+    }
+    await fetchHistoryList()
+  } catch (e) {
+    if (e === 'cancel' || e?.message === 'cancel') return
+    ElMessage.error('删除失败：' + (e?.message || String(e)))
+  }
+}
+
+function applyHealthReportPayload(data) {
+  if (!data?.success) throw new Error(data.error || '加载失败')
 
     // 填充基础数据
     brandName.value = data.brandName || '品牌'
@@ -3559,12 +3892,34 @@ const loadHealthReport = async () => {
     if (!hasData.value) {
       ElMessage.warning('暂无检测数据，请先进行可见度检测')
     }
+
+  viewingReportTaskId.value = data.rawData?.taskId ?? null
+}
+
+// ===== 加载真实数据 =====
+const loadHealthReport = async (opts = {}) => {
+  loading.value = true
+  try {
+    const url = new URL(`${API_BASE_URL}/api/geo-health-report`)
+    const taskId = opts.taskId
+    if (taskId != null && Number(taskId) > 0) {
+      url.searchParams.set('taskId', String(taskId))
+    }
+    const res = await fetch(url.toString(), {
+      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      throw new Error(data.error || `HTTP ${res.status}`)
+    }
+    applyHealthReportPayload(data)
   } catch (err) {
     console.error('加载健康报告失败:', err)
-    ElMessage.error('加载体检报告失败：' + err.message)
+    ElMessage.error('加载体检报告失败：' + (err?.message || String(err)))
   } finally {
     loading.value = false
     applyEnterpriseContextToReport()
+    await loadWebsiteScan()
   }
 }
 
@@ -4163,7 +4518,7 @@ onMounted(async () => {
   window.addEventListener('resize', onWindowResizeForSentimentCloud)
   document.addEventListener('visibilitychange', onDocumentVisibility)
   await loadEnterpriseSettings()
-  await loadHealthReport()
+  await Promise.all([loadHealthReport(), loadWebsiteScan()])
   warmAvailableModelsCache()
   // 切回来时恢复未完成的任务轮询
   resumeActiveTaskIfAny()
@@ -4523,6 +4878,20 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+/* ===== 历史报告弹窗 ===== */
+.history-report-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.history-report-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
 }
 
 /* ===== 无数据提示 ===== */
@@ -5120,6 +5489,234 @@ onUnmounted(() => {
 .ai-health-block-hint strong {
   color: #606266;
   font-weight: 600;
+}
+
+/* 官网技术扫描：横向紧凑条（置于 AI 健康分上方） */
+.website-scan-block {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
+.website-scan-compact {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  min-height: 112px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8f7ff 0%, #f3f4ff 48%, #fafbff 100%);
+  border: 1px solid rgba(112, 112, 240, 0.14);
+}
+.website-scan-score-col {
+  flex: 0 0 108px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-right: 12px;
+  border-right: 1px dashed rgba(112, 112, 240, 0.22);
+}
+.website-scan-score-label {
+  font-size: 11px;
+  color: #909399;
+  margin-bottom: 4px;
+}
+.website-scan-score-value {
+  font-size: 36px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.website-scan-score-value--good { color: #7070f0; }
+.website-scan-score-value--mid { color: #5b8def; }
+.website-scan-score-value--warn { color: #e6a23c; }
+.website-scan-score-value--bad { color: #f56c6c; }
+.website-scan-score-value--muted { color: #909399; }
+.website-scan-score-sub {
+  font-size: 12px;
+  color: #c0c4cc;
+  margin-top: 2px;
+}
+.website-scan-meta {
+  margin-top: 8px;
+  font-size: 10px;
+  color: #909399;
+  text-align: center;
+  line-height: 1.35;
+}
+.website-scan-url {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #7070f0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.website-scan-dims {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+}
+.website-scan-dim-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #606266;
+  margin-bottom: 4px;
+}
+.website-scan-dim-val {
+  color: #909399;
+  font-size: 11px;
+}
+.website-scan-dim-val strong {
+  color: #303133;
+  font-weight: 700;
+}
+.website-scan-dim-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(112, 112, 240, 0.1);
+  overflow: hidden;
+}
+.website-scan-dim-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #9098ff, #7070f0);
+  transition: width 0.35s ease;
+}
+.website-scan-dim-fill--warn {
+  background: linear-gradient(90deg, #f3d19e, #e6a23c);
+}
+.website-scan-dim-fill--bad {
+  background: linear-gradient(90deg, #fab6b6, #f56c6c);
+}
+.website-scan-issues {
+  flex: 1 1 220px;
+  min-width: 0;
+  min-height: 0;
+  max-height: 112px;
+  padding-left: 12px;
+  border-left: 1px dashed rgba(112, 112, 240, 0.22);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+.website-scan-issues-title {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #606266;
+  margin-bottom: 6px;
+}
+.website-scan-issues-hint {
+  font-size: 10px;
+  font-weight: 400;
+  color: #909399;
+}
+.website-scan-issues-scroll {
+  flex: 1;
+  min-height: 0;
+  max-height: 88px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 6px;
+  margin-right: -2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(112, 112, 240, 0.45) transparent;
+}
+.website-scan-issues-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+.website-scan-issues-scroll::-webkit-scrollbar-thumb {
+  background: rgba(112, 112, 240, 0.38);
+  border-radius: 999px;
+}
+.website-scan-issues-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(112, 112, 240, 0.55);
+}
+.website-scan-issues-scroll:focus-visible {
+  outline: 2px solid rgba(112, 112, 240, 0.35);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+.website-scan-issue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.website-scan-issue-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  color: #606266;
+  line-height: 1.45;
+  margin-bottom: 4px;
+}
+.website-scan-issue-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #7070f0;
+  margin-top: 5px;
+}
+.website-scan-issue-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.website-scan-issues-empty,
+.website-scan-empty {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.55;
+  margin: 0;
+}
+.website-scan-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 8px 12px;
+}
+.website-scan-empty strong {
+  color: #7070f0;
+}
+@media (max-width: 900px) {
+  .website-scan-compact {
+    flex-wrap: wrap;
+    min-height: 0;
+  }
+  .website-scan-score-col {
+    flex: 1 1 100%;
+    border-right: none;
+    border-bottom: 1px dashed rgba(112, 112, 240, 0.22);
+    padding-right: 0;
+    padding-bottom: 10px;
+  }
+  .website-scan-issues {
+    flex: 1 1 100%;
+    max-height: none;
+    border-left: none;
+    padding-left: 0;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(112, 112, 240, 0.22);
+  }
+  .website-scan-issues-scroll {
+    max-height: 120px;
+  }
 }
 
 .mv-score-visible {

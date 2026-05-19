@@ -374,7 +374,8 @@ const ensureTable = async (table) => {
       await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS keywords JSONB`).catch(() => {});
       await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS key_points JSONB`).catch(() => {});
       await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMP`).catch(() => {});
-    } catch (e) {
+      await pool.query(`ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS folder_id INTEGER`).catch(() => {});
+  } catch (e) {
       console.log('Knowledge migration:', e.message);
     }
   }
@@ -401,6 +402,7 @@ const ensureTable = async (table) => {
   }
   if (table === 'drafts') {
     try {
+      await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS folder_id INTEGER`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS title VARCHAR(500)`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS brand VARCHAR(255)`).catch(() => {});
       await pool.query(`ALTER TABLE drafts ADD COLUMN IF NOT EXISTS audience TEXT`).catch(() => {});
@@ -458,10 +460,6 @@ function buildCrudTableFilter(table, req) {
       params.push(String(req.query.status))
     }
   }
-  if (table === 'drafts' && req.query.status) {
-    parts.push(`status = $${params.length + 1}`)
-    params.push(String(req.query.status))
-  }
   const where = parts.length ? `WHERE ${parts.join(' AND ')}` : ''
   return { where, params }
 }
@@ -511,6 +509,28 @@ async function fetchPagedCrudList(table, req) {
     )
     out.approvedTotal = appR.rows[0]?.c ?? 0
     return out
+  }
+
+  if (table === 'drafts') {
+    const { ensureDraftFoldersSchema, buildDraftListWhere } = await import(
+      './routes/draftsLibrary.js'
+    )
+    await ensureDraftFoldersSchema()
+    const { where, params } = buildDraftListWhere(req)
+    const countR = await pool.query(`SELECT COUNT(*)::int AS c FROM drafts d ${where}`, params)
+    const total = countR.rows[0]?.c ?? 0
+    const lim = params.length + 1
+    const off = params.length + 2
+    const dataR = await pool.query(
+      `SELECT d.*, f.name AS folder_name
+       FROM drafts d
+       LEFT JOIN draft_folders f ON f.id = d.folder_id
+       ${where}
+       ORDER BY d.id DESC
+       LIMIT $${lim} OFFSET $${off}`,
+      [...params, pageSize, offset]
+    )
+    return pagedResponse(toCamelCase(dataR.rows), total, page, pageSize)
   }
 
   const { where, params } = buildCrudTableFilter(table, req)
@@ -1069,7 +1089,9 @@ tables.forEach(table => {
 
   // 如果有下划线，添加 hyphenated 别名路由
   if (table.includes('_')) {
-    app.get(hyphenPath, (req, res) => handleCrudTableGet(req, res, table));
+    if (table !== 'knowledge') {
+      app.get(hyphenPath, (req, res) => handleCrudTableGet(req, res, table));
+    }
     app.post(hyphenPath, async (req, res) => {
       try {
         await ensureTable(table);
@@ -1079,6 +1101,9 @@ tables.forEach(table => {
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
         prepareGenericCrudWriteBody(table, data);
+        if ((table === 'knowledge' || table === 'drafts') && !data.user_id) {
+          data.user_id = (req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+        }
         const cols = Object.keys(data);
         const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
         const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
@@ -1111,7 +1136,9 @@ tables.forEach(table => {
     });
   }
 
-  app.get(routePath, (req, res) => handleCrudTableGet(req, res, table));
+  if (table !== 'knowledge') {
+    app.get(routePath, (req, res) => handleCrudTableGet(req, res, table));
+  }
 
   app.post(routePath, async (req, res) => {
     try {
@@ -1125,6 +1152,9 @@ tables.forEach(table => {
         }
       }
       prepareGenericCrudWriteBody(table, data);
+      if ((table === 'knowledge' || table === 'drafts') && !data.user_id) {
+        data.user_id = (req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+      }
       const cols = Object.keys(data);
       const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
       const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
@@ -1903,6 +1933,8 @@ import geoHealthReportRouter from './routes/geoHealthReport.js';
 import geoHealthReportTemplatePdfRouter from './routes/geoHealthReportTemplatePdf.js';
 import sentimentLexiconRouter from './routes/sentimentLexicon.js';
 import aiProviderConnectionsRouter from './routes/aiProviderConnections.js';
+import knowledgeLibraryRouter from './routes/knowledgeLibrary.js';
+import draftsLibraryRouter from './routes/draftsLibrary.js';
 
 app.use('/api', contentGeneratorRouter);
 app.use('/api/minio', fileUploadRouter);
@@ -1914,6 +1946,8 @@ app.use('/api', geoHealthReportRouter);
 app.use('/api', geoHealthReportTemplatePdfRouter);
 app.use('/api', sentimentLexiconRouter);
 app.use('/api', aiProviderConnectionsRouter);
+app.use('/api', knowledgeLibraryRouter);
+app.use('/api', draftsLibraryRouter);
 
 // ========== Stub 接口（功能完善后替换为真实实现）==========
 

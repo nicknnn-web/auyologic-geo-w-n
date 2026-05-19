@@ -232,17 +232,21 @@ const handleSave = async () => {
       const newDraft = await draftsAPI.create({
         title: editTitle.value,
         content: draft.value?.content || '',
-        status: draft.value?.status || '草稿'
+        status: draft.value?.status || '草稿',
+        folderId: draft.value?.folderId ?? null,
       })
       draft.value = { ...draft.value, id: newDraft.id }
       ElMessage.success('保存成功（已创建新草稿）')
     } else {
       // 更新已有草稿
-      await draftsAPI.update(draft.value.id, {
+      const payload = {
         title: editTitle.value,
         content: draft.value.content,
-        status: draft.value.status
-      })
+        status: draft.value.status,
+      }
+      const fid = draft.value?.folderId ?? draft.value?.folder_id
+      if (fid != null && Number(fid) > 0) payload.folderId = Number(fid)
+      await draftsAPI.update(draft.value.id, payload)
       ElMessage.success('保存成功')
     }
   } catch (e) {
@@ -260,7 +264,8 @@ const handleSaveAsNew = async () => {
     const newDraft = await draftsAPI.create({
       title: editTitle.value + ' (副本)',
       content: draft.value?.content || '',
-      status: '草稿'
+      status: '草稿',
+      folderId: draft.value?.folderId ?? null,
     })
     draft.value = { ...draft.value, id: newDraft.id }
     ElMessage.success('已另存为新草稿')
