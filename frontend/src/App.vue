@@ -135,10 +135,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <template #title>改进方案报告</template>
             </el-menu-item>
-            <el-menu-item index="/geo-report-v2">
-              <el-icon><Histogram /></el-icon>
-              <template #title>改进方案报告2</template>
-            </el-menu-item>
+<!--            <el-menu-item index="/geo-report-v2">-->
+<!--              <el-icon><Histogram /></el-icon>-->
+<!--              <template #title>改进方案报告2</template>-->
+<!--            </el-menu-item>-->
             <el-menu-item index="/geo-health">
               <el-icon><TrendCharts /></el-icon>
               <template #title>品牌体检报告</template>
@@ -250,10 +250,10 @@
               <el-icon><DataAnalysis /></el-icon>
               <template #title>改进方案报告</template>
             </el-menu-item>
-            <el-menu-item index="/geo-report-v2">
-              <el-icon><Histogram /></el-icon>
-              <template #title>改进方案报告2</template>
-            </el-menu-item>
+<!--            <el-menu-item index="/geo-report-v2">-->
+<!--              <el-icon><Histogram /></el-icon>-->
+<!--              <template #title>改进方案报告2</template>-->
+<!--            </el-menu-item>-->
             <el-menu-item index="/geo-health">
               <el-icon><TrendCharts /></el-icon>
               <template #title>品牌体检报告</template>
