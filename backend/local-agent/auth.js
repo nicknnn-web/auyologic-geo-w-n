@@ -4,8 +4,7 @@
  * 改编自 backend/src/services/playwrightAuth.js
  */
 
-const { chromium } = require('playwright');
-const fs = require('fs');
+const { launchBrowser } = require('./playwrightLaunch');
 
 const PLATFORM_CONFIG = {
   '小红书': {
@@ -67,39 +66,6 @@ const STEALTH_SCRIPT = `
 // 内存中的活跃会话
 const activeSessions = new Map();
 
-function findSystemChrome() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    process.env.LOCALAPPDATA
-      ? `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`
-      : null,
-  ].filter(Boolean);
-  return candidates.find(p => fs.existsSync(p)) || null;
-}
-
-function buildLaunchOptions() {
-  const executablePath = findSystemChrome();
-  const opts = {
-    headless: false,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-infobars',
-      '--lang=zh-CN',
-      '--start-maximized',
-    ],
-    ignoreDefaultArgs: ['--enable-automation'],
-  };
-  if (executablePath) {
-    opts.executablePath = executablePath;
-    console.log('[Playwright] 使用系统 Chrome：', executablePath);
-  } else {
-    console.log('[Playwright] 未找到系统 Chrome，使用内置 Chromium');
-  }
-  return opts;
-}
-
 function randomDelay(min, max) {
   return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
 }
@@ -117,7 +83,7 @@ async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
   const config = PLATFORM_CONFIG[platform];
   if (!config) throw new Error(`不支持的平台：${platform}`);
 
-  const browser = await chromium.launch(buildLaunchOptions());
+  const browser = await launchBrowser();
   const context = await browser.newContext({
     userAgent: DEFAULT_USER_AGENT,
     viewport: { width: 1440, height: 900 },

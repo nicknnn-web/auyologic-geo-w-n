@@ -1,5 +1,4 @@
-import { chromium } from 'playwright';
-import fs from 'fs';
+import { launchChromium } from '../utils/playwrightLaunch.js';
 
 const PLATFORM_CONFIG = {
   '小红书': {
@@ -72,37 +71,6 @@ const STEALTH_SCRIPT = `
   delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
 `;
 
-function findSystemChrome() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-  ].filter(Boolean);
-  return candidates.find(p => fs.existsSync(p)) || null;
-}
-
-function buildLaunchOptions(headless = false) {
-  const executablePath = findSystemChrome();
-  const opts = {
-    headless,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-infobars',
-      '--lang=zh-CN',
-      '--start-maximized',
-    ],
-    ignoreDefaultArgs: ['--enable-automation'],
-  };
-  if (executablePath) {
-    opts.executablePath = executablePath;
-    console.log('[Playwright] 使用系统 Chrome：', executablePath);
-  } else {
-    console.log('[Playwright] 未找到系统 Chrome，使用内置 Chromium');
-  }
-  return opts;
-}
-
 function buildContextOptions(storageState) {
   const opts = {
     userAgent: DEFAULT_USER_AGENT,
@@ -128,7 +96,7 @@ export async function startAuth(accountId, platform, phoneNumber) {
   const config = PLATFORM_CONFIG[platform];
   if (!config) throw new Error(`不支持的平台：${platform}`);
 
-  const browser = await chromium.launch(buildLaunchOptions(false));
+  const browser = await launchChromium({ headless: false });
   const context = await browser.newContext(buildContextOptions());
   await context.addInitScript(STEALTH_SCRIPT);
   const page = await context.newPage();

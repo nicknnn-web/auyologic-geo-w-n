@@ -1,5 +1,5 @@
-import {chromium} from 'playwright';
 import fs from 'fs';
+import { launchChromium } from '../utils/playwrightLaunch.js';
 
 // 内存中的发布任务状态（taskId -> taskState）
 const runningTasks = new Map();
@@ -26,36 +26,6 @@ const STEALTH_SCRIPT = `
   delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
   delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
 `;
-
-function findSystemChrome() {
-  const candidates = [
-    process.env.CHROME_PATH,
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
-  ].filter(Boolean);
-  return candidates.find(p => fs.existsSync(p)) || null;
-}
-
-function buildLaunchOptions() {
-  const executablePath = findSystemChrome();
-  // 生产环境（Zeabur 等）无显示器，必须无头；本地可设 PLAYWRIGHT_HEADED=true 强制有头调试
-  const headless =
-    process.env.PLAYWRIGHT_HEADED === 'true'
-      ? false
-      : process.env.NODE_ENV === 'production' || !executablePath;
-  const opts = {
-    headless,
-    args: [
-      '--disable-blink-features=AutomationControlled',
-      '--disable-infobars',
-      '--lang=zh-CN',
-    ],
-    ignoreDefaultArgs: ['--enable-automation'],
-  };
-  if (executablePath) opts.executablePath = executablePath;
-  return opts;
-}
 
 function randomDelay(min, max) {
   return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
@@ -88,7 +58,7 @@ async function _createBrowserSession(taskId, sessionState) {
   const sessionStateObj =
     typeof sessionState === 'string' ? JSON.parse(sessionState) : sessionState;
 
-  const browser = await chromium.launch(buildLaunchOptions());
+  const browser = await launchChromium();
   const context = await browser.newContext({
     storageState: sessionStateObj,
     userAgent: DEFAULT_USER_AGENT,

@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "postinstall": "node scripts/install-playwright.mjs",
+    "playwright:install": "PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium",
     "build": "pkg index.js --target node18-win-x64 --output dist/auyologic-agent.exe"
   },
   "dependencies": {
@@ -14,7 +16,7 @@
     "pkg": "^5.8.1"
   },
   "pkg": {
-    "scripts": ["auth.js"],
+    "scripts": ["auth.js", "playwrightLaunch.js"],
     "assets": []
   }
 }

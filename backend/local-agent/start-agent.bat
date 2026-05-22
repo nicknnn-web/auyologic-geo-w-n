@@ -113,6 +113,22 @@ if not exist "%~dp0node_modules\playwright" (
 )
 
 :: ================================
+:: 4b. Playwright 浏览器（自动 npx playwright install chromium）
+:: ================================
+echo [Playwright] 检查并安装浏览器（首次约 150MB）...
+echo        也可双击 install-playwright.bat 单独安装
+echo.
+set PLAYWRIGHT_BROWSERS_PATH=0
+%NODE_CMD% scripts\install-playwright.mjs
+if %errorlevel% neq 0 (
+    echo.
+    echo [警告] 浏览器安装失败，可双击 install-playwright.bat 重试
+    echo.
+    pause
+)
+echo.
+
+:: ================================
 :: 5. 选择环境
 :: ================================
 echo.

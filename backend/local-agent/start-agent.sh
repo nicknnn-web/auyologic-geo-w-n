@@ -4,6 +4,7 @@ set -euo pipefail
 
 AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${AGENT_DIR}"
+chmod +x install-playwright.sh install-playwright.command start-agent.sh start-agent.command 2>/dev/null || true
 
 NODE_VER="v20.17.0"
 NODE_BIN=""
@@ -129,6 +130,23 @@ if [ ! -d node_modules/playwright ]; then
   echo
   echo "[完成] 依赖安装成功"
   echo
+fi
+
+# Playwright 浏览器：自动执行 install-playwright（内含 npx playwright install chromium）
+echo "[Playwright] 检查并安装浏览器（首次约 150MB，请稍候）…"
+echo "       也可单独双击 install-playwright.command 仅安装浏览器。"
+echo
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-0}"
+if ! "${NODE_BIN}" scripts/install-playwright.mjs; then
+  echo
+  echo "[警告] 浏览器安装未成功。可双击 install-playwright.command 重试，"
+  echo "       或安装 Google Chrome 后再次启动本代理。"
+  echo
+  read -r -p "仍要继续启动代理吗？[y/N] " cont
+  case "${cont}" in
+    y|Y|yes|是) ;;
+    *) exit 1 ;;
+  esac
 fi
 
 echo
