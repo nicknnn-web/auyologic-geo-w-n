@@ -376,6 +376,9 @@ export async function initDB() {
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_geo_health_source_search_task ON geo_health_source_search(task_id)`
     );
+    await client.query(
+      `ALTER TABLE geo_health_source_search ADD COLUMN IF NOT EXISTS classify_done BOOLEAN DEFAULT false`
+    );
 
     // —— 品牌体检分析结果（每条 geo_health_answer 对应一条分析）——
     await client.query(`

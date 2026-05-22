@@ -36,7 +36,7 @@ export function buildSourceClassifyUserPrompt(ctx) {
     lines.push(`url: ${h.url}`);
     if (h.platform) lines.push(`站点: ${h.platform}`);
     if (h.publishTime) lines.push(`发布时间: ${h.publishTime}`);
-    if (h.summary) lines.push(`摘要: ${h.summary.slice(0, 500)}`);
+    if (h.summary) lines.push(`摘要: ${h.summary.slice(0, 200)}`);
     lines.push('');
   }
   lines.push(

@@ -10,6 +10,7 @@ import {
   GEO_SOURCE_CLASSIFY_CONCURRENCY,
   GEO_SOURCE_CLASSIFY_MAX_TOKENS,
   GEO_SOURCE_CLASSIFY_TIMEOUT_MS,
+  GEO_SOURCE_CLASSIFY_USE_LLM,
 } from '../config/geoBrandTaskConfig.js';
 import {
   SOURCE_CLASSIFY_SYSTEM_PROMPT,
@@ -55,6 +56,128 @@ function buildDedupeKey(title, summary, url) {
     if (n) return `url:${n}`;
   }
   return `hash:${md5(`${t}\n${s}`)}`;
+}
+
+/** 仅域名规则分类（不调 LLM） */
+function buildRuleOnlyClassifyItems(hits, brandWebsite) {
+  return hits.map((h) => ({
+    index: h.index,
+    url: h.url,
+    category: mergeAiAndDomainSourceCategory(h.url, null, { brandWebsite }),
+  }));
+}
+
+/**
+ * 将分类结果批量写入 geo_health_article，返回新增条数
+ */
+async function insertClassifiedArticlesBatch(pool, {
+  taskId,
+  questionId,
+  modelName,
+  hits,
+  items,
+  brandWebsite,
+}) {
+  const hitByIndex = new Map(hits.map((h) => [h.index, h]));
+  const hitByUrl = new Map(hits.map((h) => [String(h.url).trim().toLowerCase(), h]));
+  const validCategories = new Set(Object.values(SOURCE_CATEGORY));
+  const rows = [];
+
+  for (const item of items) {
+    let hit = hitByIndex.get(item.index);
+    const url = String(item.url || hit?.url || '').trim();
+    if (!hit) hit = hitByUrl.get(url.toLowerCase());
+    if (!hit || !isAcceptableSourceUrl(url)) continue;
+
+    const title = String(hit.title || '').trim() || '未命名';
+    const summary = String(hit.summary || hit.snippet || '').trim();
+    const platform = String(hit.platform || '').trim().slice(0, 256) || '未知';
+    const publishTime = String(hit.publishTime || '').trim().slice(0, 128);
+    const category = mergeAiAndDomainSourceCategory(url, item.category, { brandWebsite });
+    const sourceCategory = validCategories.has(category)
+      ? category
+      : mergeAiAndDomainSourceCategory(url, null, { brandWebsite });
+
+    rows.push({
+      taskId,
+      questionId,
+      modelName,
+      platform,
+      title,
+      url,
+      publishTime,
+      summary,
+      contentHash: md5(`${title}\n${summary}`),
+      dedupeKey: buildDedupeKey(title, summary, url).slice(0, 256),
+      sourceCategory,
+    });
+  }
+
+  if (!rows.length) return 0;
+
+  const params = [];
+  const valueTuples = rows.map((r, i) => {
+    const o = i * 11;
+    params.push(
+      r.taskId,
+      r.questionId,
+      r.modelName,
+      r.platform,
+      r.title,
+      r.url,
+      r.publishTime,
+      r.summary,
+      r.contentHash,
+      r.dedupeKey,
+      r.sourceCategory
+    );
+    return `($${o + 1}, $${o + 2}, $${o + 3}, $${o + 4}, $${o + 5}, $${o + 6}, $${o + 7}, $${o + 8}, $${o + 9}, $${o + 10}, $${o + 11})`;
+  });
+
+  const ins = await pool.query(
+    `INSERT INTO geo_health_article (task_id, question_id, model_name, platform, title, url, publish_time, summary, content_hash, dedupe_key, source_category)
+     VALUES ${valueTuples.join(', ')}
+     ON CONFLICT (task_id, dedupe_key) DO NOTHING
+     RETURNING id`,
+    params
+  );
+  return ins.rows.length;
+}
+
+async function markSourceClassifyDone(pool, taskId, questionId) {
+  await pool.query(
+    `UPDATE geo_health_source_search SET classify_done = true WHERE task_id = $1 AND question_id = $2`,
+    [taskId, questionId]
+  );
+}
+
+async function resolveClassifyItems(analysisClient, ctx, row, hits) {
+  if (!GEO_SOURCE_CLASSIFY_USE_LLM) {
+    return buildRuleOnlyClassifyItems(hits, ctx.brandWebsite);
+  }
+  const userPrompt = buildSourceClassifyUserPrompt({
+    brandName: ctx.brandName,
+    brandWebsite: ctx.brandWebsite,
+    questionText: row.question_text || row.query,
+    hits,
+  });
+  const { content } = await analysisClient.chat(
+    [
+      { role: 'system', content: SOURCE_CLASSIFY_SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ],
+    {
+      maxTokens: GEO_SOURCE_CLASSIFY_MAX_TOKENS,
+      temperature: 0.1,
+      timeoutMs: GEO_SOURCE_CLASSIFY_TIMEOUT_MS,
+    }
+  );
+  const parsed = extractJsonFromText(content);
+  let items = Array.isArray(parsed?.items) ? parsed.items : [];
+  if (!items.length) {
+    items = buildRuleOnlyClassifyItems(hits, ctx.brandWebsite);
+  }
+  return items;
 }
 
 async function fetchTaskContext(pool, taskId) {
@@ -167,10 +290,14 @@ export async function runBochaSourceSearchForTask(pool, taskId) {
  */
 export async function runSourceClassificationForTask(pool, taskId) {
   const ctx = await fetchTaskContext(pool, taskId);
-  const analysisClient = await createAiClientByConnectionId(pool, ctx.analysisConnectionId, {
-    userId: ctx.userId,
-  });
-  const modelName = `bocha:${analysisClient.vendorName}`;
+  let analysisClient = null;
+  let modelName = 'bocha:rules';
+  if (GEO_SOURCE_CLASSIFY_USE_LLM) {
+    analysisClient = await createAiClientByConnectionId(pool, ctx.analysisConnectionId, {
+      userId: ctx.userId,
+    });
+    modelName = `bocha:${analysisClient.vendorName}`;
+  }
 
   const { rows: searchRows } = await pool.query(
     `SELECT ss.question_id, ss.query, ss.raw_json, ss.error_text,
@@ -184,6 +311,14 @@ export async function runSourceClassificationForTask(pool, taskId) {
 
   await pool.query(`UPDATE geo_health_task SET status = 'classifying' WHERE id = $1`, [taskId]);
   await pool.query(`DELETE FROM geo_health_article WHERE task_id = $1`, [taskId]);
+  await pool.query(
+    `UPDATE geo_health_source_search SET classify_done = false WHERE task_id = $1`,
+    [taskId]
+  );
+
+  console.log(
+    `[geo-source] task=${taskId} 信源分类 ${searchRows.length} 题，并发=${GEO_SOURCE_CLASSIFY_CONCURRENCY}，模式=${GEO_SOURCE_CLASSIFY_USE_LLM ? 'LLM+规则' : '仅规则'}`
+  );
 
   let failedCount = 0;
   let insertedTotal = 0;
@@ -196,85 +331,27 @@ export async function runSourceClassificationForTask(pool, taskId) {
       const questionId = row.question_id;
       const raw = row.raw_json || {};
       const hits = Array.isArray(raw.hits) ? raw.hits : [];
-      if (!hits.length) return 0;
 
       try {
-        const userPrompt = buildSourceClassifyUserPrompt({
-          brandName: ctx.brandName,
-          brandWebsite: ctx.brandWebsite,
-          questionText: row.question_text || row.query,
+        if (!hits.length) {
+          await markSourceClassifyDone(pool, taskId, questionId);
+          return 0;
+        }
+        const items = await resolveClassifyItems(analysisClient, ctx, row, hits);
+        const n = await insertClassifiedArticlesBatch(pool, {
+          taskId,
+          questionId,
+          modelName,
           hits,
+          items,
+          brandWebsite: ctx.brandWebsite,
         });
-        const { content } = await analysisClient.chat(
-          [
-            { role: 'system', content: SOURCE_CLASSIFY_SYSTEM_PROMPT },
-            { role: 'user', content: userPrompt },
-          ],
-          {
-            maxTokens: GEO_SOURCE_CLASSIFY_MAX_TOKENS,
-            temperature: 0.1,
-            timeoutMs: GEO_SOURCE_CLASSIFY_TIMEOUT_MS,
-          }
-        );
-        const parsed = extractJsonFromText(content);
-        let items = Array.isArray(parsed?.items) ? parsed.items : [];
-        if (!items.length) {
-          items = hits.map((h) => ({
-            index: h.index,
-            url: h.url,
-            category: mergeAiAndDomainSourceCategory(h.url, null, { brandWebsite: ctx.brandWebsite }),
-          }));
-        }
-        const hitByIndex = new Map(hits.map((h) => [h.index, h]));
-        const hitByUrl = new Map(hits.map((h) => [String(h.url).trim().toLowerCase(), h]));
-
-        for (const item of items) {
-          let hit = hitByIndex.get(item.index);
-          const url = String(item.url || hit?.url || '').trim();
-          if (!hit) hit = hitByUrl.get(url.toLowerCase());
-          if (!hit || !isAcceptableSourceUrl(url)) continue;
-
-          const title = String(hit.title || '').trim() || '未命名';
-          const summary = String(hit.summary || hit.snippet || '').trim();
-          const platform = String(hit.platform || '').trim().slice(0, 256) || '未知';
-          const publishTime = String(hit.publishTime || '').trim().slice(0, 128);
-          const category = mergeAiAndDomainSourceCategory(
-            url,
-            item.category,
-            { brandWebsite: ctx.brandWebsite }
-          );
-          const validCategories = new Set(Object.values(SOURCE_CATEGORY));
-          const sourceCategory = validCategories.has(category)
-            ? category
-            : mergeAiAndDomainSourceCategory(url, null, { brandWebsite: ctx.brandWebsite });
-
-          const dedupeKey = buildDedupeKey(title, summary, url).slice(0, 256);
-          const contentHash = md5(`${title}\n${summary}`);
-
-          const ins = await pool.query(
-            `INSERT INTO geo_health_article (task_id, question_id, model_name, platform, title, url, publish_time, summary, content_hash, dedupe_key, source_category)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-             ON CONFLICT (task_id, dedupe_key) DO NOTHING
-             RETURNING id`,
-            [
-              taskId,
-              questionId,
-              modelName,
-              platform,
-              title,
-              url,
-              publishTime,
-              summary,
-              contentHash,
-              dedupeKey,
-              sourceCategory,
-            ]
-          );
-          if (ins.rows.length) insertedTotal += 1;
-        }
+        insertedTotal += n;
+        await markSourceClassifyDone(pool, taskId, questionId);
         return 0;
       } catch (e) {
         console.warn(`[geo-source] classify fail task=${taskId} q=${questionId}`, e?.message || e);
+        await markSourceClassifyDone(pool, taskId, questionId);
         return 1;
       }
     }

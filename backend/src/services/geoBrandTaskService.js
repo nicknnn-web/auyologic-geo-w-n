@@ -584,16 +584,22 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
 
   let sourceSearchDone = 0;
   let sourceSearchFailed = 0;
+  let sourceClassifyDone = 0;
+  let sourceClassifyTotal = 0;
   try {
     const ssR = await pool.query(
       `SELECT
          COUNT(*)::int AS done,
-         COUNT(*) FILTER (WHERE error_text IS NOT NULL AND btrim(error_text) <> '')::int AS failed
+         COUNT(*) FILTER (WHERE error_text IS NOT NULL AND btrim(error_text) <> '')::int AS failed,
+         COUNT(*) FILTER (WHERE classify_done IS TRUE)::int AS classified,
+         COUNT(*)::int AS classify_total
        FROM geo_health_source_search WHERE task_id = $1`,
       [taskId]
     );
     sourceSearchDone = ssR.rows[0]?.done ?? 0;
     sourceSearchFailed = ssR.rows[0]?.failed ?? 0;
+    sourceClassifyDone = ssR.rows[0]?.classified ?? 0;
+    sourceClassifyTotal = ssR.rows[0]?.classify_total ?? 0;
   } catch {
     /* 表未迁移时忽略 */
   }
@@ -625,5 +631,7 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
     sourceSearchDone,
     sourceSearchTotal: totalQuestions,
     sourceSearchFailed,
+    sourceClassifyDone,
+    sourceClassifyTotal: sourceClassifyTotal || totalQuestions,
   };
 }

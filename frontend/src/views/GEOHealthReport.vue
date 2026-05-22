@@ -4129,7 +4129,9 @@ const pollTaskProgress = async (taskId) => {
         const sTotal = progress.sourceSearchTotal ?? t
         generatingText.value = `博查信源 ${sDone}/${sTotal}`
       } else if (progress.status === 'classifying' || progress.status === 'classifying_done') {
-        generatingText.value = '信源分类入库中…'
+        const cDone = progress.sourceClassifyDone ?? 0
+        const cTotal = progress.sourceClassifyTotal ?? t
+        generatingText.value = `信源分类入库 ${cDone}/${cTotal}`
       } else if (progress.status === 'completed') {
         generatingText.value = `已完成`
       } else if (progress.status === 'failed') {

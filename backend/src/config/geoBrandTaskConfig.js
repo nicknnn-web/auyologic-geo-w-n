@@ -42,7 +42,8 @@
  *   GEO_BOCHA_SEARCH_CONCURRENCY=1
  *   GEO_BOCHA_MIN_INTERVAL_MS=1200
  *   GEO_BOCHA_RETRY_MAX=5
- *   GEO_SOURCE_CLASSIFY_CONCURRENCY=3
+ *   GEO_SOURCE_CLASSIFY_CONCURRENCY=6
+ *   GEO_SOURCE_CLASSIFY_USE_LLM=true   # false=仅域名规则分类，不调分析模型（快）
  */
 
 function numEnv(name, fallback) {
@@ -129,7 +130,12 @@ export const GEO_BOCHA_RETRY_MAX = Math.max(0, numEnv('GEO_BOCHA_RETRY_MAX', 5))
 export const GEO_BOCHA_RETRY_BASE_MS = Math.max(500, numEnv('GEO_BOCHA_RETRY_BASE_MS', 3000));
 
 /** 信源分类 LLM 并发（按题） */
-export const GEO_SOURCE_CLASSIFY_CONCURRENCY = Math.max(1, numEnv('GEO_SOURCE_CLASSIFY_CONCURRENCY', 3));
+export const GEO_SOURCE_CLASSIFY_CONCURRENCY = Math.max(1, numEnv('GEO_SOURCE_CLASSIFY_CONCURRENCY', 6));
+
+/** 信源分类是否调用分析模型（false=仅用域名规则，显著加速） */
+export const GEO_SOURCE_CLASSIFY_USE_LLM = !['0', 'false', 'no', 'off'].includes(
+  String(process.env.GEO_SOURCE_CLASSIFY_USE_LLM ?? 'true').trim().toLowerCase()
+);
 
 /** 信源分类单次 chat max_tokens */
 export const GEO_SOURCE_CLASSIFY_MAX_TOKENS = Math.max(512, numEnv('GEO_SOURCE_CLASSIFY_MAX_TOKENS', 1500));
