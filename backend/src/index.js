@@ -1761,10 +1761,17 @@ app.get('/api/agent/download', (req, res) => {
     ignore: [...IGNORE, '*.bat'],
   });
 
-  // 本地投放依赖的发布逻辑（与仓库 backend/src 同步）
-  const publisherPath = join(__dirname, '../src/services/playwrightPublisher.js');
-  if (fs.existsSync(publisherPath)) {
-    archive.file(publisherPath, { name: 'src/services/playwrightPublisher.js' });
+  // 本地投放：发布逻辑 + 其依赖的 Playwright 启动工具（须与 backend/src 同步）
+  const agentBundleFiles = [
+    ['src/services/playwrightPublisher.js', join(__dirname, 'services/playwrightPublisher.js')],
+    ['src/utils/playwrightLaunch.js', join(__dirname, 'utils/playwrightLaunch.js')],
+  ];
+  for (const [zipPath, srcPath] of agentBundleFiles) {
+    if (fs.existsSync(srcPath)) {
+      archive.file(srcPath, { name: zipPath });
+    } else {
+      console.warn('[下载代理] 缺少打包文件:', srcPath);
+    }
   }
 
   archive.finalize();

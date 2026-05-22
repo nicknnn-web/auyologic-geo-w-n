@@ -129,6 +129,7 @@
 | 下载很慢 / 安装失败 | 检查网络；公司网络可能需要代理；关掉后重新双击启动脚本 |
 | `Executable doesn't exist` | Windows：`install-playwright.bat`；Mac：`install-playwright.command` |
 | 网页点授权没反应 | 确认代理窗口仍开着，且选的环境与网页一致（开发 / 线上） |
+| 发布失败 `Cannot find module ... playwrightLaunch.js` | 从 GEO 网页 **重新下载** 本地代理 zip，或向同事索取含 `src/utils/playwrightLaunch.js` 的最新包 |
 | Mac 双击没反应 | 用 **右键 → 打开** 运行 `start-agent.command` |
 | 想换开发 / 线上环境 | 关掉代理窗口，重新双击启动脚本，重新选择 |
 

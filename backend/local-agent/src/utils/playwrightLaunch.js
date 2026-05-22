@@ -1,9 +1,8 @@
 /**
- * 跨平台 Playwright 启动（与 local-agent/playwrightLaunch.js 逻辑一致）
+ * 跨平台 Playwright 启动（与 local-agent/playwrightLaunch.js 逻辑一致，ESM 供 playwrightPublisher 使用）
  */
 
 import fs from 'fs';
-import path from 'path';
 import { chromium } from 'playwright';
 
 export function findSystemChrome() {
