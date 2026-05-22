@@ -24,6 +24,8 @@ import {
   runAllProbesForTask,
 } from '../services/geoBrandTaskService.js';
 import { runAllAnalysisForTask } from '../services/geoBrandAnalysisService.js';
+import { runGeoHealthSourcePipelineForTask } from '../services/geoHealthSourcePipeline.js';
+import { isBochaConfigured } from '../services/bochaWebSearch.js';
 
 const router = Router();
 
@@ -49,7 +51,8 @@ router.get('/geo-brand/config', (req, res) => {
     questionsPerType: GEO_HEALTH_QUESTIONS_PER_TYPE,
     probeConcurrency: GEO_HEALTH_PROBE_CONCURRENCY,
     probeBatchDelayMs: GEO_HEALTH_PROBE_BATCH_DELAY_MS,
-    hint: '探针/分析使用的模型由前端创建任务时传入 connectionIds 决定',
+    bochaConfigured: isBochaConfigured(),
+    hint: '探针/分析使用的模型由前端创建任务时传入 connectionIds 决定；信源检索需 BOCHA_API_KEY（放在 backend/.env 或项目根 .env）',
   });
 });
 
@@ -137,16 +140,23 @@ router.post('/geo-brand/tasks', async (req, res) => {
       analysisConnectionId,
     });
     const taskId = result.taskId;
-    // 后台：探针 → 分析，全自动串联
+    // 后台：探针 → 博查信源 → 分类入库 → 二次分析
     setImmediate(async () => {
       try {
         await runAllProbesForTask(pool, taskId);
-        const alive = await pool.query(`SELECT id FROM geo_health_task WHERE id = $1`, [taskId]);
+        let alive = await pool.query(`SELECT id FROM geo_health_task WHERE id = $1`, [taskId]);
+        if (!alive.rows.length) {
+          console.log(`[geo-brand] taskId=${taskId} 已删除，跳过后续阶段`);
+          return;
+        }
+        console.log(`[geo-brand] taskId=${taskId} 探针完成，开始博查信源`);
+        await runGeoHealthSourcePipelineForTask(pool, taskId);
+        alive = await pool.query(`SELECT id FROM geo_health_task WHERE id = $1`, [taskId]);
         if (!alive.rows.length) {
           console.log(`[geo-brand] taskId=${taskId} 已删除，跳过分析`);
           return;
         }
-        console.log(`[geo-brand] taskId=${taskId} 探针完成，开始分析阶段`);
+        console.log(`[geo-brand] taskId=${taskId} 信源完成，开始分析阶段`);
         await runAllAnalysisForTask(pool, taskId);
         console.log(`[geo-brand] taskId=${taskId} 分析完成`);
       } catch (err) {
@@ -157,7 +167,7 @@ router.post('/geo-brand/tasks', async (req, res) => {
       success: true,
       ...result,
       backgroundProbe: true,
-      message: '任务已创建，探针+分析在后台执行，请轮询 GET .../tasks/:id/progress',
+      message: '任务已创建，探针+博查信源+分析在后台执行，请轮询 GET .../tasks/:id/progress',
     });
   } catch (e) {
     console.error('geo-brand POST /tasks:', e);

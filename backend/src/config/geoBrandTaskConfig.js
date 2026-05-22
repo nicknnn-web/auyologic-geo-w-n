@@ -35,6 +35,14 @@
  *   GEO_HEALTH_PROBE_BATCH_DELAY_MS=250
  *   GEO_HEALTH_ANALYSIS_CONCURRENCY=2
  *   GEO_HEALTH_ANALYSIS_DELAY_MS=300
+ *
+ * ────── 信源（博查 + 分析模型分类）──────
+ *   BOCHA_API_KEY
+ *   GEO_BOCHA_COUNT=8
+ *   GEO_BOCHA_SEARCH_CONCURRENCY=1
+ *   GEO_BOCHA_MIN_INTERVAL_MS=1200
+ *   GEO_BOCHA_RETRY_MAX=5
+ *   GEO_SOURCE_CLASSIFY_CONCURRENCY=3
  */
 
 function numEnv(name, fallback) {
@@ -95,3 +103,36 @@ export const GEO_HEALTH_ANALYSIS_DELAY_MS = numEnv('GEO_HEALTH_ANALYSIS_DELAY_MS
 
 /** 分析阶段：单次 chat 的超时（毫秒） */
 export const GEO_HEALTH_ANALYSIS_TIMEOUT_MS = Math.max(5_000, numEnv('GEO_HEALTH_ANALYSIS_TIMEOUT_MS', 60_000));
+
+/** 博查：每题返回网页条数（1–50） */
+export const GEO_BOCHA_COUNT = Math.max(1, Math.min(50, numEnv('GEO_BOCHA_COUNT', 8)));
+
+/** 博查 freshness，推荐 noLimit */
+export const GEO_BOCHA_FRESHNESS = strEnv('GEO_BOCHA_FRESHNESS', 'noLimit');
+
+/** 博查是否返回长摘要 */
+export const GEO_BOCHA_SUMMARY = process.env.GEO_BOCHA_SUMMARY !== 'false';
+
+/** 博查单次请求超时（毫秒） */
+export const GEO_BOCHA_TIMEOUT_MS = Math.max(3_000, numEnv('GEO_BOCHA_TIMEOUT_MS', 15_000));
+
+/** 博查并发（按题）；默认 1，避免 429 限流 */
+export const GEO_BOCHA_SEARCH_CONCURRENCY = Math.max(1, numEnv('GEO_BOCHA_SEARCH_CONCURRENCY', 1));
+
+/** 博查两次请求最小间隔（毫秒），全局串行排队 */
+export const GEO_BOCHA_MIN_INTERVAL_MS = Math.max(0, numEnv('GEO_BOCHA_MIN_INTERVAL_MS', 1200));
+
+/** 博查遇 429 时最多重试次数 */
+export const GEO_BOCHA_RETRY_MAX = Math.max(0, numEnv('GEO_BOCHA_RETRY_MAX', 5));
+
+/** 博查 429 重试基础等待（毫秒），指数退避 */
+export const GEO_BOCHA_RETRY_BASE_MS = Math.max(500, numEnv('GEO_BOCHA_RETRY_BASE_MS', 3000));
+
+/** 信源分类 LLM 并发（按题） */
+export const GEO_SOURCE_CLASSIFY_CONCURRENCY = Math.max(1, numEnv('GEO_SOURCE_CLASSIFY_CONCURRENCY', 3));
+
+/** 信源分类单次 chat max_tokens */
+export const GEO_SOURCE_CLASSIFY_MAX_TOKENS = Math.max(512, numEnv('GEO_SOURCE_CLASSIFY_MAX_TOKENS', 1500));
+
+/** 信源分类超时（毫秒） */
+export const GEO_SOURCE_CLASSIFY_TIMEOUT_MS = Math.max(5_000, numEnv('GEO_SOURCE_CLASSIFY_TIMEOUT_MS', 60_000));

@@ -1,15 +1,11 @@
 /**
- * 品牌体检任务：从 questions 抽样 → 调 AI（多模型支持）→ 存 geo_health_answer / geo_health_article
+ * 品牌体检任务：从 questions 抽样 → 探针 AI → 博查信源 → 分析
  *
  * 维护说明：
  * - 抽题数量：改 config/geoBrandTaskConfig.js 里的 GEO_HEALTH_QUESTIONS_PER_TYPE
- * - 抽样类型：resolveGeoHealthKeywordBuckets 读 sys_dict keyword_type 全部 data_key，与 questions.keyword_type 匹配；
- *   每类仅抽本类 + 已审核 + 当前用户，绝不跨类型凑数（避免 question_type 与题干语义不一致）
- * - 探针模型列表：来自 geo_health_task.connection_ids（创建任务时由前端传入 connectionIds），不再依赖环境变量
- * - Prompt 默认文案改 DEFAULT_SYSTEM_PROMPT / buildDefaultUserPrompt；也可在接口里传自定义覆盖
- * - 解析 JSON、入库文章的逻辑在 probeOneQuestionWithModel，与 AI 调用分离
+ * - 探针模型：geo_health_task.connection_ids；信源：BOCHA_API_KEY + analysis_connection_id
+ * - 信源入库见 services/geoHealthSourcePipeline.js
  */
-import crypto from 'crypto';
 import {
   PROVIDERS,
   createAiClientByConnectionId,
@@ -23,7 +19,6 @@ import {
   GEO_HEALTH_PROBE_TIMEOUT_MS,
   GEO_HEALTH_KEYWORD_TYPE_DICT_TYPE,
 } from '../config/geoBrandTaskConfig.js';
-import { mergeAiAndDomainSourceCategory } from './sourceClassifier.js';
 
 /** 历史兼容：默认模型名（仅向后兼容用，新流程不再依赖） */
 export const DEEPSEEK_DEFAULT_MODEL = PROVIDERS.deepseek?.defaultModel || 'deepseek-chat';
@@ -58,10 +53,6 @@ export async function resolveGeoHealthKeywordBuckets(pool) {
 // 保留同名 export (DEFAULT_SYSTEM_PROMPT) 做向后兼容
 import { PROBE_SYSTEM_PROMPT, buildProbeUserPrompt } from '../prompts/geoHealthProbe.js';
 export const DEFAULT_SYSTEM_PROMPT = PROBE_SYSTEM_PROMPT;
-
-function md5(s) {
-  return crypto.createHash('md5').update(String(s), 'utf8').digest('hex');
-}
 
 /**
  * 从已审核问题库随机抽取：按 keyword_type（单值或 IN）、extraAnd；可选 userId（与 COALESCE 空 user_id→default_user 对齐）。
@@ -122,36 +113,6 @@ export function extractJsonFromText(text) {
     }
     return null;
   }
-}
-
-function isHttpUrl(u) {
-  try {
-    const x = new URL(String(u).trim());
-    return x.protocol === 'http:' || x.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
-function normalizeUrlForDedupe(url) {
-  try {
-    const u = new URL(String(url).trim());
-    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-    const path = u.pathname.replace(/\/+$/, '') || '/';
-    return `${u.protocol}//${u.host}${path}`.toLowerCase();
-  } catch {
-    return null;
-  }
-}
-
-function buildDedupeKey(title, summary, url) {
-  const t = String(title || '').trim();
-  const s = String(summary || '').trim();
-  if (url && isHttpUrl(url)) {
-    const n = normalizeUrlForDedupe(url);
-    if (n) return `url:${n}`;
-  }
-  return `hash:${md5(`${t}\n${s}`)}`;
 }
 
 /**
@@ -284,7 +245,7 @@ export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, a
 const buildDefaultUserPrompt = buildProbeUserPrompt;
 
 /**
- * 对单题 + 单连接调用 AI，写入 geo_health_answer，并把 sources 解析进 geo_health_article（按 task 去重）。
+ * 对单题 + 单连接调用 AI，写入 geo_health_answer（不含信源；信源由博查流水线写入）。
  *
  * 模型来源：完全来自数据库中的 ai_provider_connection 行，按 connectionId 解密 → OpenAI 兼容客户端。
  *
@@ -312,7 +273,6 @@ export async function probeOneQuestionWithModel(pool, options) {
     connectionId,
     preparedClient,
     preparedQuestion,
-    brandWebsite: brandWebsiteOpt,
     systemPrompt = DEFAULT_SYSTEM_PROMPT,
     userPrompt: userPromptOverride,
     maxTokens = GEO_HEALTH_PROBE_MAX_TOKENS,
@@ -352,15 +312,6 @@ export async function probeOneQuestionWithModel(pool, options) {
       ? `${row.keyword_type_label}（${row.question_type}）`
       : String(row.question_type ?? '');
   const userPrompt = userPromptOverride || buildDefaultUserPrompt(typeLine, row.question);
-
-  let brandWebsite = brandWebsiteOpt;
-  if (brandWebsite === undefined) {
-    const taskUserRes = await pool.query(
-      `SELECT u.website FROM geo_health_task t LEFT JOIN users u ON u.user_id = t.user_id WHERE t.id = $1`,
-      [taskId]
-    );
-    brandWebsite = taskUserRes.rows[0]?.website || '';
-  }
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -402,13 +353,6 @@ export async function probeOneQuestionWithModel(pool, options) {
     throw e;
   }
 
-  // sources 兼容两个字段名：sources（新格式）/ articles（旧格式）
-  const sourcesIn = Array.isArray(parsed?.sources)
-    ? parsed.sources
-    : Array.isArray(parsed?.articles)
-      ? parsed.articles
-      : [];
-
   const storedPayload = {
     providerKey: client.providerKey,
     vendorName: modelName,
@@ -434,41 +378,6 @@ export async function probeOneQuestionWithModel(pool, options) {
     [taskId, questionId, modelName, cid, JSON.stringify(storedPayload)]
   );
 
-  let validCount = 0;
-  for (const a of sourcesIn) {
-    const title = String(a.title ?? '').trim() || '未命名';
-    const summary = String(a.summary ?? '').trim();
-    const platform = String(a.platform ?? '').trim().slice(0, 256) || '未知';
-    const publishTime = String(a.publish_time ?? '').trim().slice(0, 128);
-    let url = String(a.url ?? '').trim();
-
-    if (!url || !isHttpUrl(url)) {
-      url = `hash:${md5(`${title}\n${summary}`)}`;
-    } else {
-      url = url.slice(0, 2048);
-    }
-
-    const dedupeKey = buildDedupeKey(title, summary, url.startsWith('hash:') ? '' : url).slice(0, 256);
-    const contentHash = md5(`${title}\n${summary}`);
-    const sourceCategory = mergeAiAndDomainSourceCategory(url, a.category ?? a.source_category, {
-      brandWebsite,
-    });
-
-    const ins = await pool.query(
-      `INSERT INTO geo_health_article (task_id, question_id, model_name, platform, title, url, publish_time, summary, content_hash, dedupe_key, source_category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (task_id, dedupe_key) DO NOTHING
-       RETURNING id`,
-      [taskId, questionId, modelName, platform, title, url, publishTime, summary, contentHash, dedupeKey, sourceCategory]
-    );
-    if (ins.rows.length) validCount += 1;
-  }
-
-  await pool.query(
-    `UPDATE geo_health_answer SET valid_count = $1 WHERE task_id = $2 AND question_id = $3 AND model_name = $4`,
-    [validCount, taskId, questionId, modelName]
-  );
-
   return {
     taskId,
     questionId,
@@ -476,8 +385,6 @@ export async function probeOneQuestionWithModel(pool, options) {
     vendorName: modelName,
     providerKey: client.providerKey,
     model: client.model,
-    validCount,
-    articleCount: sourcesIn.length,
   };
 }
 
@@ -531,13 +438,6 @@ export async function runAllProbesForTask(pool, taskId) {
   }
   const questionMap = new Map(questionRows.map((r) => [r.id, r]));
 
-  // 一次预取：brandWebsite，避免 N×M 次重复 SQL
-  const userRes = await pool.query(
-    `SELECT u.website FROM geo_health_task t LEFT JOIN users u ON u.user_id = t.user_id WHERE t.id = $1`,
-    [taskId]
-  );
-  const brandWebsite = userRes.rows[0]?.website || '';
-
   // 任务级缓存：所有连接的客户端只解密一次复用
   let clientMap;
   try {
@@ -576,7 +476,6 @@ export async function runAllProbesForTask(pool, taskId) {
           connectionId,
           preparedClient,
           preparedQuestion: questionMap.get(questionId),
-          brandWebsite,
         });
         if (pr == null) return 0;
         return 0;
@@ -683,6 +582,22 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
     // geo_health_analysis 表可能尚未创建（阶段0），忽略
   }
 
+  let sourceSearchDone = 0;
+  let sourceSearchFailed = 0;
+  try {
+    const ssR = await pool.query(
+      `SELECT
+         COUNT(*)::int AS done,
+         COUNT(*) FILTER (WHERE error_text IS NOT NULL AND btrim(error_text) <> '')::int AS failed
+       FROM geo_health_source_search WHERE task_id = $1`,
+      [taskId]
+    );
+    sourceSearchDone = ssR.rows[0]?.done ?? 0;
+    sourceSearchFailed = ssR.rows[0]?.failed ?? 0;
+  } catch {
+    /* 表未迁移时忽略 */
+  }
+
   const totalQuestions = totalR.rows[0].c;
   const answeredCount = ansR.rows[0].answered;
   const failedCount = ansR.rows[0].failed;
@@ -707,5 +622,8 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
     analysisDone,
     analysisTotal,
     analysisRemaining: Math.max(0, totalAnswersExpected - analysisDone),
+    sourceSearchDone,
+    sourceSearchTotal: totalQuestions,
+    sourceSearchFailed,
   };
 }

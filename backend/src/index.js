@@ -23,6 +23,7 @@ import {
 } from './services/playwrightPublisher.js';
 import { parsePagination, pagedResponse } from './pagination.js';
 import { KEYWORD_TYPE_BOOTSTRAP_ROWS } from './config/keywordTypeSemantics.js';
+import { isBochaConfigured } from './services/bochaWebSearch.js';
 
 const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
@@ -2621,5 +2622,8 @@ const _LEGACY_geo_health_report_DISABLED = async (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}, version ${BUILD_VERSION}`);
+  console.log(
+    `[env] BOCHA_API_KEY: ${isBochaConfigured() ? '已配置（信源检索可用）' : '未配置 — 请在 backend/.env 或项目根 .env 设置 BOCHA_API_KEY 后重启'}`
+  );
   await cleanupStalePendingAuth();
 });

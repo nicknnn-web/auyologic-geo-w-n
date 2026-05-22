@@ -63,6 +63,9 @@ npm run dev
 | DATABASE_URL | PostgreSQL 连接字符串 | `postgresql://postgres:xxx@host:5432/auyologic` |
 | PORT | 服务端口 | `3001` |
 | DEEPSEEK_API_KEY | DeepSeek API Key | `sk-xxx` |
+| BOCHA_API_KEY | 品牌体检信源：博查 Web Search（必填方可跑信源阶段） | 见 [博查开放平台](https://open.bocha.cn) |
+
+探针只生成回答与实体；每题由博查检索网页 URL，再由任务上的 `analysis_connection_id` 模型做四分类后写入 `geo_health_article`。
 
 ### 前端 (.env.production) |
 

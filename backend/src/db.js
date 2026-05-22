@@ -360,6 +360,23 @@ export async function initDB() {
       `CREATE INDEX IF NOT EXISTS idx_geo_health_article_task_category ON geo_health_article(task_id, source_category)`
     );
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_health_source_search (
+        id SERIAL PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES geo_health_task(id) ON DELETE CASCADE,
+        question_id INTEGER NOT NULL REFERENCES geo_health_question(id) ON DELETE CASCADE,
+        query TEXT NOT NULL,
+        hit_count INTEGER DEFAULT 0,
+        raw_json JSONB DEFAULT '{}'::jsonb,
+        error_text TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        UNIQUE(task_id, question_id)
+      )
+    `);
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_geo_health_source_search_task ON geo_health_source_search(task_id)`
+    );
+
     // —— 品牌体检分析结果（每条 geo_health_answer 对应一条分析）——
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_health_analysis (

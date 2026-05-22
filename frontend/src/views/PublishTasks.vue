@@ -24,9 +24,10 @@
       <el-icon class="text-amber-500 flex-shrink-0" size="18"><Warning /></el-icon>
       <div class="flex-1 text-sm text-amber-700">
         <span class="font-medium">本地代理未运行</span>
-        — 账号授权与投放发布均需在您的电脑上运行本地代理。下载后解压，双击
-        <code class="bg-amber-100 px-1 rounded text-xs">start-agent.bat</code>
-        即可启动。
+        — 账号授权与投放发布均需在您的电脑上运行本地代理。下载后解压：Windows 双击
+        <code class="bg-amber-100 px-1 rounded text-xs">start-agent.bat</code>；Mac 双击
+        <code class="bg-amber-100 px-1 rounded text-xs">start-agent.command</code>；Linux 执行
+        <code class="bg-amber-100 px-1 rounded text-xs">start-agent.sh</code>。
       </div>
       <el-button size="small" type="warning" plain @click="handleDownloadAgent">
         <el-icon class="mr-1"><Download /></el-icon>

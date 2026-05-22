@@ -1391,77 +1391,171 @@
     </div>
   </el-dialog>
 
-  <!-- 底层信源：入库 URL × 分类 × 对应探针问题 -->
+  <!-- 底层信源：明细列表 + 平台/网站抓取排行 -->
   <el-dialog
     v-model="sourceArticleDialogVisible"
-    class="sentiment-source-dialog"
+    class="sentiment-source-dialog source-article-dialog-wide"
     align-center
     destroy-on-close
     title="信源来源明细"
     @open="onSourceArticleDialogOpen"
   >
     <div class="sentiment-source-dialog-body-inner">
-      <div class="sentiment-source-toolbar">
-        <el-input
-          v-model="sourceArticleSearch"
-          clearable
-          placeholder="模糊搜索：URL、类型标签、来源问题、标题…"
-          class="sentiment-source-search"
-          @clear="onSourceArticleSearchCommit"
-          @keyup.enter="onSourceArticleSearchCommit"
-        />
-        <el-button type="primary" @click="onSourceArticleSearchCommit">搜索</el-button>
-      </div>
-      <div class="sentiment-source-table-scroll">
-        <el-table
-          v-loading="sourceArticleLoading"
-          :data="sourceArticleList"
-          stripe
-          size="small"
-          class="sentiment-source-table"
-          table-layout="fixed"
-          style="width: 100%"
-          empty-text="暂无信源记录（或当前筛选无结果）"
-        >
-          <el-table-column label="来源 URL" min-width="200">
-            <template #default="{ row }">
-              <template v-if="isHttpUrl(row.url)">
-                <el-link
-                  type="primary"
-                  :href="row.url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="source-article-url-link"
-                >
-                  {{ row.url }}
-                </el-link>
-              </template>
-              <span v-else class="source-article-url-plain" :title="row.url">{{ row.url || '—' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="被归类的类型标签" width="132" align="center">
-            <template #default="{ row }">
-              <el-tag size="small" :type="sourceCategoryTagType(row.sourceCategory)" effect="light">
-                {{ row.categoryLabel }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="questionText" label="来源问题" min-width="160" show-overflow-tooltip />
-        </el-table>
-      </div>
-      <div class="sentiment-source-pagination">
-        <el-pagination
-          :current-page="sourceArticlePage"
-          :page-size="sourceArticlePageSize"
-          :total="sourceArticleTotal"
-          :page-sizes="[10, 20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          small
-          background
-          @current-change="onSourceArticlePageChange"
-          @size-change="onSourceArticlePageSizeChange"
-        />
-      </div>
+      <p v-if="sourceReportCheckTime" class="source-dialog-meta">
+        本次体检：{{ formatZhCnDateTime(sourceReportCheckTime) }}
+        <span v-if="sourceStatsTotalCitations > 0" class="source-dialog-meta-sub">
+          · 博查共抓取引用 {{ sourceStatsTotalCitations }} 次（按检索命中计）
+        </span>
+      </p>
+      <el-tabs v-model="sourceArticleActiveTab" class="source-article-tabs">
+        <el-tab-pane label="明细列表" name="list">
+          <div class="source-list-tab-inner">
+            <div class="sentiment-source-toolbar">
+              <el-input
+                v-model="sourceArticleSearch"
+                clearable
+                placeholder="模糊搜索：URL、平台、发布日期、类型、问题…"
+                class="sentiment-source-search"
+                @clear="onSourceArticleSearchCommit"
+                @keyup.enter="onSourceArticleSearchCommit"
+              />
+              <el-button type="primary" @click="onSourceArticleSearchCommit">搜索</el-button>
+            </div>
+            <div class="source-list-table-scroll sentiment-source-table-scroll">
+              <el-table
+                v-loading="sourceArticleLoading"
+                :data="sourceArticleList"
+                stripe
+                size="small"
+                class="sentiment-source-table"
+                table-layout="fixed"
+                style="width: 100%"
+                empty-text="暂无信源记录（或当前筛选无结果）"
+              >
+                <el-table-column label="来源 URL" min-width="180">
+                  <template #default="{ row }">
+                    <template v-if="isHttpUrl(row.url)">
+                      <el-link
+                        type="primary"
+                        :href="row.url"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="source-article-url-link"
+                      >
+                        {{ row.url }}
+                      </el-link>
+                    </template>
+                    <span v-else class="source-article-url-plain" :title="row.url">{{ row.url || '—' }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="platform" label="来源平台" width="120" show-overflow-tooltip />
+                <el-table-column label="发布日期" width="168" show-overflow-tooltip>
+                  <template #default="{ row }">
+                    <span :title="row.publishTime || ''">{{ row.citedDateLabel || '—' }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column label="类型" width="120" align="center">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="sourceCategoryTagType(row.sourceCategory)" effect="light">
+                      {{ row.categoryLabel }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="questionText" label="来源问题" min-width="140" show-overflow-tooltip />
+              </el-table>
+            </div>
+            <div class="source-list-pagination sentiment-source-pagination">
+              <el-pagination
+                :current-page="sourceArticlePage"
+                :page-size="sourceArticlePageSize"
+                :total="sourceArticleTotal"
+                :page-sizes="[10, 20, 50, 100]"
+                layout="total, sizes, prev, pager, next"
+                small
+                background
+                @current-change="onSourceArticlePageChange"
+                @size-change="onSourceArticlePageSizeChange"
+              />
+            </div>
+          </div>
+        </el-tab-pane>
+        <el-tab-pane label="抓取排行" name="rank">
+          <div v-loading="sourceStatsLoading" class="source-rank-wrap">
+            <el-tabs v-model="sourceRankActiveTab" type="card" class="source-rank-tabs">
+              <el-tab-pane label="按网站" name="domain">
+                <p class="source-rank-hint">同一网站多篇不同链接会合并统计；「独立链接」为该域名下不重复 URL 数。</p>
+                <div class="source-rank-table-scroll">
+                  <el-table
+                    :data="sourceDomainLeaderboard"
+                    stripe
+                    size="small"
+                    class="sentiment-source-table"
+                    empty-text="暂无排行数据"
+                  >
+                    <el-table-column prop="rank" label="排名" width="56" align="center" />
+                    <el-table-column prop="name" label="网站/域名" min-width="140" show-overflow-tooltip />
+                    <el-table-column prop="uniqueUrlCount" label="独立链接" width="80" align="center" />
+                    <el-table-column prop="count" label="抓取次数" width="88" align="center" />
+                    <el-table-column label="占比" width="72" align="center">
+                      <template #default="{ row }">{{ row.pct }}%</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </el-tab-pane>
+              <el-tab-pane label="按平台" name="platform">
+                <p class="source-rank-hint">博查返回的 siteName（如搜狐网、知乎）；同一平台多次命中计多次。</p>
+                <div class="source-rank-table-scroll">
+                  <el-table
+                    :data="sourcePlatformLeaderboard"
+                    stripe
+                    size="small"
+                    class="sentiment-source-table"
+                    empty-text="暂无排行数据"
+                  >
+                    <el-table-column prop="rank" label="排名" width="56" align="center" />
+                    <el-table-column prop="name" label="来源平台" min-width="140" show-overflow-tooltip />
+                    <el-table-column prop="count" label="抓取次数" width="88" align="center" />
+                    <el-table-column label="占比" width="72" align="center">
+                      <template #default="{ row }">{{ row.pct }}%</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </el-tab-pane>
+              <el-tab-pane label="高频链接" name="url">
+                <p class="source-rank-hint">按完整 URL 统计抓取次数（Top 30）。</p>
+                <div class="source-rank-table-scroll">
+                  <el-table
+                    :data="sourceUrlLeaderboard"
+                    stripe
+                    size="small"
+                    class="sentiment-source-table"
+                    empty-text="暂无排行数据"
+                  >
+                    <el-table-column prop="rank" label="排名" width="56" align="center" />
+                    <el-table-column prop="platform" label="平台" width="100" show-overflow-tooltip />
+                    <el-table-column label="URL" min-width="160" show-overflow-tooltip>
+                      <template #default="{ row }">
+                        <el-link
+                          v-if="isHttpUrl(row.url)"
+                          type="primary"
+                          :href="row.url"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >{{ row.url }}</el-link>
+                        <span v-else>{{ row.url }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="count" label="抓取次数" width="88" align="center" />
+                    <el-table-column label="占比" width="72" align="center">
+                      <template #default="{ row }">{{ row.pct }}%</template>
+                    </el-table-column>
+                  </el-table>
+                </div>
+              </el-tab-pane>
+            </el-tabs>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </el-dialog>
 
@@ -2935,14 +3029,51 @@ function sourceCategoryTagType(sourceCategory) {
   return ''
 }
 
-/** 信源入库明细弹窗（与词云来源明细同一套分页 / 搜索交互） */
+/** 信源入库明细弹窗（Tab：明细列表 / 抓取排行） */
 const sourceArticleDialogVisible = ref(false)
+const sourceArticleActiveTab = ref('list')
+const sourceRankActiveTab = ref('domain')
 const sourceArticleLoading = ref(false)
 const sourceArticleList = ref([])
 const sourceArticleTotal = ref(0)
 const sourceArticlePage = ref(1)
 const sourceArticlePageSize = ref(10)
 const sourceArticleSearch = ref('')
+const sourceReportCheckTime = ref(null)
+const sourceStatsLoading = ref(false)
+const sourceStatsTotalCitations = ref(0)
+const sourceDomainLeaderboard = ref([])
+const sourcePlatformLeaderboard = ref([])
+const sourceUrlLeaderboard = ref([])
+
+async function loadSourceStats() {
+  const tid = reportTaskId.value
+  if (tid == null) return
+  sourceStatsLoading.value = true
+  try {
+    const res = await fetch(
+      `${API_BASE_URL}/api/geo-health-report/source-stats?taskId=${tid}`,
+      { headers: { 'x-user-id': 'default_user' } }
+    )
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
+    sourceStatsTotalCitations.value = Number(data.totalCitations) || 0
+    sourceDomainLeaderboard.value = Array.isArray(data.domainLeaderboard) ? data.domainLeaderboard : []
+    sourcePlatformLeaderboard.value = Array.isArray(data.platformLeaderboard) ? data.platformLeaderboard : []
+    sourceUrlLeaderboard.value = Array.isArray(data.urlLeaderboard) ? data.urlLeaderboard : []
+    if (data.reportCheckTime && !sourceReportCheckTime.value) {
+      sourceReportCheckTime.value = data.reportCheckTime
+    }
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载信源排行失败：' + (e.message || String(e)))
+    sourceDomainLeaderboard.value = []
+    sourcePlatformLeaderboard.value = []
+    sourceUrlLeaderboard.value = []
+  } finally {
+    sourceStatsLoading.value = false
+  }
+}
 
 async function loadSourceArticles() {
   const tid = reportTaskId.value
@@ -2965,6 +3096,7 @@ async function loadSourceArticles() {
     if (!data.success) throw new Error(data.error || '加载失败')
     sourceArticleList.value = Array.isArray(data.list) ? data.list : []
     sourceArticleTotal.value = data.total ?? 0
+    if (data.reportCheckTime) sourceReportCheckTime.value = data.reportCheckTime
   } catch (e) {
     console.error(e)
     ElMessage.error('加载信源明细失败：' + (e.message || String(e)))
@@ -2984,9 +3116,13 @@ function openSourceArticleDialog() {
 }
 
 function onSourceArticleDialogOpen() {
+  sourceArticleActiveTab.value = 'list'
+  sourceRankActiveTab.value = 'domain'
   sourceArticlePage.value = 1
   sourceArticleSearch.value = ''
+  sourceReportCheckTime.value = null
   loadSourceArticles()
+  loadSourceStats()
 }
 
 function onSourceArticleSearchCommit() {
@@ -3988,6 +4124,12 @@ const pollTaskProgress = async (taskId) => {
         const aDone = progress.analysisDone || 0
         const aTotal = progress.analysisTotal || t
         generatingText.value = `分析中 ${aDone}/${aTotal}`
+      } else if (progress.status === 'sourcing' || progress.status === 'sourcing_done') {
+        const sDone = progress.sourceSearchDone ?? 0
+        const sTotal = progress.sourceSearchTotal ?? t
+        generatingText.value = `博查信源 ${sDone}/${sTotal}`
+      } else if (progress.status === 'classifying' || progress.status === 'classifying_done') {
+        generatingText.value = '信源分类入库中…'
       } else if (progress.status === 'completed') {
         generatingText.value = `已完成`
       } else if (progress.status === 'failed') {
@@ -6799,6 +6941,113 @@ onUnmounted(() => {
   color: #606266;
   word-break: break-all;
   line-height: 1.45;
+}
+
+.source-article-dialog-wide :deep(.el-dialog) {
+  width: min(960px, calc(100vw - 20px)) !important;
+}
+
+.source-dialog-meta {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: #606266;
+  flex-shrink: 0;
+}
+
+.source-dialog-meta-sub {
+  color: #909399;
+}
+
+.source-article-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-article-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.source-article-tabs :deep(.el-tab-pane) {
+  height: 100%;
+}
+
+.source-list-tab-inner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 280px;
+  max-height: min(calc(88vh - 200px), calc(100dvh - 220px));
+  box-sizing: border-box;
+}
+
+.source-list-tab-inner .sentiment-source-toolbar {
+  flex-shrink: 0;
+}
+
+.source-list-table-scroll {
+  flex: 1;
+  min-height: 120px;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.source-list-pagination {
+  flex-shrink: 0;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #ebeef5;
+  background: #f9fafb;
+}
+
+.source-rank-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-rank-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-rank-tabs :deep(.el-tabs__header) {
+  margin-bottom: 8px;
+}
+
+.source-rank-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+}
+
+.source-rank-tabs :deep(.el-tab-pane) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.source-rank-table-scroll {
+  flex: 1;
+  min-height: 200px;
+  max-height: min(calc(88vh - 220px), calc(100dvh - 240px));
+  overflow: auto;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.source-rank-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.4;
+  flex-shrink: 0;
 }
 
 .task-qa-dialog-body {

@@ -4,6 +4,7 @@
  * DELETE /api/geo-health-report/history/:taskId
  * GET /api/geo-health-report/sentiment-sources?taskId=&page=&pageSize=&q=
  * GET /api/geo-health-report/source-articles?taskId=&page=&pageSize=&q=
+ * GET /api/geo-health-report/source-stats?taskId=
  * GET /api/geo-health-report/task-qa?taskId=
  *
  * 从 geo_health_analysis 聚合品牌体检报告所需全部指标；命中 geo_task_cache 且指纹未变时直接返回快照（极快）。
@@ -49,6 +50,11 @@ import {
   upsertGeoTaskReportCache,
 } from '../services/geoTaskCacheService.js';
 import { computeAiHealthScore } from '../utils/aiHealthScore.js';
+import { isAcceptableSourceUrl } from '../utils/sourceUrlValidation.js';
+import {
+  buildSourceStatsForTask,
+  formatSourceCitedDateLabel,
+} from '../services/geoHealthSourceStats.js';
 import { resolveAiLogoPublicUrl } from '../utils/aiProviderLogoStorage.js';
 import {
   aggregateMatrixContextFromModels,
@@ -696,14 +702,16 @@ router.get('/geo-health-report', async (req, res) => {
 
     // ── 6. 信源（geo_health_article.source_category 四分类聚合，与探针 Prompt 枚举一致）──
     const srcArtRes = await pool.query(
-      `SELECT COALESCE(source_category, 'industry_vertical') AS k, COUNT(*)::int AS count
+      `SELECT url, COALESCE(source_category, 'industry_vertical') AS k
        FROM geo_health_article
-       WHERE task_id = $1
-       GROUP BY 1`,
+       WHERE task_id = $1`,
       [taskId]
     );
     const byCat = {};
-    for (const r of srcArtRes.rows) byCat[r.k] = r.count;
+    for (const r of srcArtRes.rows) {
+      if (!isAcceptableSourceUrl(r.url)) continue;
+      byCat[r.k] = (byCat[r.k] || 0) + 1;
+    }
     const SOURCE_PIE_ORDER = [
       SOURCE_CATEGORY.AUTHORITY_MEDIA,
       SOURCE_CATEGORY.INDUSTRY_VERTICAL,
@@ -906,7 +914,8 @@ router.get('/geo-health-report/source-articles', async (req, res) => {
     }
 
     const own = await pool.query(
-      `SELECT 1 FROM geo_health_task t
+      `SELECT t.id, t.created_at AS check_time
+       FROM geo_health_task t
        WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
          AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)`,
       [taskId, userId]
@@ -914,9 +923,10 @@ router.get('/geo-health-report/source-articles', async (req, res) => {
     if (!own.rows.length) {
       return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
     }
+    const reportCheckTime = own.rows[0].check_time;
 
     const artRes = await pool.query(
-      `SELECT ga.url, ga.title, ga.source_category,
+      `SELECT ga.url, ga.title, ga.platform, ga.publish_time, ga.source_category,
               COALESCE(NULLIF(trim(gq.question), ''), '') AS question_text
        FROM geo_health_article ga
        LEFT JOIN geo_health_question gq
@@ -926,23 +936,31 @@ router.get('/geo-health-report/source-articles', async (req, res) => {
       [taskId]
     );
 
-    const allRows = artRes.rows.map((r) => {
-      const categoryLabel = sourceCategoryLabelZh(r.source_category);
-      const questionText = String(r.question_text || '').trim() || '—';
-      return {
-        url: r.url || '',
-        title: r.title || '',
-        sourceCategory: String(r.source_category || '').trim(),
-        categoryLabel,
-        questionText,
-      };
-    });
+    const allRows = artRes.rows
+      .filter((r) => isAcceptableSourceUrl(r.url))
+      .map((r) => {
+        const categoryLabel = sourceCategoryLabelZh(r.source_category);
+        const questionText = String(r.question_text || '').trim() || '—';
+        const publishTime = r.publish_time || '';
+        const citedDateLabel = formatSourceCitedDateLabel(publishTime);
+        return {
+          url: r.url || '',
+          title: r.title || '',
+          platform: r.platform || '',
+          publishTime,
+          citedDateLabel: citedDateLabel || '—',
+          sourceCategory: String(r.source_category || '').trim(),
+          categoryLabel,
+          questionText,
+        };
+      });
 
     let filtered = allRows;
     if (q) {
       const ql = q.toLowerCase();
       filtered = allRows.filter((r) => {
-        const hay = `${r.url} ${r.title} ${r.categoryLabel} ${r.questionText}`.toLowerCase();
+        const hay =
+          `${r.url} ${r.title} ${r.platform} ${r.citedDateLabel} ${r.categoryLabel} ${r.questionText}`.toLowerCase();
         return hay.includes(ql);
       });
     }
@@ -953,6 +971,7 @@ router.get('/geo-health-report/source-articles', async (req, res) => {
 
     return res.json({
       success: true,
+      reportCheckTime,
       list,
       total,
       page,
@@ -960,6 +979,35 @@ router.get('/geo-health-report/source-articles', async (req, res) => {
     });
   } catch (err) {
     console.error('[geo-health-report/source-articles]', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 信源统计：平台/网站域名/URL 抓取频次排行（基于博查原始 hits，按出现次数计）
+ */
+router.get('/geo-health-report/source-stats', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.query.taskId ?? ''), 10);
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId 查询参数' });
+    }
+
+    const own = await pool.query(
+      `SELECT 1 FROM geo_health_task t
+       WHERE t.id = $1 AND t.user_id = $2 AND t.status = 'completed'
+         AND EXISTS (SELECT 1 FROM geo_health_analysis a WHERE a.task_id = t.id LIMIT 1)`,
+      [taskId, userId]
+    );
+    if (!own.rows.length) {
+      return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
+    }
+
+    const stats = await buildSourceStatsForTask(pool, taskId);
+    return res.json({ success: true, ...stats });
+  } catch (err) {
+    console.error('[geo-health-report/source-stats]', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
