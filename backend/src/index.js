@@ -2630,7 +2630,7 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}, version ${BUILD_VERSION}`);
   console.log(
-    `[env] BOCHA_API_KEY: ${isBochaConfigured() ? '已配置（信源检索可用）' : '未配置 — 请在 backend/.env 或项目根 .env 设置 BOCHA_API_KEY 后重启'}`
+    `[env] BOCHA_API_KEY: ${isBochaConfigured() ? '已配置（信源检索可用）' : '未配置 — 请在 backend/.env.production、backend/.env 或 Zeabur 变量设置 BOCHA_API_KEY 后重启'}`
   );
   await cleanupStalePendingAuth();
 });

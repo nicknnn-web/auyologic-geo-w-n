@@ -27,6 +27,7 @@ git push origin main
 - Zeabur 应该会自动检测 backend 目录为 Node.js 服务
 - 在后端服务的 Environment 中添加：
   - `DEEPSEEK_API_KEY` = 你的 DeepSeek API Key
+- **品牌体检信源**：仓库已包含 `backend/.env.production`（`BOCHA_API_KEY`），部署后会自动加载；也可在 Zeabur Variables 里单独配置 `BOCHA_API_KEY`（优先级更高）
 - 连接 PostgreSQL：点击后端服务 → "Variables" → 找到 DATABASE_URL（如果没自动连接，手动添加并引用数据库）
 
 ### 5. 部署前端

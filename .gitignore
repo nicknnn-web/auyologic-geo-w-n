@@ -3,6 +3,10 @@ dist/
 .env
 *.env
 !.env.example
+# 部署用（含 BOCHA 等），可提交；勿与 .env 混用
+!.env.production
+!backend/.env.production
+!backend/.env.production.example
 *.log
 _site_preview.png
 kimi-*.png

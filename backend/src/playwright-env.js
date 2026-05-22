@@ -16,6 +16,10 @@ dotenv.config();
 for (const p of [join(backendRoot, '.env'), join(repoRoot, '.env')]) {
   if (existsSync(p)) dotenv.config({ path: p, override: false });
 }
+// 可提交仓库的部署配置（Zeabur 等云端无 backend/.env 时读此文件）
+for (const p of [join(backendRoot, '.env.production'), join(repoRoot, '.env.production')]) {
+  if (existsSync(p)) dotenv.config({ path: p, override: true });
+}
 
 const v = process.env.PLAYWRIGHT_BROWSERS_PATH;
 if (v === undefined || v === '') {
