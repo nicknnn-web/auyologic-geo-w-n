@@ -2557,6 +2557,13 @@ const MODEL_NAME_LABEL = {
   'glm-4-flash':       'GLM Flash',
   'gpt-4o-mini':       'GPT-4o mini',
   'gpt-4o':            'GPT-4o',
+  'gemini-2.5-flash':  'Gemini 2.5 Flash',
+  'gemini-2.0-flash':  'Gemini 2.0 Flash',
+  'gemini-1.5-pro':    'Gemini 1.5 Pro',
+  'gpt-5.5':           'GPT-5.5',
+  'claude-opus-4-7':   'Claude Opus 4.7',
+  'claude-sonnet-4-20250514': 'Claude Sonnet 4',
+  'claude-3-5-haiku-latest': 'Claude 3.5 Haiku',
 }
 
 function taskQaModelTabLabel(m) {
@@ -4115,34 +4122,54 @@ const pollTaskProgress = async (taskId) => {
       }
       if (!progress?.success) continue
 
-      const done = (progress.successCount || 0) + (progress.failedCount || 0)
-      const t = progress.totalQuestions || 1
+      const questionCount = progress.totalQuestions || 0
+      const modelCount = progress.probeModelCount || 1
+      const probeTotal =
+        progress.totalAnswersExpected > 0
+          ? progress.totalAnswersExpected
+          : Math.max(1, questionCount * modelCount)
+      const probeDone =
+        progress.answeredCount != null
+          ? progress.answeredCount
+          : (progress.successCount || 0) + (progress.failedCount || 0)
       lastStatus = progress.status || lastStatus
       lastProgress = progress
 
       if (progress.status === 'analyzing') {
         const aDone = progress.analysisDone || 0
-        const aTotal = progress.analysisTotal || t
+        const aTotal = progress.analysisTotal || probeTotal
         generatingText.value = `分析中 ${aDone}/${aTotal}`
       } else if (progress.status === 'sourcing' || progress.status === 'sourcing_done') {
         const sDone = progress.sourceSearchDone ?? 0
-        const sTotal = progress.sourceSearchTotal ?? t
+        const sTotal = progress.sourceSearchTotal ?? (questionCount || 1)
         generatingText.value = `博查信源 ${sDone}/${sTotal}`
       } else if (progress.status === 'classifying' || progress.status === 'classifying_done') {
         const cDone = progress.sourceClassifyDone ?? 0
-        const cTotal = progress.sourceClassifyTotal ?? t
+        const cTotal = progress.sourceClassifyTotal ?? (questionCount || 1)
         generatingText.value = `信源分类入库 ${cDone}/${cTotal}`
       } else if (progress.status === 'completed') {
-        generatingText.value = `已完成`
+        if (progress.wordCloudInProgress) {
+          const wc = progress.wordCloudItemCount ?? 0
+          generatingText.value = wc > 0 ? `词云生成中（已入库 ${wc} 条）` : '词云生成中…'
+        } else {
+          generatingText.value = `已完成`
+        }
       } else if (progress.status === 'failed') {
         generatingText.value = `已失败`
+      } else if (progress.status === 'probing_done') {
+        generatingText.value = `探针完成 ${probeDone}/${probeTotal}`
       } else {
-        generatingText.value = `探针中 ${done}/${t}`
+        const unitHint =
+          questionCount > 0 && modelCount > 1 ? `（${questionCount}题×${modelCount}模型）` : ''
+        generatingText.value = `探针中 ${probeDone}/${probeTotal}${unitHint}`
       }
 
       // 仅当任务状态终局时结束：probing_done 探针已结束但分析可能尚未开始/未完成，
       // 若用「pendingCount===0 && status!==analyzing」会误判提前拉报告，需刷新页面才看到新数据。
-      if (progress.status === 'completed' || progress.status === 'failed') {
+      if (progress.status === 'failed') {
+        break
+      }
+      if (progress.status === 'completed' && !progress.wordCloudInProgress) {
         break
       }
     }
@@ -4279,9 +4306,16 @@ const submitHealthReportTask = async ({ connectionIds, analysisConnectionId }) =
       throw new Error(createData?.error || `创建任务失败（HTTP ${createRes.status}）`)
     }
     const taskId = createData.taskId
-    const total = createData.totalQuestions || 0
-    ElMessage.success(`任务已创建（#${taskId}），共 ${total} 题，后台探针中...`)
-    generatingText.value = `探针中 0/${total || '?'}`
+    const questionCount = createData.totalQuestions ?? createData.questionCount ?? 0
+    const modelCount = createData.probeModelCount ?? connectionIds?.length ?? 1
+    const probeTotal =
+      createData.totalAnswersExpected > 0
+        ? createData.totalAnswersExpected
+        : questionCount * modelCount
+    ElMessage.success(
+      `任务已创建（#${taskId}），${questionCount} 题 × ${modelCount} 模型 = ${probeTotal} 次探针，后台执行中…`
+    )
+    generatingText.value = `探针中 0/${probeTotal || '?'}`
 
     await pollTaskProgress(taskId)
   } catch (err) {

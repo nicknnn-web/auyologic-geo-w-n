@@ -9,6 +9,87 @@ import {
   orderWordCloudItemsForPersist,
 } from './sentimentWordCloudAiService.js';
 import { extractProbeAnswerText } from './sentimentLexiconService.js';
+import { startPhaseTimer, logPhaseDone } from '../utils/geoTaskTiming.js';
+
+/** @type {Map<number, Promise<{ ok: boolean, count?: number, error?: string }>>} */
+const runningWordCloudByTask = new Map();
+
+export function isWordCloudPersistInFlight(taskId) {
+  const tid = Number(taskId);
+  return Number.isFinite(tid) && tid > 0 && runningWordCloudByTask.has(tid);
+}
+
+async function loadEnterpriseCtxForUser(pool, userId) {
+  const uid = String(userId || 'default_user').trim() || 'default_user';
+  const entRes = await pool.query(
+    `SELECT company_name, industry, description, target_audience FROM users WHERE user_id = $1 LIMIT 1`,
+    [uid]
+  );
+  const e = entRes.rows[0] || {};
+  return {
+    userId: uid,
+    brandName: String(e.company_name || '').trim() || '品牌',
+    industry: String(e.industry || '').trim(),
+    brandDescription: String(e.description || '').trim(),
+    targetAudience: String(e.target_audience || '').trim(),
+  };
+}
+
+/**
+ * 分析完成后异步写入词云（不阻塞任务标为 completed）。同 task 重复调度会复用进行中的 Promise。
+ * @returns {Promise<{ ok: boolean, count?: number, error?: string }>}
+ */
+export function schedulePersistAiWordCloudForTask(pool, taskId, userId) {
+  const tid = Number(taskId);
+  if (!Number.isFinite(tid) || tid <= 0) {
+    return Promise.resolve({ ok: false, error: 'invalid taskId' });
+  }
+  const existing = runningWordCloudByTask.get(tid);
+  if (existing) return existing;
+
+  const job = (async () => {
+    const wordCloudStartedAt = startPhaseTimer();
+    try {
+      const ent = await loadEnterpriseCtxForUser(pool, userId);
+      console.log(`[wordcloud] task=${tid} 后台入库开始`);
+      const result = await persistAiWordCloudForTask(pool, tid, ent.userId, {
+        brandName: ent.brandName,
+        industry: ent.industry,
+        brandDescription: ent.brandDescription,
+        targetAudience: ent.targetAudience,
+      });
+      if (result.ok) {
+        logPhaseDone('wordcloud', tid, '词云', wordCloudStartedAt, { count: result.count ?? 0 });
+      } else {
+        logPhaseDone('wordcloud', tid, '词云', wordCloudStartedAt, {
+          ok: false,
+          error: result.error || '',
+        });
+        console.warn(`[wordcloud] task=${tid} 后台入库失败`, result.error || '');
+      }
+      return result;
+    } catch (e) {
+      logPhaseDone('wordcloud', tid, '词云', wordCloudStartedAt, {
+        ok: false,
+        error: e?.message || String(e),
+      });
+      console.error(`[wordcloud] task=${tid} 后台入库异常`, e?.message || e);
+      return { ok: false, error: e?.message || String(e) };
+    } finally {
+      runningWordCloudByTask.delete(tid);
+    }
+  })();
+
+  runningWordCloudByTask.set(tid, job);
+  return job;
+}
+
+/** 若该任务词云正在后台生成，先等待结束（供手动重建避免并发删写冲突） */
+export async function awaitWordCloudPersistIfRunning(taskId) {
+  const tid = Number(taskId);
+  const p = runningWordCloudByTask.get(tid);
+  if (p) await p.catch(() => {});
+}
 
 /**
  * 与 GET /api/geo-health-report 选「当前展示任务」规则一致（按企业名称 keyword 匹配 + 最近完成分析）。
@@ -92,7 +173,11 @@ export async function persistAiWordCloudForTask(pool, taskId, userId, enterprise
   );
 
   const brandName = String(enterpriseCtx?.brandName || '品牌').trim();
+  console.log(
+    `[wordcloud] task=${tid} persist 开始 answerRows=${rows.length}（成功分析条数）`
+  );
   const aiRows = await fetchWordCloudPhrasesFromAi(pool, uid, {
+    taskId: tid,
     brandName,
     industry: enterpriseCtx?.industry || '',
     brandDescription: enterpriseCtx?.brandDescription || '',
@@ -141,6 +226,7 @@ export async function persistAiWordCloudForTask(pool, taskId, userId, enterprise
       if (Number.isFinite(Number(newId))) idByPhrasePolarity.set(mapKey, Number(newId));
     }
     await client.query('COMMIT');
+    console.log(`[wordcloud] task=${tid} persist 写入完成 count=${ordered.length}`);
     return { ok: true, count: ordered.length };
   } catch (e) {
     try {

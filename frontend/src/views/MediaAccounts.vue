@@ -63,13 +63,21 @@
           </div>
         </div>
 
-        <!-- 手机号 -->
-        <div class="flex-1 text-sm text-gray-500">
-          <span v-if="account.phone_number">
-            <el-icon class="mr-1"><Phone /></el-icon>
-            {{ maskPhone(account.phone_number) }}
-          </span>
-          <span v-else class="text-gray-300">未绑定手机号</span>
+        <!-- 手机号 / 平台说明 -->
+        <div class="flex-1 text-sm text-gray-500 min-w-0">
+          <div
+            v-if="isToutiaoPlatform(account.platform) && account.auth_status !== 'authorized'"
+            class="text-xs text-amber-700 leading-relaxed"
+          >
+            须用<strong>今日头条 App</strong>扫码登录；发布前请在 App 内<strong>绑定手机号</strong>并完成实名。
+          </div>
+          <template v-else>
+            <span v-if="account.phone_number">
+              <el-icon class="mr-1"><Phone /></el-icon>
+              {{ maskPhone(account.phone_number) }}
+            </span>
+            <span v-else class="text-gray-300">未绑定手机号</span>
+          </template>
         </div>
 
         <!-- 授权状态 -->
@@ -153,9 +161,18 @@
         <el-form-item label="账号名称" prop="account_name">
           <el-input v-model="accountForm.account_name" placeholder="在平台上的昵称（可选）" />
         </el-form-item>
-        <el-form-item label="手机号">
+        <el-form-item v-if="!isToutiaoPlatform(accountForm.platform)" label="手机号">
           <el-input v-model="accountForm.phone_number" placeholder="登录用手机号（可选，授权时自动填入）" maxlength="11" />
         </el-form-item>
+        <el-alert
+          v-else
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mb-2"
+          title="今日头条说明"
+          description="授权需 App 扫码，无需填写手机号；发布内容前请在今日头条 App 绑定手机号并且完成实名认证！。"
+        />
       </el-form>
       <template #footer>
         <el-button @click="accountDialogVisible = false">取消</el-button>
@@ -183,6 +200,19 @@
           description="请先启动本地代理程序（local-agent/），代理在线后再点击「打开授权浏览器」。"
         />
         <el-alert
+          v-else-if="authPlatformMeta"
+          type="warning"
+          :closable="false"
+          class="mb-4"
+          show-icon
+          title="今日头条 · App 扫码授权"
+        >
+          <template #default>
+            <p class="text-sm leading-relaxed mb-2">{{ authPlatformMeta.authHint }}</p>
+            <p class="text-sm leading-relaxed text-amber-800">{{ authPlatformMeta.publishHint }}</p>
+          </template>
+        </el-alert>
+        <el-alert
           v-else
           type="info"
           :closable="false"
@@ -196,7 +226,7 @@
               {{ authAccount.platform }}
             </el-tag>
           </el-form-item>
-          <el-form-item label="手机号">
+          <el-form-item v-if="!authPlatformMeta?.hidePhoneInput" label="手机号">
             <el-input
               v-model="authPhoneNumber"
               placeholder="登录用手机号（可选）"
@@ -211,6 +241,16 @@
       <!-- Step 1：浏览器已打开，等待用户操作 -->
       <div v-if="authStep === 1">
         <el-alert
+          v-if="authPlatformMeta"
+          type="warning"
+          :closable="false"
+          class="mb-4"
+          show-icon
+          :title="authPlatformMeta.step1Title"
+          :description="authPlatformMeta.step1Desc"
+        />
+        <el-alert
+          v-else
           :type="authSessionStatus === 'waiting_sms_code' ? 'warning' : 'success'"
           :closable="false"
           class="mb-4"
@@ -221,7 +261,7 @@
         />
 
         <!-- 收到短信验证码时显示输入框 -->
-        <div v-if="authSessionStatus === 'waiting_sms_code'" class="mb-4">
+        <div v-if="authSessionStatus === 'waiting_sms_code' && !authPlatformMeta" class="mb-4">
           <el-form label-width="90px">
             <el-form-item label="验证码">
               <el-input
@@ -265,7 +305,7 @@
         <template v-if="authStep === 0">
           <el-button @click="authDialogVisible = false">取消</el-button>
           <el-button type="primary" :loading="authStarting" :disabled="!agentOnline" @click="handleAuthStart">
-            打开授权浏览器
+            {{ authPlatformMeta ? '打开登录页（App 扫码）' : '打开授权浏览器' }}
           </el-button>
         </template>
 
@@ -298,12 +338,17 @@ import { formatZhCnMdHm } from '../utils/dateTime.js'
 import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
 import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
+import { getPlatformAuthMeta, isQrAppAuthPlatform } from '../utils/platformAuthMeta.js'
 
 const API = '/api/platform-accounts'
 
 const platformDictRows = ref([])
 
 const platformSelectOpts = computed(() => toDataValueSelectOptions(platformDictRows.value))
+
+const isToutiaoPlatform = (platform) => isQrAppAuthPlatform(platform)
+
+const authPlatformMeta = computed(() => getPlatformAuthMeta(authAccount.value?.platform || ''))
 
 const loadPlatformDict = async () => {
   platformDictRows.value = await fetchDictList('publish_platform')
@@ -445,7 +490,11 @@ const handleAuthStart = async () => {
     })
     authStep.value = 1
     startPolling()
-    ElMessage.success('浏览器已打开，请完成登录')
+    ElMessage.success(
+      authPlatformMeta.value
+        ? '登录页已打开，请用今日头条 App 扫码'
+        : '浏览器已打开，请完成登录'
+    )
   } catch (err) {
     ElMessage.error(err.message || '启动授权失败')
   } finally {
@@ -569,10 +618,14 @@ const getAuthLabel = (status) => {
 }
 
 const getAuthProgressText = (status) => {
+  if (authPlatformMeta.value && (status === 'waiting_qr_scan' || status === 'browser_opened')) {
+    return '请打开今日头条 App 扫描浏览器中的二维码…'
+  }
   const map = {
     waiting_agent: '等待本地代理接收任务…',
     opening: '代理正在启动浏览器…',
     browser_opened: '浏览器已打开，请在弹出窗口中完成登录',
+    waiting_qr_scan: '等待 App 扫码登录…',
     waiting_sms_code: '等待验证码提交…',
     submitting: '正在提交，等待跳转…',
     authorized: '正在捕获登录状态…',

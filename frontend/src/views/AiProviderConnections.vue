@@ -4,7 +4,7 @@
       <div>
         <div class="text-lg font-bold">大模型接入</div>
         <div class="text-sm text-gray-500 mt-1">
-          管理中国区与 OpenAI 兼容接口；API Key 以密文写入数据库。部署须配置环境变量
+          管理国内大模型与 ChatGPT / Gemini / Claude 等接入；API Key 以密文写入数据库。部署须配置环境变量
           <code class="text-xs bg-gray-100 px-1 rounded">AI_CREDENTIALS_SECRET</code>（至少 16 位）。
           业务探针若仍使用环境变量中的 Key，可与本页并存，后续可再关联本表。
         </div>

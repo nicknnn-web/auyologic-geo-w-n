@@ -29,6 +29,7 @@ export const ANALYSIS_SYSTEM_PROMPT = `你是品牌AI可见度多维分析引擎
  * @param {{ positive?: string[]; neutral?: string[]; negative?: string[] }} [params.sentimentLexicon] 情感词三档（库表注入）
  */
 export function buildAnalysisPrompt({ brand, question, answer, category, sentimentLexicon }) {
+  const answerBody = String(answer ?? '').trim();
   const lex = sentimentLexicon || {};
   const pos = Array.isArray(lex.positive) ? lex.positive.filter(Boolean) : [];
   const neu = Array.isArray(lex.neutral) ? lex.neutral.filter(Boolean) : [];
@@ -50,7 +51,10 @@ export function buildAnalysisPrompt({ brand, question, answer, category, sentime
 - brand（目标品牌）: ${brand}
 - category（问题意图）: ${category}
 - question: ${question}
-- answer: ${answer}
+- answer（AI 回答原文，请仅据此判定，勿复述全文）:
+<<<
+${answerBody}
+>>>
 ${lexiconBlock}
 请对上述 AI 回答做以下多维判定，并严格只输出 JSON：
 

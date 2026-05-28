@@ -71,10 +71,34 @@ export async function loadSentimentLexiconPolarityRules(pool, userId) {
  * @param {object} rawJson
  * @returns {string}
  */
+function answerFromLegacyContent(content) {
+  const s = String(content || '').trim();
+  if (!s) return '';
+  if (!s.startsWith('{') && !s.startsWith('[')) return s;
+  try {
+    const o = JSON.parse(s);
+    if (o && typeof o.answer === 'string' && o.answer.trim()) return o.answer.trim();
+  } catch {
+    /* fall through */
+  }
+  return s;
+}
+
+/** 探针回答送入分析/词云前的长度上限（与 geoBrandTaskConfig 默认一致） */
+export function truncateTextForAnalysis(text, maxChars = 10000) {
+  const s = String(text || '').trim();
+  if (!s || s.length <= maxChars) return s;
+  return `${s.slice(0, maxChars)}\n\n[…原文已截断，仅分析前 ${maxChars} 字…]`;
+}
+
 export function extractProbeAnswerText(rawJson) {
   const j = rawJson || {};
+  const raw = String(j.raw_answer || '').trim();
+  if (raw) return raw;
+  const fromContent = answerFromLegacyContent(j.content || j.answer);
+  if (fromContent) return fromContent;
   return (
-    String(j.content || j.answer || '').trim() ||
+    String(j.structured?.answer || '').trim() ||
     String(j.parsed?.answer || '').trim()
   );
 }

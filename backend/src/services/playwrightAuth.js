@@ -1,4 +1,5 @@
 import { launchChromium } from '../utils/playwrightLaunch.js';
+import { normalizePublishPlatform } from '../utils/publishPlatformNormalize.js';
 
 const PLATFORM_CONFIG = {
   '小红书': {
@@ -42,6 +43,22 @@ const PLATFORM_CONFIG = {
     },
     sessionCookieName: 'z_c0',
   },
+  '今日头条': {
+    baseUrl: 'https://mp.toutiao.com',
+    loginUrl: 'https://mp.toutiao.com/auth/page/login',
+    loginSuccessCheck: (url) => {
+      try {
+        const u = new URL(url);
+        if (!u.hostname.includes('toutiao.com')) return false;
+        const p = u.pathname.toLowerCase();
+        if (p.includes('/login') || p.includes('/auth/page/login') || p.includes('/passport')) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    sessionCookieName: 'sessionid',
+  },
 };
 
 // 内存中的活跃浏览器会话（accountId -> session）
@@ -49,6 +66,11 @@ const activeSessions = new Map();
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+function shouldKeepBrowserOpenAfterAuth() {
+  const v = String(process.env.AUTH_KEEP_BROWSER_OPEN ?? '0').trim().toLowerCase();
+  return ['1', 'true', 'yes', 'on'].includes(v);
+}
 
 /** 反检测 initScript */
 const STEALTH_SCRIPT = `
@@ -93,7 +115,8 @@ function randomDelay(min, max) {
 export async function startAuth(accountId, platform, phoneNumber) {
   await closeSession(accountId);
 
-  const config = PLATFORM_CONFIG[platform];
+  const platformKey = normalizePublishPlatform(platform);
+  const config = PLATFORM_CONFIG[platformKey];
   if (!config) throw new Error(`不支持的平台：${platform}`);
 
   const browser = await launchChromium({ headless: false });
@@ -102,7 +125,7 @@ export async function startAuth(accountId, platform, phoneNumber) {
   const page = await context.newPage();
 
   const session = {
-    browser, context, page, platform,
+    browser, context, page, platform: platformKey,
     status: 'opening',
     phoneNumber: phoneNumber || null,
   };
@@ -114,8 +137,11 @@ export async function startAuth(accountId, platform, phoneNumber) {
     await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     session.status = 'browser_opened';
 
-    if (platform === '小红书' && phoneNumber) {
+    if (platformKey === '小红书' && phoneNumber) {
       await autoFillXhsPhone(page, phoneNumber, session);
+    }
+    if (platformKey === '今日头条') {
+      session.status = 'waiting_qr_scan';
     }
 
     return { success: true, status: session.status, message: '浏览器已打开，请在弹出的窗口中完成登录' };
@@ -224,8 +250,12 @@ export async function captureSession(accountId) {
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     const storageState = await context.storageState();
     session.status = 'authorized';
-    // 成功后才关闭浏览器
-    await closeSession(accountId);
+    if (shouldKeepBrowserOpenAfterAuth()) {
+      console.log('[授权] AUTH_KEEP_BROWSER_OPEN=1，浏览器保持打开供检查');
+      activeSessions.delete(String(accountId));
+    } else {
+      await closeSession(accountId);
+    }
     return { success: true, storageState, userAgent: DEFAULT_USER_AGENT };
   } catch (err) {
     // 抓取失败：同样不关浏览器，保留让用户重试
@@ -241,7 +271,7 @@ export async function captureSession(accountId) {
  */
 export function verifySession(platform, sessionStateJson) {
   if (!sessionStateJson) return false;
-  const config = PLATFORM_CONFIG[platform];
+  const config = PLATFORM_CONFIG[normalizePublishPlatform(platform)];
   if (!config) return false;
 
   try {

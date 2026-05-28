@@ -3,7 +3,8 @@
  *
  * 维护说明：
  * - 抽题数量：改 config/geoBrandTaskConfig.js 里的 GEO_HEALTH_QUESTIONS_PER_TYPE
- * - 探针模型：geo_health_task.connection_ids；信源：BOCHA_API_KEY + analysis_connection_id
+ * - 探针：原题直问 → 再抽取 JSON；模型来自 geo_health_task.connection_ids
+ * - 信源：BOCHA_API_KEY + analysis_connection_id
  * - 信源入库见 services/geoHealthSourcePipeline.js
  */
 import {
@@ -11,17 +12,27 @@ import {
   createAiClientByConnectionId,
   createAiClientsByIds,
 } from './aiClientFactory.js';
+import { isWordCloudPersistInFlight } from './geoHealthWordCloudPersistService.js';
+import { startPhaseTimer, logPhaseDone } from '../utils/geoTaskTiming.js';
 import {
   GEO_HEALTH_QUESTIONS_PER_TYPE,
   GEO_HEALTH_PROBE_BATCH_DELAY_MS,
   GEO_HEALTH_PROBE_CONCURRENCY,
   GEO_HEALTH_PROBE_MAX_TOKENS,
   GEO_HEALTH_PROBE_TIMEOUT_MS,
+  GEO_HEALTH_PROBE_EXTRACT_MAX_TOKENS,
+  GEO_HEALTH_PROBE_EXTRACT_TEMPERATURE,
+  GEO_HEALTH_PROBE_EXTRACT_ENABLED,
+  resolveProbeTemperature,
+  DEEPSEEK_PROBE_SYSTEM_MESSAGE,
+  DEEPSEEK_PROBE_THINKING_ENABLED,
+  DEEPSEEK_PROBE_REASONING_EFFORT,
   GEO_HEALTH_KEYWORD_TYPE_DICT_TYPE,
 } from '../config/geoBrandTaskConfig.js';
+import { usesDeepSeekProvider } from './aiClientFactory.js';
 
 /** 历史兼容：默认模型名（仅向后兼容用，新流程不再依赖） */
-export const DEEPSEEK_DEFAULT_MODEL = PROVIDERS.deepseek?.defaultModel || 'deepseek-chat';
+export const DEEPSEEK_DEFAULT_MODEL = PROVIDERS.deepseek?.defaultModel || 'deepseek-v4-flash';
 
 /**
  * 从 sys_dict 读取 dict_type=keyword_type 的全部启用项，用 data_key 与 questions.keyword_type 一致匹配抽题。
@@ -51,7 +62,13 @@ export async function resolveGeoHealthKeywordBuckets(pool) {
 
 // Prompt 已迁至 backend/src/prompts/geoHealthProbe.js
 // 保留同名 export (DEFAULT_SYSTEM_PROMPT) 做向后兼容
-import { PROBE_SYSTEM_PROMPT, buildProbeUserPrompt } from '../prompts/geoHealthProbe.js';
+import {
+  PROBE_EXTRACT_SYSTEM_PROMPT,
+  PROBE_SYSTEM_PROMPT,
+  buildProbeDirectUserPrompt,
+  buildProbeExtractUserPrompt,
+} from '../prompts/geoHealthProbe.js';
+/** @deprecated 旧探针 system，现探针直问无 system；抽取阶段用 PROBE_EXTRACT_SYSTEM_PROMPT */
 export const DEFAULT_SYSTEM_PROMPT = PROBE_SYSTEM_PROMPT;
 
 /**
@@ -92,27 +109,45 @@ export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn,
 }
 
 /**
- * 从模型回复中解析 JSON（兼容 ```json 围栏）
+ * 从模型回复中解析 JSON（兼容 ```json 围栏、前后夹杂说明文字、截断尝试）
  */
 export function extractJsonFromText(text) {
   const raw = String(text || '').trim();
   if (!raw) return null;
-  const fence = raw.match(/^```(?:json)?\s*([\s\S]*?)```$/m);
-  const inner = fence ? fence[1].trim() : raw;
-  try {
-    return JSON.parse(inner);
-  } catch {
-    const start = inner.indexOf('{');
-    const end = inner.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(inner.slice(start, end + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
+
+  const candidates = [];
+  const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let fenceMatch;
+  while ((fenceMatch = fenceRe.exec(raw)) !== null) {
+    const block = fenceMatch[1]?.trim();
+    if (block) candidates.push(block);
   }
+
+  candidates.push(raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/gm, '').trim());
+
+  const start = raw.indexOf('{');
+  if (start >= 0) {
+    let searchFrom = raw.length;
+    while (searchFrom > start) {
+      const end = raw.lastIndexOf('}', searchFrom);
+      if (end <= start) break;
+      candidates.push(raw.slice(start, end + 1));
+      searchFrom = end - 1;
+    }
+  }
+
+  const seen = new Set();
+  for (const c of candidates) {
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    try {
+      const obj = JSON.parse(c);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null;
 }
 
 /**
@@ -238,11 +273,17 @@ export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, a
 
   await pool.query(`UPDATE geo_health_task SET status = 'running' WHERE id = $1`, [taskId]);
 
-  return { taskId, questionCount: total, status: 'running' };
+  const probeModelCount = validIds.length;
+  return {
+    taskId,
+    questionCount: total,
+    totalQuestions: total,
+    probeModelCount,
+    totalAnswersExpected: total * probeModelCount,
+    status: 'running',
+  };
 }
 
-// buildDefaultUserPrompt 已迁至 backend/src/prompts/geoHealthProbe.js（buildProbeUserPrompt）
-const buildDefaultUserPrompt = buildProbeUserPrompt;
 
 /**
  * 对单题 + 单连接调用 AI，写入 geo_health_answer（不含信源；信源由博查流水线写入）。
@@ -273,10 +314,9 @@ export async function probeOneQuestionWithModel(pool, options) {
     connectionId,
     preparedClient,
     preparedQuestion,
-    systemPrompt = DEFAULT_SYSTEM_PROMPT,
     userPrompt: userPromptOverride,
     maxTokens = GEO_HEALTH_PROBE_MAX_TOKENS,
-    temperature = 0.3,
+    temperature: temperatureOverride,
     signal,
     timeoutMs = GEO_HEALTH_PROBE_TIMEOUT_MS,
   } = options;
@@ -291,6 +331,10 @@ export async function probeOneQuestionWithModel(pool, options) {
   const client = preparedClient || (await createAiClientByConnectionId(pool, connectionId));
   const modelName = client.vendorName;
   const cid = client.connectionId;
+  const probeTemperature =
+    temperatureOverride != null && Number.isFinite(Number(temperatureOverride))
+      ? Number(temperatureOverride)
+      : resolveProbeTemperature(client.providerKey);
 
   // 预取的题目元数据优先使用，避免 N×M 次重复 SQL
   let row = preparedQuestion;
@@ -311,23 +355,82 @@ export async function probeOneQuestionWithModel(pool, options) {
     row.keyword_type_label && String(row.keyword_type_label) !== String(row.question_type)
       ? `${row.keyword_type_label}（${row.question_type}）`
       : String(row.question_type ?? '');
-  const userPrompt = userPromptOverride || buildDefaultUserPrompt(typeLine, row.question);
 
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    { role: 'user', content: userPrompt },
-  ];
+  // 第 1 步：原题直问（DeepSeek 加 system + thinking，其它厂商仅 user）
+  const directUserPrompt =
+    userPromptOverride != null && String(userPromptOverride).trim() !== ''
+      ? String(userPromptOverride).trim()
+      : buildProbeDirectUserPrompt(row.question);
+  const probeMessages = usesDeepSeekProvider(client.providerKey)
+    ? [
+        { role: 'system', content: DEEPSEEK_PROBE_SYSTEM_MESSAGE },
+        { role: 'user', content: directUserPrompt },
+      ]
+    : [{ role: 'user', content: directUserPrompt }];
 
-  let content = '';
+  let rawAnswer = '';
+  let structured = null;
   let parsed = null;
   let errMsg = null;
-  let usage = null;
+  let probeUsage = null;
+  let probeReasoningContent = null;
+  let extractUsage = null;
+  let extractError = null;
 
   try {
-    const out = await client.chat(messages, { maxTokens, temperature, signal, timeoutMs });
-    content = out.content;
-    usage = out.usage ?? null;
-    parsed = extractJsonFromText(content);
+    const probeOut = await client.chat(probeMessages, {
+      maxTokens,
+      temperature: probeTemperature,
+      signal,
+      timeoutMs,
+      stream: false,
+      ...(usesDeepSeekProvider(client.providerKey)
+        ? {
+            deepSeekThinking: DEEPSEEK_PROBE_THINKING_ENABLED ? { type: 'enabled' } : false,
+            reasoningEffort: DEEPSEEK_PROBE_REASONING_EFFORT,
+          }
+        : {}),
+    });
+    rawAnswer = String(probeOut.content ?? '').trim();
+    probeUsage = probeOut.usage ?? null;
+    probeReasoningContent = probeOut.reasoningContent ?? null;
+    if (!rawAnswer) {
+      throw new Error('探针直问返回内容为空');
+    }
+
+    // 第 2 步：将原文结构化为 JSON（可关闭以减半探针 API 次数；分析阶段读 raw_answer）
+    if (!GEO_HEALTH_PROBE_EXTRACT_ENABLED) {
+      structured = { answer: rawAnswer, mentioned_entities: [] };
+      parsed = structured;
+    } else {
+      try {
+        const extractMessages = [
+          { role: 'system', content: PROBE_EXTRACT_SYSTEM_PROMPT },
+          { role: 'user', content: buildProbeExtractUserPrompt(typeLine, rawAnswer) },
+        ];
+        const extractOut = await client.chat(extractMessages, {
+          maxTokens: GEO_HEALTH_PROBE_EXTRACT_MAX_TOKENS,
+          temperature: GEO_HEALTH_PROBE_EXTRACT_TEMPERATURE,
+          signal,
+          timeoutMs,
+          stream: false,
+          ...(usesDeepSeekProvider(client.providerKey) ? { deepSeekThinking: false } : {}),
+        });
+        extractUsage = extractOut.usage ?? null;
+        structured = extractJsonFromText(extractOut.content);
+        if (structured && typeof structured.answer === 'string' && !String(structured.answer).trim()) {
+          structured.answer = rawAnswer;
+        }
+        if (structured && !structured.answer) {
+          structured.answer = rawAnswer;
+        }
+        parsed = structured;
+      } catch (extractErr) {
+        extractError = extractErr.message || String(extractErr);
+        structured = { answer: rawAnswer, mentioned_entities: [] };
+        parsed = structured;
+      }
+    }
   } catch (e) {
     errMsg = e.message || String(e);
     if (await geoHealthTaskExists(pool, taskId)) {
@@ -358,9 +461,27 @@ export async function probeOneQuestionWithModel(pool, options) {
     vendorName: modelName,
     connectionId: cid,
     model: client.model,
-    content,
+    probeMode: GEO_HEALTH_PROBE_EXTRACT_ENABLED ? 'direct_then_extract' : 'direct_only',
+    probeTemperature,
+    ...(probeReasoningContent ? { reasoning_content: probeReasoningContent } : {}),
+    ...(usesDeepSeekProvider(client.providerKey)
+      ? {
+          deepseekRequest: {
+            thinking: DEEPSEEK_PROBE_THINKING_ENABLED ? { type: 'enabled' } : { type: 'disabled' },
+            reasoning_effort: DEEPSEEK_PROBE_REASONING_EFFORT,
+            stream: false,
+          },
+        }
+      : {}),
+    raw_answer: rawAnswer,
+    content: rawAnswer,
+    structured,
     parsed,
-    usage,
+    mentioned_entities: Array.isArray(structured?.mentioned_entities) ? structured.mentioned_entities : [],
+    probeUsage,
+    extractUsage,
+    extractError,
+    usage: probeUsage,
   };
 
   if (!(await geoHealthTaskExists(pool, taskId))) {
@@ -462,9 +583,14 @@ export async function runAllProbesForTask(pool, taskId) {
   const conc = GEO_HEALTH_PROBE_CONCURRENCY;
   const delayMs = GEO_HEALTH_PROBE_BATCH_DELAY_MS;
   let failedCount = 0;
+  const probeStartedAt = startPhaseTimer();
 
   try {
     await pool.query(`UPDATE geo_health_task SET status = 'probing' WHERE id = $1`, [taskId]);
+    console.log(
+      `[geo-probe] task=${taskId} 开始 ${tasks.length} 单元（${questionRows.length} 题 × ${connectionIds.length} 模型）` +
+        ` extract=${GEO_HEALTH_PROBE_EXTRACT_ENABLED} conc=${conc}`
+    );
 
     // 滑动窗口并发：任一项完成立即调度下一项，最慢的题不会阻塞整批
     failedCount = await runWithSlidingConcurrency(tasks, conc, async ({ questionId, connectionId }) => {
@@ -492,11 +618,20 @@ export async function runAllProbesForTask(pool, taskId) {
 
     if (!(await geoHealthTaskExists(pool, taskId))) {
       console.log(`[geo-health] task=${taskId} 已删除（中止），跳过 probing_done`);
+      logPhaseDone('geo-probe', taskId, '探针', probeStartedAt, {
+        units: tasks.length,
+        failed: failedCount,
+        aborted: true,
+      });
       return { taskId, processed: tasks.length, failedCount };
     }
 
     // probing 完成，等待 runAllAnalysisForTask 把状态推到 completed
     await pool.query(`UPDATE geo_health_task SET status = 'probing_done' WHERE id = $1`, [taskId]);
+    logPhaseDone('geo-probe', taskId, '探针', probeStartedAt, {
+      units: tasks.length,
+      failed: failedCount,
+    });
     return { taskId, processed: tasks.length, failedCount };
   } catch (e) {
     console.error(`[geo-health] task=${taskId} probe runner fatal`, e);
@@ -604,6 +739,17 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
     /* 表未迁移时忽略 */
   }
 
+  let wordCloudItemCount = 0;
+  try {
+    const wcR = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM geo_health_word_cloud_item WHERE task_id = $1`,
+      [taskId]
+    );
+    wordCloudItemCount = wcR.rows[0]?.c ?? 0;
+  } catch {
+    /* ignore */
+  }
+
   const totalQuestions = totalR.rows[0].c;
   const answeredCount = ansR.rows[0].answered;
   const failedCount = ansR.rows[0].failed;
@@ -633,5 +779,7 @@ export async function getGeoHealthTaskProgress(pool, { taskId, userId }) {
     sourceSearchFailed,
     sourceClassifyDone,
     sourceClassifyTotal: sourceClassifyTotal || totalQuestions,
+    wordCloudItemCount,
+    wordCloudInProgress: isWordCloudPersistInFlight(taskId),
   };
 }

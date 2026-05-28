@@ -606,7 +606,7 @@ const detectDeepseekReal = async (question, keywords) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
         prompt: question,
         temperature: 0.7,
         max_tokens: 800
@@ -771,7 +771,7 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
         systemPrompt: GEO_DETECTION_SYSTEM_PROMPT,
         prompt,
         temperature: 0.3,

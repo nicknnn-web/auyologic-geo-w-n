@@ -5,12 +5,15 @@ setlocal enabledelayedexpansion
 title Auyologic 本地授权代理
 
 echo ╔══════════════════════════════════════╗
-echo ║   Auyologic 本地授权代理  v1.0.0     ║
+echo ║   Auyologic 本地授权代理  v1.0.0       ║
 echo ╚══════════════════════════════════════╝
 echo.
 
 :: 切换到脚本目录
 cd /d "%~dp0"
+
+:: 授权成功后保持浏览器打开（便于对比 Playwright 环境）；恢复自动关窗请改为 0
+set AUTH_KEEP_BROWSER_OPEN=1
 
 :: ================================
 :: 1. 检测 Node.js
@@ -115,7 +118,7 @@ if not exist "%~dp0node_modules\playwright" (
 :: ================================
 :: 4b. Playwright 浏览器（自动 npx playwright install chromium）
 :: ================================
-echo [Playwright] 检查并安装浏览器（首次约 150MB）...
+echo [Playwright] 检查浏览器（已安装则跳过；首次约 150MB）...
 echo        也可双击 install-playwright.bat 单独安装
 echo.
 set PLAYWRIGHT_BROWSERS_PATH=0
@@ -133,7 +136,7 @@ echo.
 :: ================================
 echo.
 echo ╔══════════════════════════════════════╗
-echo ║            请选择运行环境            ║
+echo ║            请选择运行环境               ║
 echo ╚══════════════════════════════════════╝
 echo.
 echo   [Y] 开发环境 (localhost)

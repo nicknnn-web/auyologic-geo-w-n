@@ -66,7 +66,7 @@
 
       <div class="knowledge-main">
     <!-- 上传区域 -->
-    <div 
+    <div
       class="border-2 border-dashed border-gray-300 rounded-lg p-8 mb-6 text-center hover:border-blue-400 transition-colors cursor-pointer"
       :class="{ 'border-blue-500 bg-blue-50': isDragging }"
       @dragover.prevent="isDragging = true"
@@ -74,7 +74,7 @@
       @drop.prevent="handleDrop"
       @click="triggerUpload"
     >
-      <input 
+      <input
         ref="fileInput"
         type="file"
         class="hidden"
@@ -104,8 +104,8 @@
     <div v-if="uploadingFiles.length > 0" class="mb-6">
       <div class="text-sm font-medium text-gray-600 mb-3">上传中...</div>
       <div class="space-y-2">
-        <div 
-          v-for="file in uploadingFiles" 
+        <div
+          v-for="file in uploadingFiles"
           :key="file.name"
           class="flex items-center gap-3 bg-gray-50 rounded-lg p-3"
         >
@@ -114,8 +114,8 @@
           </el-icon>
           <div class="flex-1">
             <div class="text-sm font-medium">{{ file.name }}</div>
-            <el-progress 
-              :percentage="file.progress" 
+            <el-progress
+              :percentage="file.progress"
               :stroke-width="4"
               :show-text="false"
               class="mt-1"
@@ -136,17 +136,17 @@
           <span v-if="currentFolderLabel" class="text-gray-400 font-normal"> · {{ currentFolderLabel }}</span>
         </div>
         <div class="flex gap-2">
-          <el-button 
-            type="success" 
+          <el-button
+            type="success"
             size="small"
             :loading="batchAnalyzing"
             @click="handleBatchAIAnalyze"
           >
             {{ batchAnalyzing ? '分析中...' : '批量AI分析' }}
           </el-button>
-          <el-button 
-            v-if="selectedDocs.length > 0" 
-            type="danger" 
+          <el-button
+            v-if="selectedDocs.length > 0"
+            type="danger"
             size="small"
             @click="handleBatchDelete"
           >
@@ -188,8 +188,8 @@
               {{ row.analyzedAt ? '已分析' : '未分析' }}
             </el-tag>
             <!-- 关键词 tooltip -->
-            <el-tooltip 
-              v-if="row.keywords && row.keywords.length > 0" 
+            <el-tooltip
+              v-if="row.keywords && row.keywords.length > 0"
               placement="top"
               effect="light"
             >
@@ -197,10 +197,10 @@
                 <div class="max-w-xs">
                   <div class="font-medium mb-1">关键词:</div>
                   <div class="flex flex-wrap gap-1">
-                    <el-tag 
-                      v-for="kw in row.keywords.slice(0, 10)" 
-                      :key="kw" 
-                      size="small" 
+                    <el-tag
+                      v-for="kw in row.keywords.slice(0, 10)"
+                      :key="kw"
+                      size="small"
                       type="info"
                       class="mb-1"
                     >
@@ -248,9 +248,9 @@
               抽取正文
             </el-button>
             <!-- AI 分析按钮 -->
-            <el-button 
-              link 
-              type="warning" 
+            <el-button
+              link
+              type="warning"
               size="small"
               :loading="analyzingIds.has(row.id)"
               :disabled="!!row.analyzedAt"
@@ -660,23 +660,23 @@ const uploadFileToMinIO = (file) => {
     // 文本文件类型
     const textTypes = ['txt', 'md', 'mdx', 'html']
     const isTextFile = textTypes.includes(ext)
-    
+
     // 用 FileReader 读取文本文件内容用于本地预览
     if (isTextFile) {
       const reader = new FileReader()
-      
+
       reader.onload = async (e) => {
         const content = e.target?.result || ''
-        
+
         try {
           // 上传到 MinIO
           const uploadResult = await uploadFile(file, (progress) => {
             uploadingFile.progress = progress
           })
-          
+
           uploadingFile.progress = 100
           uploadingFile.status = 'done'
-          
+
           const fileData = {
             id: Date.now() + Math.random(),
             name: file.name,
@@ -690,7 +690,7 @@ const uploadFileToMinIO = (file) => {
             createdAt: nowZhCnDateTime()
           }
           tableData.value.unshift(fileData)
-          
+
           // 保存到后端 API
           try {
             const savedDoc = await knowledgeAPI.create({
@@ -709,13 +709,13 @@ const uploadFileToMinIO = (file) => {
             console.error('保存到后端失败:', e.message || e)
             ElMessage.warning('保存到服务器失败，仅保留在本地')
           }
-          
+
           try {
             saveToStorage()
           } catch (e) {
             console.warn('localStorage 保存失败:', e)
           }
-          
+
         } catch (error) {
           console.error('上传失败:', error)
           ElMessage.error(`上传失败: ${error.message}`)
@@ -725,13 +725,13 @@ const uploadFileToMinIO = (file) => {
           resolve()
         }
       }
-      
+
       reader.onerror = () => {
         ElMessage.error(`读取 ${file.name} 失败`)
         uploadingFiles.value = uploadingFiles.value.filter(f => f.name !== file.name)
         resolve()
       }
-      
+
       reader.readAsText(file)
     } else {
       // PDF/Word 等二进制文件直接上传到 MinIO
@@ -740,10 +740,10 @@ const uploadFileToMinIO = (file) => {
           const uploadResult = await uploadFile(file, (progress) => {
             uploadingFile.progress = progress
           })
-          
+
           uploadingFile.progress = 100
           uploadingFile.status = 'done'
-          
+
           const fileData = {
             id: Date.now() + Math.random(),
             name: file.name,
@@ -757,7 +757,7 @@ const uploadFileToMinIO = (file) => {
             createdAt: nowZhCnDateTime()
           }
           tableData.value.unshift(fileData)
-          
+
           try {
             console.log('正在保存知识库文档...', file.name)
             const savedDoc = await knowledgeAPI.create({
@@ -794,13 +794,13 @@ const uploadFileToMinIO = (file) => {
             console.error('保存到后端失败:', e.message || e)
             ElMessage.warning('保存到服务器失败，仅保留在本地')
           }
-          
+
           try {
             saveToStorage()
           } catch (e) {
             console.warn('localStorage 保存失败:', e)
           }
-          
+
         } catch (error) {
           console.error('上传失败:', error)
           ElMessage.error(`上传失败: ${error.message}`)
@@ -867,7 +867,7 @@ const analyzeWithDeepSeek = async (content) => {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'deepseek-chat',
+      model: 'deepseek-v4-flash',
       prompt,
       temperature: 0.7,
       max_tokens: 1000
@@ -880,7 +880,7 @@ const analyzeWithDeepSeek = async (content) => {
 
   const data = await response.json()
   const resultText = data.content || ''
-  
+
   // 解析 JSON 响应
   try {
     // 尝试提取 JSON 部分
@@ -936,17 +936,17 @@ const handleAIAnalyze = async (row) => {
     ElMessage.info('该文档已分析过')
     return
   }
-  
+
   // 获取文档内容
   const content = row.content || ''
   if (!content || content.length < 10) {
     ElMessage.warning('文档内容为空或过短，无法分析')
     return
   }
-  
+
   // 设置 loading 状态
   analyzingIds.value.add(row.id)
-  
+
   try {
     const result = await analyzeWithDeepSeek(content)
     const analyzedAt = new Date().toISOString()
@@ -993,31 +993,31 @@ const handleAIAnalyze = async (row) => {
 const handleBatchAIAnalyze = async () => {
   // 获取未分析的文档
   const docsToAnalyze = tableData.value.filter(doc => !doc.analyzedAt)
-  
+
   if (docsToAnalyze.length === 0) {
     ElMessage.warning('所有文档都已分析完成')
     return
   }
-  
+
   // 检查是否有选中的文档
   if (selectedDocs.value.length > 0) {
     // 只分析选中的未分析文档
     const selectedIds = selectedDocs.value.map(d => d.id)
-    const selectedToAnalyze = tableData.value.filter(doc => 
+    const selectedToAnalyze = tableData.value.filter(doc =>
       selectedIds.includes(doc.id) && !doc.analyzedAt
     )
-    
+
     if (selectedToAnalyze.length === 0) {
       ElMessage.warning('所选文档都已分析完成')
       return
     }
-    
+
     batchAnalyzing.value = true
     let successCount = 0
-    
+
     for (const doc of selectedToAnalyze) {
       analyzingIds.value.add(doc.id)
-      
+
       try {
         const content = doc.content || ''
         if (content && content.length >= 10) {
@@ -1059,7 +1059,7 @@ const handleBatchAIAnalyze = async () => {
         analyzingIds.value.delete(doc.id)
       }
     }
-    
+
     saveToStorage()
     batchAnalyzing.value = false
     ElMessage.success(`批量分析完成，成功保存 ${successCount} 个文档`)
@@ -1068,10 +1068,10 @@ const handleBatchAIAnalyze = async () => {
     // 分析所有未分析的文档
     batchAnalyzing.value = true
     let successCount = 0
-    
+
     for (const doc of docsToAnalyze) {
       analyzingIds.value.add(doc.id)
-      
+
       try {
         const content = doc.content || ''
         if (content && content.length >= 10) {
@@ -1113,7 +1113,7 @@ const handleBatchAIAnalyze = async () => {
         analyzingIds.value.delete(doc.id)
       }
     }
-    
+
     saveToStorage()
     batchAnalyzing.value = false
     ElMessage.success(`批量分析完成，成功保存 ${successCount} 个文档`)
@@ -1144,7 +1144,7 @@ const handlePreview = async (row) => {
     ElMessage.warning('暂无正文，请先抽取或重新上传')
     return
   }
-  
+
   if (row.type === 'md' || row.type === 'mdx') {
     // Markdown 实时预览
     try {
@@ -1184,13 +1184,13 @@ const handleDownload = async (row) => {
       console.warn('从 MinIO 下载失败，尝试使用本地内容:', e)
     }
   }
-  
+
   const content = row.content || ''
   if (!content) {
     ElMessage.warning('文件内容已丢失，请重新上传')
     return
   }
-  
+
   // 创建下载
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -1204,7 +1204,7 @@ const handleDownload = async (row) => {
 
 const handleDelete = async (id) => {
   const doc = tableData.value.find(item => item.id === id)
-  
+
   // 尝试从 MinIO 删除文件
   if (doc && doc.url) {
     try {
@@ -1213,7 +1213,7 @@ const handleDelete = async (id) => {
       console.warn('从 MinIO 删除失败:', e)
     }
   }
-  
+
   // 尝试从数据库删除
   try {
     await knowledgeAPI.delete(id)
@@ -1234,7 +1234,7 @@ const handleBatchDelete = async () => {
     ElMessage.warning('请先选择要删除的文档')
     return
   }
-  
+
   // 逐个删除，包括 MinIO 文件
   for (const doc of selectedDocs.value) {
     // 尝试从 MinIO 删除
@@ -1245,7 +1245,7 @@ const handleBatchDelete = async () => {
         console.warn(`从 MinIO 删除文档 ${doc.name} 失败:`, e)
       }
     }
-    
+
     // 尝试从数据库删除
     try {
       await knowledgeAPI.delete(doc.id)
@@ -1253,7 +1253,7 @@ const handleBatchDelete = async () => {
       console.warn(`从数据库删除文档 ${doc.name} 失败:`, e)
     }
   }
-  
+
   const ids = selectedDocs.value.map(d => d.id)
   tableData.value = tableData.value.filter(item => !ids.includes(item.id))
   saveToStorage()

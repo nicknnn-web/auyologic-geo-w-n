@@ -1,28 +1,29 @@
 /**
  * 统一 AI 客户端工厂
  *
- * 支持所有兼容 OpenAI Chat Completions API 的大模型平台。
- * 新增模型：只需在 PROVIDERS 里加一条记录 + 对应环境变量即可，业务代码无需改动。
+ * 国内厂商：OpenAI 兼容 Chat Completions。
+ * ChatGPT / OpenAI：Responses API（client.responses.create）。
+ * Gemini：@google/genai（models.generateContent）。
+ * Claude：Anthropic Messages API（/v1/messages）。
  *
  * 使用方式：
- *   import { createAiClient, resolveProbeModels, ANALYSIS_PROVIDER } from './aiClientFactory.js'
- *   const client = createAiClient('deepseek')
- *   const { content, usage } = await client.chat(messages, { maxTokens: 2048, temperature: 0.3 })
+ *   const client = await createAiClientByConnectionId(pool, id)
+ *   const { content } = await client.chat(messages, { maxTokens: 2048 })
  */
 
 import OpenAI from 'openai';
+import { GoogleGenAI } from '@google/genai';
 import { decryptSecret, isEncryptionConfigured } from './credentialCrypto.js';
 
 /**
  * 已知提供商注册表。
- * provider key 同时用于环境变量前缀和配置文件里的 PROBE_MODELS 值。
  */
 export const PROVIDERS = {
   deepseek: {
     label: 'DeepSeek',
     baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
     apiKeyEnv: 'DEEPSEEK_API_KEY',
-    defaultModel: 'deepseek-chat',
+    defaultModel: 'deepseek-v4-flash',
   },
   qwen: {
     label: '通义千问',
@@ -46,23 +47,47 @@ export const PROVIDERS = {
     label: 'OpenAI',
     baseURL: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
     apiKeyEnv: 'OPENAI_API_KEY',
-    defaultModel: 'gpt-4o-mini',
+    defaultModel: process.env.OPENAI_DEFAULT_MODEL || 'gpt-4o-mini',
+    nativeApi: 'openai-responses',
   },
-  /** 豆包 / 火山方舟 — OpenAI 兼容 */
+  chatgpt: {
+    label: 'ChatGPT',
+    baseURL:
+      process.env.CHATGPT_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      'https://api.openai.com/v1',
+    apiKeyEnv: 'CHATGPT_API_KEY',
+    apiKeyEnvFallback: 'OPENAI_API_KEY',
+    defaultModel: process.env.CHATGPT_DEFAULT_MODEL || 'gpt-5.5',
+    nativeApi: 'openai-responses',
+  },
+  gemini: {
+    label: 'Google Gemini',
+    apiKeyEnv: 'GEMINI_API_KEY',
+    apiKeyEnvFallback: 'GOOGLE_API_KEY',
+    defaultModel: process.env.GEMINI_DEFAULT_MODEL || 'gemini-2.5-flash',
+    nativeApi: 'gemini',
+  },
+  claude: {
+    label: 'Claude (Anthropic)',
+    baseURL: process.env.CLAUDE_BASE_URL || 'https://api.anthropic.com',
+    apiKeyEnv: 'CLAUDE_API_KEY',
+    apiKeyEnvFallback: 'ANTHROPIC_API_KEY',
+    defaultModel: process.env.CLAUDE_DEFAULT_MODEL || 'claude-opus-4-7',
+    nativeApi: 'anthropic',
+  },
   doubao: {
     label: '豆包',
     baseURL: process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3',
     apiKeyEnv: 'DOUBAO_API_KEY',
     defaultModel: process.env.DOUBAO_DEFAULT_MODEL || 'doubao-seed-1-6-251015',
   },
-  /** 腾讯元宝（对话能力基于混元）— OpenAI 兼容，见腾讯云混元文档 */
   hunyuan: {
     label: '腾讯元宝（混元）',
     baseURL: process.env.HUNYUAN_BASE_URL || 'https://api.hunyuan.cloud.tencent.com/v1',
     apiKeyEnv: 'HUNYUAN_API_KEY',
     defaultModel: process.env.HUNYUAN_DEFAULT_MODEL || 'hunyuan-turbos-latest',
   },
-  /** 文心一言 — 百度千帆 OpenAI 兼容（/v2） */
   wenxin: {
     label: '文心一言（千帆）',
     baseURL: process.env.WENXIN_BASE_URL || 'https://qianfan.baidubce.com/v2',
@@ -71,21 +96,11 @@ export const PROVIDERS = {
   },
 };
 
-/**
- * 根据预设 key 取默认 Base URL（不含用户覆盖）
- * @param {string} providerKey
- * @returns {string|null}
- */
 export function getPresetBaseURL(providerKey) {
   const cfg = PROVIDERS[providerKey];
   return cfg?.baseURL ?? null;
 }
 
-/**
- * 解析连接行的最终 baseURL：override 优先，否则使用预设。
- * @param {{ provider_key: string, base_url_override?: string|null }} row
- * @returns {string}
- */
 export function resolveConnectionBaseURL(row) {
   const override = String(row?.base_url_override || '').trim();
   if (override) return override;
@@ -93,25 +108,335 @@ export function resolveConnectionBaseURL(row) {
   return getPresetBaseURL(row?.provider_key) || '';
 }
 
-/**
- * 解析连接行的最终模型名：default_model 优先，否则使用预设。
- */
 export function resolveConnectionModel(row) {
   const m = String(row?.default_model || '').trim();
   if (m) return m;
   return PROVIDERS[row?.provider_key]?.defaultModel || 'gpt-4o-mini';
 }
 
+/** 连接是否可不配置 Base URL（走官方 SDK 默认端点） */
+export function connectionAllowsEmptyBaseURL(providerKey) {
+  return (
+    usesGeminiNativeApi(providerKey) ||
+    usesAnthropicNativeApi(providerKey) ||
+    usesOpenAiResponsesApi(providerKey)
+  );
+}
+
+export function usesAnthropicNativeApi(providerKey) {
+  return providerKey === 'claude' || PROVIDERS[providerKey]?.nativeApi === 'anthropic';
+}
+
+export function usesGeminiNativeApi(providerKey) {
+  return providerKey === 'gemini' || PROVIDERS[providerKey]?.nativeApi === 'gemini';
+}
+
+export function usesOpenAiResponsesApi(providerKey) {
+  const api = PROVIDERS[providerKey]?.nativeApi;
+  return api === 'openai-responses' || providerKey === 'chatgpt';
+}
+
+function resolveProviderApiKey(cfg, providerKey) {
+  let key = process.env[cfg.apiKeyEnv];
+  if (!key && cfg.apiKeyEnvFallback) {
+    key = process.env[cfg.apiKeyEnvFallback];
+  }
+  if (!key && providerKey === 'chatgpt') {
+    key = process.env.OPENAI_API_KEY;
+  }
+  return key;
+}
+
+function attachAbortHandling(externalSignal, timeoutMs) {
+  const ac = new AbortController();
+  let timer = null;
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    timer = setTimeout(() => {
+      try {
+        ac.abort(new Error(`AI 请求超时（${timeoutMs}ms）`));
+      } catch {
+        /* ignore */
+      }
+    }, timeoutMs);
+  }
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      if (timer) clearTimeout(timer);
+      throw externalSignal.reason || new Error('请求已被取消');
+    }
+    externalSignal.addEventListener(
+      'abort',
+      () => {
+        try {
+          ac.abort(externalSignal.reason || new Error('请求已被取消'));
+        } catch {
+          /* ignore */
+        }
+      },
+      { once: true }
+    );
+  }
+  return {
+    signal: ac.signal,
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+function toAnthropicPayload(messages) {
+  let system;
+  const out = [];
+  for (const m of messages || []) {
+    const role = m?.role;
+    const content = String(m?.content ?? '');
+    if (role === 'system') {
+      system = system ? `${system}\n\n${content}` : content;
+      continue;
+    }
+    if (role === 'user' || role === 'assistant') {
+      out.push({ role, content });
+    }
+  }
+  if (!out.length) out.push({ role: 'user', content: 'hi' });
+  return { system, messages: out };
+}
+
+/** OpenAI Responses API：instructions + input */
+function messagesToResponsesParams(messages) {
+  let instructions;
+  const turns = [];
+  for (const m of messages || []) {
+    const text = String(m?.content ?? '');
+    if (!text) continue;
+    if (m.role === 'system') {
+      instructions = instructions ? `${instructions}\n\n${text}` : text;
+    } else if (m.role === 'user' || m.role === 'assistant') {
+      turns.push({
+        role: m.role,
+        content: text,
+      });
+    }
+  }
+  if (!turns.length) {
+    return { instructions, input: 'hi' };
+  }
+  if (turns.length === 1 && turns[0].role === 'user') {
+    return { instructions, input: turns[0].content };
+  }
+  return { instructions, input: turns };
+}
+
+/** Gemini generateContent：systemInstruction + contents */
+function messagesToGeminiPayload(messages) {
+  let systemInstruction;
+  const contents = [];
+  for (const m of messages || []) {
+    const text = String(m?.content ?? '');
+    if (!text) continue;
+    if (m.role === 'system') {
+      systemInstruction = systemInstruction ? `${systemInstruction}\n\n${text}` : text;
+      continue;
+    }
+    if (m.role === 'user') {
+      contents.push({ role: 'user', parts: [{ text }] });
+    } else if (m.role === 'assistant') {
+      contents.push({ role: 'model', parts: [{ text }] });
+    }
+  }
+  if (!contents.length) {
+    contents.push({ role: 'user', parts: [{ text: 'hi' }] });
+  }
+  return { systemInstruction, contents };
+}
+
 /**
- * 按 ai_provider_connection.id 取出密文 → 解密 → 创建 OpenAI 兼容客户端。
- * 完全不依赖环境变量中的厂商 API Key。
- *
- * @param {object} pool - pg Pool
- * @param {number} connectionId
- * @param {object} [opts]
- * @param {string} [opts.userId] - 若提供，会校验连接归属
- * @returns {Promise<{ chat: Function, model: string, vendorName: string, providerKey: string, connectionId: number }>}
+ * Anthropic Claude — POST /v1/messages
+ * @see https://docs.anthropic.com/en/api/messages
  */
+export function createAnthropicClient({ baseURL, apiKey, defaultModel = 'claude-opus-4-7' }) {
+  if (!apiKey) throw new Error('apiKey 不能为空');
+  const root = String(baseURL || 'https://api.anthropic.com').replace(/\/$/, '');
+  const endpoint = root.endsWith('/v1') ? `${root}/messages` : `${root}/v1/messages`;
+  const model = defaultModel || 'claude-opus-4-7';
+
+  return {
+    provider: 'claude',
+    model,
+    async chat(messages, opts = {}) {
+      const {
+        model: m = model,
+        maxTokens = 4096,
+        temperature = 0.3,
+        signal: externalSignal,
+        timeoutMs,
+      } = opts;
+
+      const { system, messages: anthropicMessages } = toAnthropicPayload(messages);
+      const body = {
+        model: m,
+        max_tokens: maxTokens,
+        temperature,
+        messages: anthropicMessages,
+      };
+      if (system) body.system = system;
+
+      const { signal, cleanup } = attachAbortHandling(externalSignal, timeoutMs);
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': String(apiKey).trim(),
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(body),
+          signal,
+        });
+        const raw = await res.text();
+        if (!res.ok) {
+          throw new Error(`Claude API ${res.status}: ${raw.slice(0, 800)}`);
+        }
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          throw new Error('Claude API 返回非 JSON');
+        }
+        const content =
+          (data.content || [])
+            .filter((b) => b.type === 'text')
+            .map((b) => b.text)
+            .join('') || '';
+        return { content, usage: data.usage ?? null };
+      } finally {
+        cleanup();
+      }
+    },
+  };
+}
+
+/**
+ * OpenAI ChatGPT — Responses API（client.responses.create + output_text）
+ */
+export function createOpenAiResponsesClient({ apiKey, baseURL, defaultModel = 'gpt-5.5' }) {
+  if (!apiKey) throw new Error('apiKey 不能为空');
+  const clientOpts = {
+    apiKey: String(apiKey).trim(),
+    timeout: 90_000,
+    maxRetries: 1,
+  };
+  const base = String(baseURL || '').trim();
+  if (base) clientOpts.baseURL = base;
+  const openaiClient = new OpenAI(clientOpts);
+  const model = defaultModel || 'gpt-5.5';
+
+  return {
+    provider: 'chatgpt',
+    model,
+    async chat(messages, opts = {}) {
+      const {
+        model: m = model,
+        maxTokens = 4096,
+        signal: externalSignal,
+        timeoutMs,
+      } = opts;
+
+      const { instructions, input } = messagesToResponsesParams(messages);
+      const { signal, cleanup } = attachAbortHandling(externalSignal, timeoutMs);
+      try {
+        const response = await openaiClient.responses.create(
+          {
+            model: m,
+            input,
+            ...(instructions ? { instructions } : {}),
+            max_output_tokens: maxTokens,
+          },
+          { signal }
+        );
+        const content = response.output_text ?? '';
+        return { content, usage: response.usage ?? null };
+      } finally {
+        cleanup();
+      }
+    },
+  };
+}
+
+/**
+ * Google Gemini — @google/genai
+ */
+export function createGeminiClient({ apiKey, defaultModel = 'gemini-2.5-flash' }) {
+  if (!apiKey) throw new Error('apiKey 不能为空');
+  const ai = new GoogleGenAI({ apiKey: String(apiKey).trim() });
+  const model = defaultModel || 'gemini-2.5-flash';
+
+  return {
+    provider: 'gemini',
+    model,
+    async chat(messages, opts = {}) {
+      const {
+        model: m = model,
+        maxTokens = 4096,
+        temperature = 0.3,
+        signal: externalSignal,
+        timeoutMs,
+      } = opts;
+
+      const { systemInstruction, contents } = messagesToGeminiPayload(messages);
+      const { signal, cleanup } = attachAbortHandling(externalSignal, timeoutMs);
+      try {
+        const response = await ai.models.generateContent({
+          model: m,
+          contents,
+          config: {
+            maxOutputTokens: maxTokens,
+            temperature,
+            ...(systemInstruction ? { systemInstruction } : {}),
+            abortSignal: signal,
+          },
+        });
+        const content = response.text ?? '';
+        return { content, usage: response.usageMetadata ?? null };
+      } finally {
+        cleanup();
+      }
+    },
+  };
+}
+
+/**
+ * 按接入配置创建统一 chat 客户端
+ */
+export function createAiClientFromConnectionParams({
+  providerKey,
+  baseURL,
+  apiKey,
+  defaultModel = 'gpt-4o-mini',
+}) {
+  if (usesAnthropicNativeApi(providerKey)) {
+    return createAnthropicClient({
+      baseURL: baseURL || getPresetBaseURL('claude'),
+      apiKey,
+      defaultModel,
+    });
+  }
+  if (usesGeminiNativeApi(providerKey)) {
+    return createGeminiClient({ apiKey, defaultModel });
+  }
+  if (usesOpenAiResponsesApi(providerKey)) {
+    return createOpenAiResponsesClient({
+      apiKey,
+      baseURL: baseURL || getPresetBaseURL(providerKey) || undefined,
+      defaultModel,
+    });
+  }
+  if (!baseURL || !String(baseURL).trim()) {
+    throw new Error('baseURL 不能为空（OpenAI 兼容接入须配置 Base URL）');
+  }
+  return createOpenAiCompatibleClient({ baseURL, apiKey, defaultModel, providerKey });
+}
+
 export async function createAiClientByConnectionId(pool, connectionId, opts = {}) {
   const cid = Number(connectionId);
   if (!Number.isFinite(cid) || cid <= 0) {
@@ -136,34 +461,35 @@ export async function createAiClientByConnectionId(pool, connectionId, opts = {}
     throw new Error(`大模型连接已禁用：${row.vendor_name}（id=${cid}）`);
   }
 
+  const pk = row.provider_key;
   const baseURL = resolveConnectionBaseURL(row);
-  if (!baseURL) {
+  if (!baseURL && !connectionAllowsEmptyBaseURL(pk)) {
     throw new Error(`连接 ${row.vendor_name} 未能解析 Base URL（custom 类型须填 base_url_override）`);
   }
+  if (pk === 'custom' && !baseURL) {
+    throw new Error(`连接 ${row.vendor_name} 为自定义类型，须填写 Base URL`);
+  }
+
   const apiKey = decryptSecret(row.api_key_cipher, secret);
   if (!apiKey) {
     throw new Error(`连接 ${row.vendor_name} 的 API Key 解密为空`);
   }
   const defaultModel = resolveConnectionModel(row);
-  const client = createOpenAiCompatibleClient({ baseURL, apiKey, defaultModel });
+  const client = createAiClientFromConnectionParams({
+    providerKey: pk,
+    baseURL,
+    apiKey,
+    defaultModel,
+  });
   return {
     chat: client.chat,
     model: defaultModel,
     vendorName: row.vendor_name,
-    providerKey: row.provider_key,
+    providerKey: pk,
     connectionId: cid,
   };
 }
 
-/**
- * 批量按 ID 列表预实例化客户端（任务内复用，避免重复解密）。
- * 任一失败抛错（带连接信息），由调用方处理。
- *
- * @param {object} pool
- * @param {number[]} ids
- * @param {{ userId?: string }} [opts]
- * @returns {Promise<Map<number, { chat, model, vendorName, providerKey, connectionId }>>}
- */
 export async function createAiClientsByIds(pool, ids, opts = {}) {
   const map = new Map();
   for (const id of ids) {
@@ -173,27 +499,73 @@ export async function createAiClientsByIds(pool, ids, opts = {}) {
   return map;
 }
 
+export function usesDeepSeekProvider(providerKey) {
+  return String(providerKey || '').trim() === 'deepseek';
+}
+
+/** 在 messages 前插入 system（若尚无 system） */
+export function mergeSystemMessage(messages, systemContent) {
+  const list = Array.isArray(messages) ? [...messages] : [];
+  const sys = String(systemContent || '').trim();
+  if (!sys) return list;
+  if (list.some((m) => m?.role === 'system')) return list;
+  return [{ role: 'system', content: sys }, ...list];
+}
+
 /**
- * 使用任意 baseURL + apiKey 创建与 createAiClient 相同接口的客户端（OpenAI 兼容）
+ * 组装 Chat Completions 请求体（DeepSeek V4 支持 thinking / reasoning_effort）
+ * @see https://api-docs.deepseek.com/guides/thinking_mode
  */
-export function createOpenAiCompatibleClient({ baseURL, apiKey, defaultModel = 'gpt-4o-mini' }) {
+export function buildChatCompletionRequestBody({
+  model,
+  messages,
+  maxTokens,
+  temperature,
+  providerKey,
+  deepSeekThinking = false,
+  reasoningEffort = 'high',
+  stream = false,
+}) {
+  const body = {
+    model,
+    messages,
+    max_tokens: maxTokens,
+    temperature,
+    stream: !!stream,
+  };
+  if (usesDeepSeekProvider(providerKey) && deepSeekThinking) {
+    body.reasoning_effort = reasoningEffort || 'high';
+    body.thinking =
+      typeof deepSeekThinking === 'object' && deepSeekThinking !== null
+        ? deepSeekThinking
+        : { type: 'enabled' };
+  } else if (usesDeepSeekProvider(providerKey) && deepSeekThinking === false) {
+    body.thinking = { type: 'disabled' };
+  }
+  return body;
+}
+
+/** OpenAI 兼容 Chat Completions（国内厂商 / 自定义网关） */
+export function createOpenAiCompatibleClient({
+  baseURL,
+  apiKey,
+  defaultModel = 'gpt-4o-mini',
+  providerKey = '',
+}) {
   if (!apiKey) throw new Error('apiKey 不能为空');
   if (!baseURL || !String(baseURL).trim()) throw new Error('baseURL 不能为空');
   const openaiClient = new OpenAI({
     apiKey: String(apiKey).trim(),
     baseURL: String(baseURL).trim(),
-    // 默认 90s 单次请求超时；具体业务可在 chat() 里 timeoutMs 覆盖
     timeout: 90_000,
     maxRetries: 1,
   });
   const model = defaultModel || 'gpt-4o-mini';
+  const pk = String(providerKey || '').trim();
   return {
-    provider: 'custom',
+    provider: pk || 'custom',
+    providerKey: pk,
     model,
-    /**
-     * @param {Array} messages
-     * @param {{ model?:string, maxTokens?:number, temperature?:number, signal?:AbortSignal, timeoutMs?:number }} opts
-     */
     async chat(messages, opts = {}) {
       const {
         model: m = model,
@@ -201,55 +573,47 @@ export function createOpenAiCompatibleClient({ baseURL, apiKey, defaultModel = '
         temperature = 0.3,
         signal: externalSignal,
         timeoutMs,
+        deepSeekThinking = false,
+        reasoningEffort = 'high',
+        stream = false,
+        systemMessage,
       } = opts;
 
-      const ac = new AbortController();
-      let timer = null;
-      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-        timer = setTimeout(() => {
-          try { ac.abort(new Error(`AI 请求超时（${timeoutMs}ms）`)); } catch { /* ignore */ }
-        }, timeoutMs);
-      }
-      if (externalSignal) {
-        if (externalSignal.aborted) {
-          if (timer) clearTimeout(timer);
-          throw externalSignal.reason || new Error('请求已被取消');
-        }
-        externalSignal.addEventListener(
-          'abort',
-          () => {
-            try { ac.abort(externalSignal.reason || new Error('请求已被取消')); } catch { /* ignore */ }
-          },
-          { once: true }
-        );
+      let finalMessages = messages;
+      if (systemMessage) {
+        finalMessages = mergeSystemMessage(messages, systemMessage);
       }
 
+      const requestBody = buildChatCompletionRequestBody({
+        model: m,
+        messages: finalMessages,
+        maxTokens,
+        temperature,
+        providerKey: pk,
+        deepSeekThinking,
+        reasoningEffort,
+        stream,
+      });
+
+      const { signal, cleanup } = attachAbortHandling(externalSignal, timeoutMs);
       try {
-        const response = await openaiClient.chat.completions.create(
-          {
-            model: m,
-            messages,
-            max_tokens: maxTokens,
-            temperature,
-          },
-          { signal: ac.signal }
-        );
-        const content = response.choices?.[0]?.message?.content ?? '';
-        return { content, usage: response.usage ?? null };
+        const response = await openaiClient.chat.completions.create(requestBody, { signal });
+        const msg = response.choices?.[0]?.message;
+        const content = msg?.content ?? '';
+        const reasoningContent = msg?.reasoning_content ?? msg?.reasoningContent ?? '';
+        return {
+          content,
+          reasoningContent: reasoningContent || undefined,
+          usage: response.usage ?? null,
+          requestBody,
+        };
       } finally {
-        if (timer) clearTimeout(timer);
+        cleanup();
       }
     },
   };
 }
 
-/**
- * 创建统一 AI 客户端。
- * 返回对象只暴露一个方法 chat()，业务层无需关心底层 SDK 细节。
- *
- * @param {string} provider - PROVIDERS 里的 key，如 'deepseek'
- * @returns {{ chat(messages, opts?): Promise<{ content: string, usage: object|null }>, provider: string, model: string }}
- */
 export function createAiClient(provider) {
   const cfg = PROVIDERS[provider];
   if (!cfg) {
@@ -258,45 +622,22 @@ export function createAiClient(provider) {
     );
   }
 
-  const apiKey = process.env[cfg.apiKeyEnv];
+  const apiKey = resolveProviderApiKey(cfg, provider);
   if (!apiKey) {
-    throw new Error(
-      `provider "${provider}" 需要环境变量 ${cfg.apiKeyEnv}，当前未配置`
-    );
+    const hint = cfg.apiKeyEnvFallback
+      ? `${cfg.apiKeyEnv} 或 ${cfg.apiKeyEnvFallback}`
+      : cfg.apiKeyEnv;
+    throw new Error(`provider "${provider}" 需要环境变量 ${hint}，当前未配置`);
   }
 
-  const openaiClient = new OpenAI({ apiKey, baseURL: cfg.baseURL });
-  const defaultModel = cfg.defaultModel;
-
-  return {
-    provider,
-    model: defaultModel,
-
-    /**
-     * 发起一次对话。
-     *
-     * @param {Array<{role: string, content: string}>} messages
-     * @param {{ model?: string, maxTokens?: number, temperature?: number }} opts
-     * @returns {Promise<{ content: string, usage: object|null }>}
-     */
-    async chat(messages, opts = {}) {
-      const { model = defaultModel, maxTokens = 4096, temperature = 0.3 } = opts;
-      const response = await openaiClient.chat.completions.create({
-        model,
-        messages,
-        max_tokens: maxTokens,
-        temperature,
-      });
-      const content = response.choices?.[0]?.message?.content ?? '';
-      return { content, usage: response.usage ?? null };
-    },
-  };
+  return createAiClientFromConnectionParams({
+    providerKey: provider,
+    baseURL: cfg.baseURL || '',
+    apiKey,
+    defaultModel: cfg.defaultModel,
+  });
 }
 
-/**
- * 便捷方法：systemPrompt + userPrompt → content
- * 等价于原来的 chatDeepseek()，兼容旧调用方式。
- */
 export async function chatWithProvider(provider, { systemPrompt, userPrompt, model, maxTokens, temperature } = {}) {
   const client = createAiClient(provider);
   const messages = [];
@@ -305,11 +646,8 @@ export async function chatWithProvider(provider, { systemPrompt, userPrompt, mod
   return client.chat(messages, { model, maxTokens, temperature });
 }
 
-/**
- * 检查某 provider 是否已配置 API Key（不会抛错，只返回 boolean）
- */
 export function isProviderConfigured(provider) {
   const cfg = PROVIDERS[provider];
   if (!cfg) return false;
-  return !!process.env[cfg.apiKeyEnv];
+  return !!resolveProviderApiKey(cfg, provider);
 }

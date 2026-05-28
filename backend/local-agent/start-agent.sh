@@ -6,6 +6,9 @@ AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${AGENT_DIR}"
 chmod +x install-playwright.sh install-playwright.command start-agent.sh start-agent.command 2>/dev/null || true
 
+# 授权成功后保持浏览器打开（便于对比）；恢复自动关窗：export AUTH_KEEP_BROWSER_OPEN=0
+export AUTH_KEEP_BROWSER_OPEN="${AUTH_KEEP_BROWSER_OPEN:-1}"
+
 NODE_VER="v20.17.0"
 NODE_BIN=""
 NPM_BIN=""
@@ -133,7 +136,7 @@ if [ ! -d node_modules/playwright ]; then
 fi
 
 # Playwright 浏览器：自动执行 install-playwright（内含 npx playwright install chromium）
-echo "[Playwright] 检查并安装浏览器（首次约 150MB，请稍候）…"
+echo "[Playwright] 检查浏览器（已安装则跳过；首次约 150MB）…"
 echo "       也可单独双击 install-playwright.command 仅安装浏览器。"
 echo
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-0}"

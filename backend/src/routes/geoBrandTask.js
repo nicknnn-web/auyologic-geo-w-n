@@ -149,16 +149,23 @@ router.post('/geo-brand/tasks', async (req, res) => {
           console.log(`[geo-brand] taskId=${taskId} 已删除，跳过后续阶段`);
           return;
         }
-        console.log(`[geo-brand] taskId=${taskId} 探针完成，开始博查信源`);
-        await runGeoHealthSourcePipelineForTask(pool, taskId);
+        console.log(`[geo-brand] taskId=${taskId} 探针完成，开始博查信源（可选，失败不阻断分析）`);
+        try {
+          await runGeoHealthSourcePipelineForTask(pool, taskId);
+        } catch (sourceErr) {
+          console.warn(
+            `[geo-brand] taskId=${taskId} 信源流水线异常（继续分析）:`,
+            sourceErr?.message || sourceErr
+          );
+        }
         alive = await pool.query(`SELECT id FROM geo_health_task WHERE id = $1`, [taskId]);
         if (!alive.rows.length) {
           console.log(`[geo-brand] taskId=${taskId} 已删除，跳过分析`);
           return;
         }
-        console.log(`[geo-brand] taskId=${taskId} 信源完成，开始分析阶段`);
+        console.log(`[geo-brand] taskId=${taskId} 信源阶段结束，开始分析阶段`);
         await runAllAnalysisForTask(pool, taskId);
-        console.log(`[geo-brand] taskId=${taskId} 分析完成`);
+        console.log(`[geo-brand] taskId=${taskId} 分析阶段结束（词云若未写完将在后台继续，见 [wordcloud] 日志）`);
       } catch (err) {
         console.error('[geo-brand] 后台任务异常 taskId=', taskId, err?.message || err);
       }
@@ -175,7 +182,7 @@ router.post('/geo-brand/tasks', async (req, res) => {
   }
 });
 
-/** 轮询进度：totalQuestions / successCount / failedCount / pendingCount / status */
+/** 轮询进度：totalQuestions、probeModelCount、totalAnswersExpected（题×模型）等 */
 router.get('/geo-brand/tasks/:id/progress', async (req, res) => {
   try {
     const userId = getUserId(req);

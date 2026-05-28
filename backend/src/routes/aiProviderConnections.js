@@ -12,7 +12,7 @@ import { encryptSecret, decryptSecret, isEncryptionConfigured } from '../service
 import {
   PROVIDERS,
   getPresetBaseURL,
-  createOpenAiCompatibleClient,
+  createAiClientFromConnectionParams,
 } from '../services/aiClientFactory.js';
 import {
   resolveAiLogoPublicUrl,
@@ -28,6 +28,9 @@ const ALLOWED_KEYS = new Set([
   'kimi',
   'glm',
   'openai',
+  'chatgpt',
+  'gemini',
+  'claude',
   'doubao',
   'hunyuan',
   'wenxin',
@@ -417,7 +420,8 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
       return res.status(500).json({ success: false, ok: false, error: '密钥解密失败' });
     }
     const model = defaultModelForRow(row);
-    const client = createOpenAiCompatibleClient({
+    const client = createAiClientFromConnectionParams({
+      providerKey: row.provider_key,
       baseURL,
       apiKey,
       defaultModel: model,

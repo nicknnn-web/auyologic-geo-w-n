@@ -90,7 +90,7 @@
           <el-icon class="section-icon"><Flag /></el-icon>
           <h2 class="section-title">优先级改进建议</h2>
         </div>
-        
+
         <div class="priority-block priority-p0" v-if="reportData.prioritizedImprovements.p0 && reportData.prioritizedImprovements.p0.length > 0">
           <div class="priority-header">
             <el-tag type="danger" size="large">P0 - 紧急</el-tag>
@@ -262,9 +262,9 @@ const loadDetectionData = (recordId) => {
   if (geoResult) {
     visibilityScore.value = geoResult.overallScore || 0
   }
-  
+
   const websiteReports = allData['website-reports'] || []
-  
+
   if (recordId !== undefined && recordId !== null && recordId !== '') {
     // 有 recordId：精确加载指定记录（支持逗号分隔多ID，取加权平均）
     const ids = recordId.split(',').map(i => parseInt(i.trim())).filter(i => !isNaN(i) && websiteReports[i])
@@ -292,7 +292,7 @@ const loadDetectionData = (recordId) => {
       }
     }
   }
-  
+
   combinedScore.value = Math.round(visibilityScore.value * 0.4 + techScore.value * 0.6)
   hasData.value = visibilityScore.value > 0 || techScore.value > 0
 }
@@ -303,9 +303,9 @@ const generateReport = async () => {
     ElMessage.warning('请先完成检测')
     return
   }
-  
+
   generating.value = true
-  
+
   try {
     const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
     const geoResult = allData['geo-detection-result'] || {}
@@ -318,7 +318,7 @@ const generateReport = async () => {
         techReportToUse = websiteReports[ids[0]]
       }
     }
-    
+
     const detectionData = {
       combinedScore: combinedScore.value,
       visibilityScore: visibilityScore.value,
@@ -333,12 +333,12 @@ const generateReport = async () => {
         issues: techReportToUse.issues || { warn: [], pass: [] }
       } : null
     }
-    
+
     const aiReport = await generateAIReport(detectionData)
-    
+
     reportData.value = { ...aiReport, detectionData: detectionData }
     saveReportToStorage()
-    
+
     ElMessage.success('报告生成成功')
   } catch (error) {
     console.error('生成报告失败:', error)
@@ -357,20 +357,20 @@ const generateAIReport = async (detectionData) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
         systemPrompt: GEO_REPORT_SYSTEM_PROMPT,
         prompt,
         temperature: 0.5,
         max_tokens: 3000
       })
     })
-    
+
     if (!response.ok) throw new Error(`API请求失败: ${response.status}`)
-    
+
     const data = await response.json()
     const content = data.content || ''
     if (!content) throw new Error('API返回内容为空')
-    
+
     let result
     try {
       const jsonMatch = content.match(/\{[\s\S]*\}/)

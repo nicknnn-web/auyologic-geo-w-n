@@ -1312,7 +1312,7 @@ const callDeepSeekAPI = async (prompt) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
         prompt,
         temperature: 0.7,
         max_tokens: 2000

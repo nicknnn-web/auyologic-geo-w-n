@@ -36,7 +36,7 @@ export async function initDB() {
         industry VARCHAR(200),
         description TEXT,
         target_audience TEXT,
-        default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat',
+        default_ai_model VARCHAR(50) DEFAULT 'deepseek-v4-flash',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       )
@@ -50,7 +50,7 @@ export async function initDB() {
         deepseek_api_key TEXT,
         doubao_api_key TEXT,
         kimi_api_key TEXT,
-        default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat',
+        default_ai_model VARCHAR(50) DEFAULT 'deepseek-v4-flash',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       )
@@ -59,7 +59,7 @@ export async function initDB() {
     // 插入默认用户
     await client.query(`
       INSERT INTO users (user_id, username, deepseek_api_key, default_ai_model)
-      VALUES ('default_user', '管理员', $1, 'deepseek-chat')
+      VALUES ('default_user', '管理员', $1, 'deepseek-v4-flash')
       ON CONFLICT (user_id) DO NOTHING
     `, [process.env.DEEPSEEK_API_KEY || '']);
 
@@ -510,7 +510,7 @@ export async function initDB() {
     const { rows: seedCnt } = await client.query(
       `SELECT COUNT(*)::int AS c FROM geo_sentiment_lexicon WHERE user_id = 'default_user'`
     );
-    // —— 大模型接入（API Key 密文 + 可编辑；中国区预设 + OpenAI 兼容自定义）——
+    // —— 大模型接入（API Key 密文；国内 + ChatGPT/Gemini/Claude + OpenAI 兼容自定义）——
     await client.query(`
       CREATE TABLE IF NOT EXISTS ai_provider_connection (
         id SERIAL PRIMARY KEY,

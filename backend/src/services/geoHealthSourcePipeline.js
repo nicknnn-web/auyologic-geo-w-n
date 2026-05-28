@@ -23,6 +23,7 @@ import {
   geoHealthTaskExists,
   runWithSlidingConcurrency,
 } from './geoBrandTaskService.js';
+import { startPhaseTimer, logPhaseDone } from '../utils/geoTaskTiming.js';
 
 function md5(s) {
   return crypto.createHash('md5').update(String(s), 'utf8').digest('hex');
@@ -196,10 +197,6 @@ async function fetchTaskContext(pool, taskId) {
   if (!analysisCid && Array.isArray(row.connection_ids) && row.connection_ids.length) {
     analysisCid = row.connection_ids[0];
   }
-  if (!analysisCid) {
-    throw new Error('任务未指定 analysis_connection_id，无法执行信源分类');
-  }
-
   const brandName = String(row.company_name || row.keyword || '').trim();
   const brandWebsite = String(row.website || '').trim();
 
@@ -215,13 +212,13 @@ async function fetchTaskContext(pool, taskId) {
  * 阶段 1：每题调用博查，写入 geo_health_source_search
  */
 export async function runBochaSourceSearchForTask(pool, taskId) {
+  const bochaStartedAt = startPhaseTimer();
   if (!isBochaConfigured()) {
-    const msg = '未配置 BOCHA_API_KEY，无法执行信源检索';
-    await pool.query(
-      `UPDATE geo_health_task SET status = 'failed', error_text = $2 WHERE id = $1`,
-      [taskId, msg]
+    console.warn(
+      `[geo-source] task=${taskId} 未配置 BOCHA_API_KEY，跳过信源检索（不影响探针分析与报告生成）`
     );
-    throw new Error(msg);
+    logPhaseDone('geo-bocha', taskId, '博查', bochaStartedAt, { skipped: true, reason: 'not_configured' });
+    return { taskId, processed: 0, failedCount: 0, skipped: true, reason: 'bocha_not_configured' };
   }
 
   const { rows: questions } = await pool.query(
@@ -229,6 +226,7 @@ export async function runBochaSourceSearchForTask(pool, taskId) {
     [taskId]
   );
   if (!questions.length) {
+    logPhaseDone('geo-bocha', taskId, '博查', bochaStartedAt, { questions: 0 });
     return { taskId, processed: 0, failedCount: 0 };
   }
 
@@ -278,10 +276,19 @@ export async function runBochaSourceSearchForTask(pool, taskId) {
   );
 
   if (!(await geoHealthTaskExists(pool, taskId))) {
+    logPhaseDone('geo-bocha', taskId, '博查', bochaStartedAt, {
+      questions: questions.length,
+      failed: failedCount,
+      aborted: true,
+    });
     return { taskId, processed: questions.length, failedCount, aborted: true };
   }
 
   await pool.query(`UPDATE geo_health_task SET status = 'sourcing_done' WHERE id = $1`, [taskId]);
+  logPhaseDone('geo-bocha', taskId, '博查', bochaStartedAt, {
+    questions: questions.length,
+    failed: failedCount,
+  });
   return { taskId, processed: questions.length, failedCount };
 }
 
@@ -292,11 +299,21 @@ export async function runSourceClassificationForTask(pool, taskId) {
   const ctx = await fetchTaskContext(pool, taskId);
   let analysisClient = null;
   let modelName = 'bocha:rules';
-  if (GEO_SOURCE_CLASSIFY_USE_LLM) {
-    analysisClient = await createAiClientByConnectionId(pool, ctx.analysisConnectionId, {
-      userId: ctx.userId,
-    });
-    modelName = `bocha:${analysisClient.vendorName}`;
+  if (GEO_SOURCE_CLASSIFY_USE_LLM && ctx.analysisConnectionId) {
+    try {
+      analysisClient = await createAiClientByConnectionId(pool, ctx.analysisConnectionId, {
+        userId: ctx.userId,
+      });
+      modelName = `bocha:${analysisClient.vendorName}`;
+    } catch (e) {
+      console.warn(
+        `[geo-source] task=${taskId} 信源分类模型不可用，降级为域名规则: ${e?.message || e}`
+      );
+    }
+  } else if (GEO_SOURCE_CLASSIFY_USE_LLM && !ctx.analysisConnectionId) {
+    console.warn(
+      `[geo-source] task=${taskId} 未指定分析模型连接，信源分类仅用域名规则（不影响报告分析）`
+    );
   }
 
   const { rows: searchRows } = await pool.query(
@@ -367,12 +384,43 @@ export async function runSourceClassificationForTask(pool, taskId) {
 }
 
 /**
- * 博查检索 + 分类（探针完成后调用）
+ * 博查检索 + 分类（探针完成后调用）。
+ * 信源未配置或任一步骤失败均不抛错、不把任务标为 failed，以免阻断二次分析与报告。
  */
 export async function runGeoHealthSourcePipelineForTask(pool, taskId) {
-  await runBochaSourceSearchForTask(pool, taskId);
+  let searchOutcome = { skipped: false };
+  try {
+    searchOutcome = await runBochaSourceSearchForTask(pool, taskId);
+    if (searchOutcome.skipped) {
+      console.warn(
+        `[geo-source] task=${taskId} 已跳过博查检索 reason=${searchOutcome.reason || 'unknown'}`
+      );
+    }
+  } catch (e) {
+    console.warn(
+      `[geo-source] task=${taskId} 博查阶段异常（不影响后续分析）:`,
+      e?.message || e
+    );
+    searchOutcome = { skipped: true, error: e?.message || String(e) };
+  }
+
   if (!(await geoHealthTaskExists(pool, taskId))) {
     return { taskId, aborted: true };
   }
-  return runSourceClassificationForTask(pool, taskId);
+
+  try {
+    const classifyOutcome = await runSourceClassificationForTask(pool, taskId);
+    return { ...searchOutcome, ...classifyOutcome };
+  } catch (e) {
+    console.warn(
+      `[geo-source] task=${taskId} 分类阶段异常（不影响后续分析）:`,
+      e?.message || e
+    );
+    return {
+      taskId,
+      ...searchOutcome,
+      classifySkipped: true,
+      classifyError: e?.message || String(e),
+    };
+  }
 }

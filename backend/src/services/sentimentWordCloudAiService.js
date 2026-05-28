@@ -140,9 +140,19 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
   }
 
   const batches = chunkAnswerRowsForWordCloudAi(ctx.answerRows);
+  const totalBatches = batches.length;
+  const taskLabel =
+    ctx.taskId != null && Number(ctx.taskId) > 0 ? `task=${Number(ctx.taskId)} ` : '';
+  if (!totalBatches) {
+    console.log(`[wordcloud-ai] ${taskLabel}无有效回答批次，跳过`);
+    return [];
+  }
+  console.log(`[wordcloud-ai] ${taskLabel}共 ${totalBatches} 批`);
   const collected = [];
 
-  for (const batch of batches) {
+  for (let bi = 0; bi < batches.length; bi++) {
+    const batch = batches[bi];
+    const batchNo = bi + 1;
     const payload = batch.map((b) => ({ id: b.id, text: b.text }));
     let answersJson;
     try {
@@ -158,6 +168,10 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
       answersJson,
     });
 
+    const beforeBatch = collected.length;
+    console.log(
+      `[wordcloud-ai] ${taskLabel}batch ${batchNo}/${totalBatches} start (${batch.length} answers)`
+    );
     let content = '';
     try {
       const res = await client.chat(
@@ -169,7 +183,10 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
       );
       content = res.content || '';
     } catch (e) {
-      console.warn('[wordcloud-ai] 单批请求失败，跳过该批:', e.message || e);
+      console.warn(
+        `[wordcloud-ai] ${taskLabel}batch ${batchNo}/${totalBatches} 失败，跳过:`,
+        e.message || e
+      );
       continue;
     }
 
@@ -196,8 +213,13 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
         });
       }
     }
+    const added = collected.length - beforeBatch;
+    console.log(
+      `[wordcloud-ai] ${taskLabel}batch ${batchNo}/${totalBatches} done phrases=${added} total=${collected.length}`
+    );
   }
 
+  console.log(`[wordcloud-ai] ${taskLabel}全部批次结束 phrases=${collected.length}`);
   return collected;
 }
 

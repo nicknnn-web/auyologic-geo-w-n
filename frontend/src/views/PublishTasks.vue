@@ -141,11 +141,14 @@
           </el-select>
         </el-form-item>
 
-        <!-- 标题（XHS限制20字） -->
         <el-form-item label="发帖标题" prop="title">
-          <el-input v-model="form.title" :maxlength="20" show-word-limit
-                    placeholder="小红书标题最多20字" />
-          <div class="text-xs text-gray-400 mt-1">其他平台无限制，小红书超出20字将被自动截断</div>
+          <el-input
+            v-model="form.title"
+            :maxlength="formTitleMaxLength"
+            show-word-limit
+            :placeholder="formTitlePlaceholder"
+          />
+          <div class="text-xs text-gray-400 mt-1">{{ formTitleHint }}</div>
         </el-form-item>
 
         <el-form-item label="发布平台" prop="platform">
@@ -162,6 +165,16 @@
             </el-option>
           </el-select>
         </el-form-item>
+
+        <el-alert
+          v-if="selectedPlatformMeta?.publishHint"
+          type="warning"
+          :closable="false"
+          show-icon
+          class="mb-3"
+          title="今日头条发布须知"
+          :description="selectedPlatformMeta.publishHint"
+        />
 
         <el-form-item label="发布账号" prop="account_id">
           <el-select v-model="form.account_id" placeholder="请先选择平台" style="width: 100%;"
@@ -186,7 +199,7 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="话题标签">
+        <el-form-item v-if="formTagsVisible" label="话题标签">
           <el-input v-model="form.tags" placeholder="如：好物推荐,生活方式（逗号分隔，最多5个）" />
           <div class="text-xs text-gray-400 mt-1">发布时自动添加为帖子话题，不填则跳过</div>
         </el-form-item>
@@ -255,6 +268,11 @@ import { formatZhCnMdHm } from '../utils/dateTime.js'
 import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
 import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
+import {
+  getPlatformAuthMeta,
+  getPlatformTitleMaxLength,
+  platformSupportsTags,
+} from '../utils/platformAuthMeta.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -290,6 +308,33 @@ const publishPlatformValues = computed(() =>
     .map((o) => o.value)
     .filter(Boolean)
 )
+
+const selectedPlatformMeta = computed(() => getPlatformAuthMeta(form.value.platform || ''))
+
+const formTitleMaxLength = computed(() =>
+  form.value.platform ? getPlatformTitleMaxLength(form.value.platform) : 100
+)
+
+const formTitlePlaceholder = computed(() => {
+  const p = form.value.platform
+  if (p === '小红书') return '小红书标题最多 20 字'
+  if (p === '今日头条') return '文章标题最多 30 字'
+  return '请输入标题'
+})
+
+const formTitleHint = computed(() => {
+  const p = form.value.platform
+  if (p === '小红书') return '小红书超出 20 字将在发布时自动截断'
+  if (p === '今日头条') return '今日头条为图文文章；须已 App 扫码授权并绑定手机号'
+  return '按所选平台限制填写标题'
+})
+
+const formTagsVisible = computed(() => platformSupportsTags(form.value.platform))
+
+function sliceTitleForPlatform(platform, title) {
+  const max = getPlatformTitleMaxLength(platform)
+  return String(title || '').slice(0, max)
+}
 
 // 当前正在执行轮询的任务ID
 const executingId = ref(null)
@@ -352,7 +397,7 @@ onMounted(async () => {
     if (draft) {
       createDialogVisible.value = true
       form.value.draft_id = id
-      form.value.title = (draft.title || '').slice(0, 20)
+      form.value.title = (draft.title || '').slice(0, 100)
       form.value.task_name = `${draft.title || ''}投放`
     }
   }
@@ -402,13 +447,20 @@ const resetForm = () => {
 const handleDraftChange = (id) => {
   const draft = drafts.value.find(d => d.id === id)
   if (draft) {
-    if (!form.value.title) form.value.title = (draft.title || '').slice(0, 20)
+    const max = form.value.platform ? getPlatformTitleMaxLength(form.value.platform) : 100
+    if (!form.value.title) form.value.title = (draft.title || '').slice(0, max)
     if (!form.value.task_name) form.value.task_name = `${draft.title || ''}投放`
   }
 }
 
 const handlePlatformChange = () => {
   form.value.account_id = null
+  if (form.value.platform && form.value.title) {
+    form.value.title = sliceTitleForPlatform(form.value.platform, form.value.title)
+  }
+  if (!platformSupportsTags(form.value.platform)) {
+    form.value.tags = ''
+  }
 }
 
 const handleCreate = async () => {
@@ -428,8 +480,8 @@ const handleCreate = async () => {
         platform: form.value.platform,
         account_id: form.value.account_id,
         content: draft?.content || '',
-        title: form.value.title.slice(0, 20),
-        tags: form.value.tags,
+        title: sliceTitleForPlatform(form.value.platform, form.value.title),
+        tags: platformSupportsTags(form.value.platform) ? form.value.tags : '',
       })
       ElMessage.success('任务创建成功')
       createDialogVisible.value = false
@@ -495,7 +547,7 @@ const openLogDialog = (row) => {
   logDialogTitle.value = `发布进度 - ${row.task_name || ''}`
   currentLog.value = row.task_log || ''
   currentStatus.value = row.status
-  currentPublishedUrl.value = row.published_url || ''
+  currentPublishedUrl.value = 'https://mp.toutiao.com/profile_v4/graphic/articles'
   currentErrorMessage.value = row.error_message || ''
   logDialogVisible.value = true
   if (row.status === 'running' || row.status === 'queued_local') {
@@ -511,7 +563,7 @@ const startStatusPoll = (taskId) => {
       const data = await api.get(`${TASKS_API}/${taskId}/status`)
       currentLog.value = data.log || ''
       currentStatus.value = data.status
-      currentPublishedUrl.value = data.publishedUrl || ''
+      currentPublishedUrl.value = 'https://mp.toutiao.com/profile_v4/graphic/articles'
       currentErrorMessage.value = data.errorMessage || ''
       // 自动滚动日志到底部
       await nextTick()

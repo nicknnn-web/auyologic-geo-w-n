@@ -6,6 +6,23 @@
 
 const { launchBrowser } = require('./playwrightLaunch');
 
+function normalizePublishPlatform(platform) {
+  const raw = String(platform || '').trim();
+  if (!raw) return '';
+  const aliases = {
+    xiaohongshu: '小红书',
+    xhs: '小红书',
+    zhihu: '知乎',
+    weibo: '微博',
+    toutiao: '今日头条',
+    '头条': '今日头条',
+    '头条号': '今日头条',
+    jinritoutiao: '今日头条',
+  };
+  if (['小红书', '知乎', '微博', '今日头条'].includes(raw)) return raw;
+  return aliases[raw] || aliases[raw.toLowerCase()] || raw;
+}
+
 const PLATFORM_CONFIG = {
   '小红书': {
     baseUrl: 'https://www.xiaohongshu.com',
@@ -37,10 +54,33 @@ const PLATFORM_CONFIG = {
     },
     sessionCookieName: 'z_c0',
   },
+  /** 须用今日头条 App 扫二维码登录，不支持网页手机号直登 */
+  '今日头条': {
+    baseUrl: 'https://mp.toutiao.com',
+    loginUrl: 'https://mp.toutiao.com/auth/page/login',
+    loginSuccessCheck: (url) => {
+      try {
+        const u = new URL(url);
+        if (!u.hostname.includes('toutiao.com')) return false;
+        const p = u.pathname.toLowerCase();
+        if (p.includes('/login') || p.includes('/auth/page/login') || p.includes('/passport')) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    sessionCookieName: 'sessionid',
+  },
 };
 
 const DEFAULT_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+/** 授权捕获成功后是否保持浏览器打开（便于对比 Playwright 与日常浏览器） */
+function shouldKeepBrowserOpenAfterAuth() {
+  const v = String(process.env.AUTH_KEEP_BROWSER_OPEN ?? '1').trim().toLowerCase();
+  return !['0', 'false', 'no', 'off'].includes(v);
+}
 
   //通过修改浏览器的 navigator 对象等方式， 隐藏 Playwright 自动化特征 ，防止网站检测到这是自动化浏览器而拒绝登录。
 const STEALTH_SCRIPT = `
@@ -80,7 +120,8 @@ function randomDelay(min, max) {
 async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
   await closeSession(accountId);
 
-  const config = PLATFORM_CONFIG[platform];
+  const platformKey = normalizePublishPlatform(platform);
+  const config = PLATFORM_CONFIG[platformKey];
   if (!config) throw new Error(`不支持的平台：${platform}`);
 
   const browser = await launchBrowser();
@@ -94,7 +135,7 @@ async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
   await context.addInitScript(STEALTH_SCRIPT);
   const page = await context.newPage();
 
-  const session = { browser, context, page, platform, status: 'opening', config };
+  const session = { browser, context, page, platform: platformKey, status: 'opening', config };
   activeSessions.set(String(accountId), session);
 
   const setStatus = (s) => {
@@ -108,11 +149,14 @@ async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
     await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     setStatus('browser_opened');
 
-    if (platform === '小红书' && phoneNumber) {
+    if (platformKey === '小红书' && phoneNumber) {
       await autoFillXhsPhone(page, phoneNumber, setStatus);
     }
-    if (platform === '微博' && phoneNumber) {
+    if (platformKey === '微博' && phoneNumber) {
       await autoFillWeiboPhone(page, phoneNumber, setStatus);
+    }
+    if (platformKey === '今日头条') {
+      setStatus('waiting_qr_scan');
     }
   } catch (err) {
     await closeSession(accountId);
@@ -282,7 +326,18 @@ async function captureSession(accountId) {
   await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
   const storageState = await context.storageState();
   session.status = 'authorized';
-  await closeSession(accountId);
+
+  if (shouldKeepBrowserOpenAfterAuth()) {
+    console.log('');
+    console.log('[授权] 登录状态已保存；浏览器将保持打开，便于你对比检查。');
+    console.log('[授权] 检查完毕后请手动关闭浏览器窗口。');
+    console.log('[授权] 恢复自动关窗：在启动代理前设置 AUTH_KEEP_BROWSER_OPEN=0');
+    console.log('');
+    activeSessions.delete(String(accountId));
+  } else {
+    await closeSession(accountId);
+  }
+
   return { storageState, userAgent: DEFAULT_USER_AGENT };
 }
 
@@ -306,4 +361,11 @@ async function closeSession(accountId) {
   }
 }
 
-module.exports = { startAuth, submitSmsCode, captureSession, isLoggedIn, closeSession };
+module.exports = {
+  startAuth,
+  submitSmsCode,
+  captureSession,
+  isLoggedIn,
+  closeSession,
+  shouldKeepBrowserOpenAfterAuth,
+};

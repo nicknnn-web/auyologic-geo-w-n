@@ -156,16 +156,16 @@ const FAMOUS_WEBSITES = {
 const getWebsiteAuthority = (url) => {
   try {
     const hostname = new URL(url).hostname.toLowerCase()
-    
+
     // 精确匹配
     if (FAMOUS_WEBSITES[hostname]) {
       return { ...FAMOUS_WEBSITES[hostname], matched: hostname }
     }
-    
+
     // 域名后缀匹配 (如 163.com 匹配 www.163.com)
     // 按域名长度降序排序，确保更精确的匹配优先
     const sortedDomains = Object.keys(FAMOUS_WEBSITES).sort((a, b) => b.length - a.length)
-    
+
     for (const domain of sortedDomains) {
       // 处理特殊前缀如 -netEase.com
       if (domain.startsWith('-')) {
@@ -177,7 +177,7 @@ const getWebsiteAuthority = (url) => {
         return { ...FAMOUS_WEBSITES[domain], matched: domain }
       }
     }
-    
+
     return null
   } catch {
     return null
@@ -268,12 +268,12 @@ const fetchWithRetry = async (url, options = {}, maxRetries = 3) => {
       // 每次重试都用新的 UA 和 Referer
       const headers = { ...getHeaders(), ...(options.headers || {}) }
       const response = await fetch(url, { ...options, headers })
-      
+
       // 检查是否被拦截（通常返回 403 或空内容）
       if (response.status === 403 || response.status === 503) {
         throw new Error(`Blocked: ${response.status}`)
       }
-      
+
       return response
     } catch (error) {
       lastError = error
@@ -293,7 +293,7 @@ const checkRobotsTxt = async (url) => {
   if (!domain) return { status: 'unknown', details: { error: '无效URL' } }
 
   const robotsUrl = `https://${domain}/robots.txt`
-  
+
   try {
     const response = await fetchWithRetry(robotsUrl, { method: 'GET' })
 
@@ -309,7 +309,7 @@ const checkRobotsTxt = async (url) => {
     for (const line of lines) {
       const trimmed = line.trim().toLowerCase()
       if (trimmed.startsWith('#') || !trimmed) continue
-      
+
       if (trimmed.startsWith('user-agent:')) {
         currentUserAgent = line.substring(11).trim()
       } else if (trimmed.startsWith('disallow:')) {
@@ -327,7 +327,7 @@ const checkRobotsTxt = async (url) => {
     const blockedBots = []
     for (const bot of AI_BOTS) {
       const lowerBot = bot.toLowerCase()
-      const disallowRules = rules.disallowed.filter(r => 
+      const disallowRules = rules.disallowed.filter(r =>
         r.userAgent.toLowerCase() === lowerBot || r.userAgent === '*'
       )
       if (disallowRules.length > 0) {
@@ -381,7 +381,7 @@ const checkSchemaMarkup = async (url) => {
 
     const html = await response.text()
     const schemas = extractJsonLd(html)
-    
+
     const foundTypes = new Set()
     for (const schema of schemas) {
       for (const type of schema.types) {
@@ -415,13 +415,13 @@ const checkServerSideRendering = async (url) => {
     const html = await response.text()
     const noscriptCount = (html.match(/<noscript[\s>]/gi) || []).length
     const scriptCount = (html.match(/<script/gi) || []).length
-    
+
     // 检查框架特征
     const hasNextJs = /_next\/static|__NEXT_DATA__/i.test(html)
     const hasNuxt = /__nuxt|_nuxt/i.test(html)
     const hasReact = /data-react|react-root/i.test(html)
     const hasVue = /data-v-|__vue__/i.test(html)
-    
+
     // 提取文本内容长度
     const textContent = html.replace(/<script[\s\S]*?<\/script>/gi, '')
                            .replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -452,7 +452,7 @@ const checkServerSideRendering = async (url) => {
  */
 const checkHeadingStructure = (html) => {
   const headings = { h1: 0, h2: 0, h3: 0, h4: 0, h5: 0, h6: 0 }
-  
+
   for (let i = 1; i <= 6; i++) {
     const regex = new RegExp(`<h${i}[\\s>]([\\s\\S]*?)</h${i}>`, 'gi')
     let match
@@ -478,10 +478,10 @@ const checkContentLength = (html) => {
                    .replace(/<style[\s\S]*?<\/style>/gi, '')
                    .replace(/<[^>]+>/g, ' ')
                    .replace(/&[a-z]+;/gi, ' ')
-  
+
   const textLength = cleanText(text).length
   const wordCount = Math.round(textLength / 2)
-  
+
   return {
     charCount: textLength,
     wordCount,
@@ -499,9 +499,9 @@ const checkFaqContent = (html) => {
     /<dl[\s>][\s\S]*?<dt[\s>]/i,
     /常见问题|FAQ[:\s]|Q&A[:\s]/i
   ]
-  
+
   const hasFaqPattern = patterns.some(p => p.test(html))
-  
+
   // 提取问答对
   const qaPairs = []
   const dlRegex = /<dt[^>]*>([\s\S]*?)<\/dt>[\s\S]*?<dd[^>]*>([\s\S]*?)<\/dd>/gi
@@ -518,29 +518,29 @@ const checkFaqContent = (html) => {
  */
 const checkMetaTags = (html) => {
   const meta = { title: '', description: '', viewport: false, ogTags: {}, twitterTags: {}, canonical: '' }
-  
+
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
   if (titleMatch) meta.title = cleanText(titleMatch[1])
-  
+
   const metaRegex = /<meta[^>]+>/gi
   let match
   while ((match = metaRegex.exec(html)) !== null) {
     const tag = match[0]
-    
+
     const nameMatch = tag.match(/name=["']([^"']+)["'][^>]*content=["']([^"']+)["']/i)
     if (nameMatch) {
       const name = nameMatch[1].toLowerCase()
       if (name === 'description') meta.description = nameMatch[2]
       else if (name === 'viewport') meta.viewport = true
     }
-    
+
     const ogMatch = tag.match(/property=["'](og:[^"']+)["'][^>]*content=["']([^"']+)["']/i)
     if (ogMatch) meta.ogTags[ogMatch[1]] = ogMatch[2]
-    
+
     const twitterMatch = tag.match(/name=["'](twitter:[^"']+)["'][^>]*content=["']([^"']+)["']/i)
     if (twitterMatch) meta.twitterTags[twitterMatch[1]] = twitterMatch[2]
   }
-  
+
   const canonicalMatch = html.match(/<link[^>]*rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
   if (canonicalMatch) meta.canonical = canonicalMatch[1]
 
@@ -566,7 +566,7 @@ const checkImageAlt = (html) => {
     const altMatch = tag.match(/alt=["']([^"']*)["']/i)
     images.push({ hasAlt: !!altMatch && altMatch[1].length > 0 })
   }
-  
+
   const withAlt = images.filter(i => i.hasAlt).length
   return {
     total: images.length,
@@ -613,28 +613,28 @@ const extractTextFromHTML = (html) => {
  */
 const detectPageType = (html, url) => {
   const urlPath = url.toLowerCase()
-  
+
   // URL 特征判断
   const isArticleUrl = /\/article\/|\/news\/|\/blog\/|\/post\/|\/p\//.test(urlPath) ||
                        /\/[0-9]{4,}\//.test(urlPath) ||
                        /\.html?$/.test(urlPath)
-  
+
   // 内容特征判断
   const hasArticleContent = /<article/i.test(html) ||
                             /class=".*article.*"/i.test(html) ||
                             /class=".*content.*"/i.test(html) ||
                             /<div[^>]*id="content"/i.test(html)
-  
+
   // 门户首页特征
   const isPortalHome = /<nav/i.test(html) &&
                         /<header/i.test(html) &&
                         /<footer/i.test(html) &&
                         /login|register|signin|signup/i.test(html.slice(0, 5000))
-  
+
   // 列表页特征
   const isListPage = /<ul[^>]*class|ol[^>]*class|div[^>]*class=".*list/i.test(html) &&
                      /<a[^>]+href=["'][^"']+\//i.test(html)
-  
+
   if (isArticleUrl || hasArticleContent) {
     return 'article'
   } else if (isPortalHome || isListPage) {
@@ -654,7 +654,7 @@ const checkAIFriendlinessSimple = (html, url, robotsResult) => {
     issues: [],
     suggestions: []
   }
-  
+
   // 1. 能否访问（基础分 50）
   const hasContent = html && html.length > 1000
   const contentScore = hasContent ? 50 : 0
@@ -663,7 +663,7 @@ const checkAIFriendlinessSimple = (html, url, robotsResult) => {
   if (!hasContent) {
     results.issues.push('网站无法访问或内容获取失败')
   }
-  
+
   // 2. robots.txt 是否允许 AI（+20）
   let robotsScore = 0
   if (robotsResult) {
@@ -681,7 +681,7 @@ const checkAIFriendlinessSimple = (html, url, robotsResult) => {
   }
   results.items.push({ name: 'AI爬虫权限', score: robotsScore, max: 20, value: robotsScore >= 20 ? '允许' : robotsScore > 0 ? '未明确' : '禁止' })
   results.score += robotsScore
-  
+
   // 3. 是否有版权/引用声明（+15）
   const hasCopyright = /copyright|版权所有|©|转载|引用|repint/i.test(html)
   const copyrightScore = hasCopyright ? 15 : 5
@@ -690,20 +690,20 @@ const checkAIFriendlinessSimple = (html, url, robotsResult) => {
   if (!hasCopyright) {
     results.suggestions.push('建议添加版权声明和转载规则')
   }
-  
+
   // 4. 是否有 RSS 或 sitemap（+10）
   const hasRSS = /rss|feed|atom|sitemap\.xml/i.test(html)
   const rssScore = hasRSS ? 10 : 3
   results.items.push({ name: 'RSS/Sitemap', score: rssScore, max: 10, value: hasRSS ? '有' : '无' })
   results.score += rssScore
-  
+
   // 5. 内容是否足够丰富（+5）
   const textLength = html.replace(/<[^>]+>/g, '').trim().length
   const contentEnough = textLength > 500
   const enoughScore = contentEnough ? 5 : 0
   results.items.push({ name: '内容丰富度', score: enoughScore, max: 5, value: `${Math.round(textLength/1000)}K字符` })
   results.score += enoughScore
-  
+
   // 总体评价
   if (results.score >= 80) {
     results.suggestions.push('网站对AI非常友好，继续保持')
@@ -712,7 +712,7 @@ const checkAIFriendlinessSimple = (html, url, robotsResult) => {
   } else {
     results.suggestions.push('建议优化AI抓取友好度')
   }
-  
+
   return results
 }
 
@@ -724,7 +724,7 @@ const checkAIFriendlinessDeep = async (html, url) => {
     const textContent = extractTextFromHTML(html)
     const truncatedText = textContent.slice(0, 4000) // 限制内容长度
     const pageType = detectPageType(html, url)
-    
+
     // 根据页面类型选择 prompt 组合（已抽到 frontend/src/prompts/websiteAnalyzer.js）
     const { systemPrompt, scoringRules } = getAIFriendlinessPromptSet(pageType)
 
@@ -732,7 +732,7 @@ const checkAIFriendlinessDeep = async (html, url) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek-chat',
+        model: 'deepseek-v4-flash',
         systemPrompt,
         prompt: buildAIFriendlinessPrompt({ scoringRules, url, truncatedText }),
         temperature: 0.3,
@@ -746,7 +746,7 @@ const checkAIFriendlinessDeep = async (html, url) => {
 
     const data = await response.json()
     const content = data.content || ''
-    
+
     if (!content) {
       throw new Error('API返回内容为空')
     }
@@ -809,7 +809,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
 
   // === P0: 技术基础维度 ===
   onProgress?.(0, 'tech')
-  
+
   // HTTPS
   const httpsResult = checkHttps(normalizedUrl)
   results.dimensions.tech.items.push({
@@ -823,21 +823,21 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
   } else {
     results.issues.warn.push({ title: '未启用 HTTPS', desc: '建议启用HTTPS', fix: '安装SSL证书', level: 'warn', impact: 8 })
   }
-  
+
   await sleep(100)
 
   // robots.txt
   onProgress?.(30, 'tech')
   const robotsResult = await checkRobotsTxt(normalizedUrl)
-  
-  let robotsStatus = robotsResult.status === 'allowed' ? '允许AI爬虫' : 
+
+  let robotsStatus = robotsResult.status === 'allowed' ? '允许AI爬虫' :
                      robotsResult.status === 'blocked' ? '已禁止AI爬虫' : '未检测到'
-  
+
   results.dimensions.tech.items.push({
     name: 'robots.txt', result: robotsResult.status === 'allowed' ? 'pass' : 'fail',
     value: robotsStatus
   })
-  
+
   if (robotsResult.status === 'allowed') {
     results.dimensions.tech.checked++
     results.dimensions.tech.score += 5
@@ -847,23 +847,23 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
   } else {
     results.issues.warn.push({ title: 'robots.txt 未配置', desc: '未找到robots.txt', fix: '创建robots.txt', level: 'warn', impact: 8 })
   }
-  
+
   await sleep(200)
 
   // === 获取页面内容 ===
   onProgress?.(50, 'structure')
   let html = ''
   let metaResult, headingResult, contentResult, imageResult
-  
+
   try {
     const response = await fetchWithRetry(normalizedUrl, { method: 'GET' })
-    
+
     if (response.ok) {
       html = await response.text()
-      
+
       // Meta标签
       metaResult = checkMetaTags(html)
-      
+
       results.dimensions.structure.items.push({
         name: 'Title 标签', result: metaResult.hasTitle ? 'pass' : 'fail',
         value: metaResult.hasTitle ? `${metaResult.title.length}字符` : '未设置'
@@ -886,7 +886,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
       } else {
         results.issues.warn.push({ title: '缺少Meta Description', fix: '添加description标签', level: 'warn', impact: 3 })
       }
-      
+
       // Canonical
       results.dimensions.tech.items.push({
         name: 'Canonical 标签', result: metaResult.hasCanonical ? 'pass' : 'fail',
@@ -912,7 +912,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
       } else {
         results.issues.warn.push({ title: '缺少H1标签', fix: '添加<h1>标签', level: 'warn', impact: 5 })
       }
-      
+
       results.dimensions.structure.items.push({
         name: 'H2-H6层级', result: headingResult.hasProperHierarchy ? 'pass' : 'fail',
         value: `H2:${headingResult.count.h2} H3:${headingResult.count.h3}`
@@ -952,35 +952,35 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
   } catch (error) {
     results.issues.warn.push({ title: '页面获取失败', desc: error.message, level: 'warn', impact: 5 })
   }
-  
+
   await sleep(200)
 
   // === P0: Schema检测 ===
   onProgress?.(70, 'schema')
   const schemaResult = await checkSchemaMarkup(normalizedUrl)
-  
+
   results.dimensions.schema.items.push({
     name: 'JSON-LD Schema', result: schemaResult.hasAny ? 'pass' : 'fail',
     value: schemaResult.hasAny ? schemaResult.found.join(', ') : '未检测到'
   })
-  
+
   if (schemaResult.hasAny) {
     results.dimensions.schema.checked++
     results.dimensions.schema.score += 5
-    results.issues.pass.push({ 
-      title: '包含结构化数据', 
-      desc: `检测到${schemaResult.count}个Schema: ${schemaResult.found.join(', ')}`, 
-      level: 'pass', impact: 5 
+    results.issues.pass.push({
+      title: '包含结构化数据',
+      desc: `检测到${schemaResult.count}个Schema: ${schemaResult.found.join(', ')}`,
+      level: 'pass', impact: 5
     })
   } else {
-    results.issues.warn.push({ 
-      title: '缺少JSON-LD Schema', 
-      desc: '未检测到Schema Markup', 
-      fix: '添加Organization/Article Schema', 
-      level: 'warn', impact: 6 
+    results.issues.warn.push({
+      title: '缺少JSON-LD Schema',
+      desc: '未检测到Schema Markup',
+      fix: '添加Organization/Article Schema',
+      level: 'warn', impact: 6
     })
   }
-  
+
   // FAQ Schema
   if (schemaResult.found.includes('FAQPage') || schemaResult.found.includes('QAPage')) {
     results.dimensions.aiFriendly.checked++
@@ -1005,26 +1005,26 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
   // === P0: SSR检测 ===
   onProgress?.(85, 'aiFriendly')
   const ssrResult = await checkServerSideRendering(normalizedUrl)
-  
+
   results.dimensions.aiFriendly.items.push({
     name: '服务端渲染', result: ssrResult.type !== 'client_rendering' ? 'pass' : 'fail',
     value: ssrResult.type === 'ssr' ? 'SSR' : ssrResult.type === 'ssr_with_js' ? 'SSR+JS' : '客户端渲染'
   })
-  
+
   if (ssrResult.type !== 'client_rendering') {
     results.dimensions.aiFriendly.checked++
     results.dimensions.aiFriendly.score += 3
-    results.issues.pass.push({ 
-      title: '渲染方式友好', 
-      desc: ssrResult.type === 'ssr' ? '纯SSR，爬虫友好' : 'SSR+JS，爬虫较友好', 
-      level: 'pass', impact: 3 
+    results.issues.pass.push({
+      title: '渲染方式友好',
+      desc: ssrResult.type === 'ssr' ? '纯SSR，爬虫友好' : 'SSR+JS，爬虫较友好',
+      level: 'pass', impact: 3
     })
   } else {
-    results.issues.warn.push({ 
-      title: '客户端渲染', 
-      desc: '页面主要靠JS渲染，可能影响爬虫抓取', 
-      fix: '考虑使用SSR/SSG', 
-      level: 'warn', impact: 5 
+    results.issues.warn.push({
+      title: '客户端渲染',
+      desc: '页面主要靠JS渲染，可能影响爬虫抓取',
+      fix: '考虑使用SSR/SSG',
+      level: 'warn', impact: 5
     })
   }
 
@@ -1046,7 +1046,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
     name: 'AI爬虫权限', result: robotsResult.status === 'allowed' ? 'pass' : 'fail',
     value: robotsResult.status === 'allowed' ? '允许' : robotsResult.status === 'blocked' ? '禁止' : '未知'
   })
-  
+
   if (robotsResult.status === 'allowed') {
     results.dimensions.aiFriendly.checked++
     results.dimensions.aiFriendly.score += 3
@@ -1054,10 +1054,10 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
 
   // === AI亲和性简化评分（符合实际AI抓取行为）===
   onProgress?.(90, 'aiFriendly')
-  
+
   // 使用简化版评分
   const aiScore = checkAIFriendlinessSimple(html, normalizedUrl, robotsResult)
-  
+
   // 将AI分析结果转换为检测项
   for (const item of aiScore.items || []) {
     const pass = item.score >= item.max * 0.6  // 60%通过
@@ -1070,7 +1070,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
     }
     results.dimensions.aiFriendly.score += item.score
   }
-  
+
   // 添加AI友好的问题
   if (aiScore.issues && aiScore.issues.length > 0) {
     for (const issue of aiScore.issues.slice(0, 3)) {
@@ -1082,7 +1082,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
       })
     }
   }
-  
+
   // 添加建议
   if (aiScore.suggestions && aiScore.suggestions.length > 0) {
     for (const suggestion of aiScore.suggestions.slice(0, 2)) {
@@ -1094,7 +1094,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
       })
     }
   }
-  
+
   // 总体评价
   if (aiScore.score >= 80) {
     results.issues.pass.push({
@@ -1133,18 +1133,18 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
     // 计算AI亲和性额外加分
     const aiBonus = authority.aiBonus || getAIBonusByTier(authority.tier || 1)
     const tierLabel = { 5: '顶尖巨头', 4: '知名大厂', 3: '中型平台', 2: '小型网站', 1: '普通网站' }
-    
+
     // 直接将AI亲和性加分加到总分上
     results.dimensions.aiFriendly.score += aiBonus
     results.dimensions.aiFriendly.checked += 1
-    
+
     // 添加知名网站加分项到检测结果
     results.dimensions.aiFriendly.items.push({
       name: '网站权威性',
       result: 'pass',
       value: `${authority.name} (${tierLabel[authority.tier] || '普通网站'}) +${aiBonus}分`
     })
-    
+
     // 记录知名网站信息
     results.famousSiteBonus = {
       name: authority.name,
@@ -1154,7 +1154,7 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
       aiBonus: aiBonus,
       note: `${authority.name} 为知名${authority.type}网站，权威等级${authority.tier || 1}，给予保底分数 ${authority.bonus} 分，AI亲和性额外加分 ${aiBonus} 分`
     }
-    
+
     // 添加知名网站加分提示到issues
     results.issues.pass.push({
       title: `${authority.name} 知名网站权威加成`,
@@ -1166,8 +1166,8 @@ export const analyzeWebsite = async (url, onProgress, force = false) => {
 
   // 缓存结果
   setCache(cacheKey, results)
-  
+
   onProgress?.(100, 'complete')
-  
+
   return results
 }

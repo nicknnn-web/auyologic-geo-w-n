@@ -208,11 +208,18 @@
           const r = await fetch(api('/geo-brand/tasks/' + taskId + '/progress'), { headers: { 'x-user-id': USER_ID } })
           const data = await r.json()
           log(data)
+          const probeTotal =
+            data.totalAnswersExpected ??
+            (Number(data.totalQuestions) || 0) * (Number(data.probeModelCount) || 1)
           const line =
             'status=' +
             data.status +
-            ' · 总题=' +
+            ' · 题数=' +
             (data.totalQuestions ?? '?') +
+            ' · 模型=' +
+            (data.probeModelCount ?? '?') +
+            ' · 探针总数=' +
+            (probeTotal || '?') +
             ' · 已答=' +
             (data.answeredCount ?? '?') +
             ' · 成功=' +

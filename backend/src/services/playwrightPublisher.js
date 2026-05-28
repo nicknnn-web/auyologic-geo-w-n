@@ -1,5 +1,7 @@
 import fs from 'fs';
 import { launchChromium } from '../utils/playwrightLaunch.js';
+import { normalizePublishPlatform } from '../utils/publishPlatformNormalize.js';
+import { htmlToPlainText } from '../utils/htmlToPlainText.js';
 
 // 内存中的发布任务状态（taskId -> taskState）
 const runningTasks = new Map();
@@ -29,6 +31,11 @@ const STEALTH_SCRIPT = `
 
 function randomDelay(min, max) {
   return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
+}
+
+/** 模拟人工：每次点击操作后等待 2～3 秒 */
+function afterHumanClick() {
+  return randomDelay(2000, 3000);
 }
 
 /** 追加任务日志（同时更新内存状态） */
@@ -453,7 +460,7 @@ async function _weiboClickPublishBox(page, taskId) {
       '[class*="publish"] textarea',
       '[class*="editor"] textarea',
     ];
-    
+
     for (const sel of selectors) {
       const input = await page.$(sel);
       if (input) {
@@ -467,7 +474,7 @@ async function _weiboClickPublishBox(page, taskId) {
         }
       }
     }
-    
+
     appendLog(taskId, '使用备选方案获取焦点…');
     await page.evaluate(() => {
       const selectors = [
@@ -475,7 +482,7 @@ async function _weiboClickPublishBox(page, taskId) {
         'textarea[placeholder*="新鲜事"]',
         'textarea[placeholder*="分享"]',
       ];
-      
+
       for (const sel of selectors) {
         const textarea = document.querySelector(sel);
         if (textarea) {
@@ -488,7 +495,7 @@ async function _weiboClickPublishBox(page, taskId) {
     });
     await randomDelay(500, 800);
     appendLog(taskId, '已激活微博发布框');
-    
+
   } catch (err) {
     appendLog(taskId, `⚠️ 点击微博发布框失败：${err.message}`);
   }
@@ -510,10 +517,10 @@ async function _weiboFillContent(page, taskId, content) {
       'textarea[class*="_input"]',
       'textarea[placeholder*="有什么"]',
     ];
-    
+
     let editor = null;
     let foundSelector = null;
-    
+
     for (const sel of selectors) {
       const found = await page.$(sel);
       if (found) {
@@ -526,7 +533,7 @@ async function _weiboFillContent(page, taskId, content) {
         }
       }
     }
-    
+
     if (!editor) {
       appendLog(taskId, '使用 JavaScript 查找编辑器…');
       const editorFound = await page.evaluate(() => {
@@ -537,7 +544,7 @@ async function _weiboFillContent(page, taskId, content) {
           'textarea[placeholder*="微博"]',
           'textarea.W_input',
         ];
-        
+
         for (const sel of selectors) {
           const el = document.querySelector(sel);
           if (el && el.offsetParent !== null) { // 检查是否可见
@@ -546,19 +553,19 @@ async function _weiboFillContent(page, taskId, content) {
         }
         return null;
       });
-      
+
       if (editorFound) {
         editor = await page.$(editorFound);
         foundSelector = editorFound;
         appendLog(taskId, `JS 找到编辑器: ${editorFound}`);
       }
     }
-    
+
     if (!editor) {
       appendLog(taskId, '⚠️ 未找到微博正文编辑框');
       return;
     }
-    
+
     await editor.click();
     await randomDelay(300, 500);
     await page.evaluate((sel) => {
@@ -566,24 +573,24 @@ async function _weiboFillContent(page, taskId, content) {
       if (el) el.focus();
     }, foundSelector);
     await randomDelay(200, 400);
-    
+
     // 清空已有内容
     await page.keyboard.press('Control+a');
     await randomDelay(100, 200);
     await page.keyboard.press('Delete');
     await randomDelay(100, 200);
-    
+
     appendLog(taskId, `开始输入内容（长度：${content.length}）…`);
-    
+
     for (let i = 0; i < content.length; i++) {
       await page.keyboard.type(content[i], { delay: 30 + Math.random() * 20 });
       if (i > 0 && i % 20 === 0) {
         appendLog(taskId, `输入进度：${Math.round((i / content.length) * 100)}%`);
       }
     }
-    
+
     appendLog(taskId, '微博正文填写完成');
-    
+
   } catch (err) {
     appendLog(taskId, `⚠️ 填写微博正文失败：${err.message}`);
     try {
@@ -606,7 +613,7 @@ async function _weiboUploadImages(page, taskId, imagePaths) {
       '[class*="upload"] input[type="file"]',
     ];
     let fileInput = null;
-    
+
     for (const sel of uploadSelectors) {
       fileInput = await page.$(sel);
       if (fileInput) break;
@@ -673,18 +680,18 @@ async function _weiboSubmitPublish(page, taskId) {
 
   let publishBtn = null;
   let foundSelector = null;
-  
+
   for (const sel of publishSelectors) {
     const found = await page.$(sel);
     if (found) {
       const isVisible = await found.isVisible();
       if (isVisible) {
         const isDisabled = await found.evaluate(el => {
-          return el.disabled || 
-                 el.getAttribute('disabled') !== null || 
+          return el.disabled ||
+                 el.getAttribute('disabled') !== null ||
                  window.getComputedStyle(el).pointerEvents === 'none';
         });
-        
+
         if (!isDisabled) {
           publishBtn = found;
           foundSelector = sel;
@@ -699,7 +706,7 @@ async function _weiboSubmitPublish(page, taskId) {
 
   if (!publishBtn) {
     appendLog(taskId, '⚠️ 未找到可点击的微博发送按钮，尝试备选方案…');
-    
+
     const clicked = await page.evaluate(() => {
       const selectors = [
         'button.woo-button-main',
@@ -707,7 +714,7 @@ async function _weiboSubmitPublish(page, taskId) {
         'button.woo-button-m',
         'button.woo-button',
       ];
-      
+
       for (const sel of selectors) {
         const btns = document.querySelectorAll(sel);
         for (const btn of btns) {
@@ -717,7 +724,7 @@ async function _weiboSubmitPublish(page, taskId) {
           }
         }
       }
-      
+
       const allBtns = document.querySelectorAll('button');
       for (const btn of allBtns) {
         if (btn.textContent.includes('发送') || btn.textContent.includes('发布')) {
@@ -727,10 +734,10 @@ async function _weiboSubmitPublish(page, taskId) {
           }
         }
       }
-      
+
       return false;
     });
-    
+
     if (!clicked) {
       throw new Error('未找到微博发送按钮，请检查页面是否正确加载');
     }
@@ -745,10 +752,10 @@ async function _weiboSubmitPublish(page, taskId) {
     // 微博发布成功
     await page.waitForTimeout(2000);
     await randomDelay(1000, 1500);
-    
+
     // 获取当前 URL 作为发布后的链接
     publishedUrl = page.url();
-    
+
     if (!publishedUrl.includes('/u/') && !publishedUrl.includes('/n/')) {
       try {
         const username = await page.$eval('[class*="nick"]', el => el.textContent?.trim());
@@ -761,23 +768,400 @@ async function _weiboSubmitPublish(page, taskId) {
     appendLog(taskId, '⚠️ 等待微博发布结果超时，检查当前 URL…');
     publishedUrl = page.url();
   }
-  
+
+  return publishedUrl;
+}
+
+const TOUTIAO_PUBLISH_URL = 'https://mp.toutiao.com/profile_v4/graphic/publish';
+
+function _isToutiaoSessionExpired(url) {
+  const u = String(url || '');
+  return (
+    u.includes('/auth/page/login') ||
+    u.includes('/passport') ||
+    (u.includes('toutiao.com') && u.includes('/login'))
+  );
+}
+
+/**
+ * 今日头条 · 图文文章发布（头条号后台）
+ */
+async function runPublishToutiao(taskInfo) {
+  const { taskId, sessionState, content, title, tags, imagePaths } = taskInfo;
+  appendLog(taskId, '正在启动浏览器…');
+
+  const { browser, page } = await _createBrowserSession(taskId, sessionState);
+
+  try {
+    appendLog(taskId, '正在打开今日头条图文发布页…');
+    await page.goto(TOUTIAO_PUBLISH_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    });
+    await randomDelay(2000, 3500);
+
+    const currentUrl = page.url();
+    if (_isToutiaoSessionExpired(currentUrl)) {
+      throw new Error('SESSION_EXPIRED:今日头条登录状态已失效，请在账号管理页重新授权（须 App 扫码）');
+    }
+
+    appendLog(taskId, '已进入发布页，开始填写文章…');
+
+    const safeTitle = (title || '未命名文章').slice(0, 30);
+    await _toutiaoFillTitle(page, taskId, safeTitle);
+    await afterHumanClick();
+    await _toutiaoFillContent(page, taskId, content || '');
+    await afterHumanClick();
+
+    await _toutiaoSelectNoCover(page, taskId);
+    await afterHumanClick();
+
+    if (tags && String(tags).trim()) {
+      appendLog(taskId, 'ℹ️ 今日头条文章暂不支持话题标签字段，已忽略 tags');
+    }
+
+    await _toutiaoSyncEditorState(page, taskId);
+    await afterHumanClick();
+    const publishedUrl = await _toutiaoSubmitPublish(page, taskId);
+
+    appendLog(taskId, `✅ 今日头条发布成功！链接：https://mp.toutiao.com/profile_v4/graphic/articles`);
+    return { publishedUrl: 'https://mp.toutiao.com/profile_v4/graphic/articles' };
+  } catch (err) {
+    appendLog(taskId, `❌ 今日头条发布失败：${err.message}`);
+    throw err;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function _toutiaoFillTitle(page, taskId, title) {
+  if (!title) return;
+  appendLog(taskId, `正在填写文章标题：${title}`);
+  try {
+    const selectors = [
+      'textarea[placeholder*="标题"]',
+      'input[placeholder*="标题"]',
+      '[class*="title"] textarea',
+      '[class*="title"] input',
+      '.publish-editor-title textarea',
+      '.editor-title input',
+    ];
+    for (const sel of selectors) {
+      const input = await page.$(sel);
+      if (input) {
+        await input.click();
+        await afterHumanClick();
+        await input.fill('');
+        await input.type(title, { delay: 35 + Math.random() * 35 });
+        appendLog(taskId, '标题填写完成');
+        return;
+      }
+    }
+    const filled = await page.evaluate((t) => {
+      const candidates = [
+        ...document.querySelectorAll('textarea, input[type="text"]'),
+      ];
+      for (const el of candidates) {
+        const ph = (el.getAttribute('placeholder') || '').toLowerCase();
+        if (ph.includes('标题') || ph.includes('title')) {
+          el.focus();
+          el.value = t;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          return true;
+        }
+      }
+      return false;
+    }, title);
+    if (filled) {
+      appendLog(taskId, '标题填写完成（备用方式）');
+      await afterHumanClick();
+      return;
+    }
+    appendLog(taskId, '⚠️ 未找到标题输入框');
+  } catch (err) {
+    appendLog(taskId, `⚠️ 填写标题失败：${err.message}`);
+  }
+}
+
+async function _toutiaoFillContent(page, taskId, content) {
+  if (!content) return;
+  const plainContent = htmlToPlainText(content);
+  if (plainContent !== content) {
+    appendLog(taskId, '正文含 HTML 标签，已转为纯文本再填入编辑器');
+  }
+  appendLog(taskId, '正在填写文章正文…');
+  try {
+    const selectors = [
+      '.ProseMirror[contenteditable="true"]',
+      '.public-DraftEditor-content[contenteditable="true"]',
+      '[contenteditable="true"][class*="editor"]',
+      '.editor-content [contenteditable="true"]',
+      '[contenteditable="true"]',
+    ];
+    for (const sel of selectors) {
+      const editors = await page.$$(sel);
+      for (const editor of editors) {
+        const box = await editor.boundingBox();
+        if (!box || box.height < 80) continue;
+        await editor.click();
+        await afterHumanClick();
+        await page.keyboard.press('Control+a');
+        await randomDelay(300, 500);
+        const chunks = plainContent.match(/.{1,200}/gs) || [plainContent];
+        for (const chunk of chunks) {
+          await editor.type(chunk, { delay: 12 + Math.random() * 12 });
+        }
+        appendLog(taskId, '正文填写完成');
+        await afterHumanClick();
+        return;
+      }
+    }
+    appendLog(taskId, '⚠️ 未找到正文编辑框');
+  } catch (err) {
+    appendLog(taskId, `⚠️ 填写正文失败：${err.message}`);
+  }
+}
+
+/** 填表后触发头条编辑器校验（便于「预览并发布」按钮出现） */
+async function _toutiaoSyncEditorState(page, taskId) {
+  try {
+    await page.evaluate(() => {
+      const editors = document.querySelectorAll('[contenteditable="true"], textarea');
+      for (const el of editors) {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    });
+    await page.keyboard.press('Tab').catch(() => {});
+    await afterHumanClick();
+    await page.evaluate(() => {
+      const btn = document.querySelector('button.publish-btn.publish-btn-last, button.publish-btn-last');
+      if (btn) btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+    });
+    await afterHumanClick();
+    appendLog(taskId, '已同步编辑器状态，等待发布按钮就绪…');
+  } catch (err) {
+    appendLog(taskId, `⚠️ 同步编辑器状态：${err.message}`);
+  }
+}
+
+/** 展示封面栏：选择「无封面」（默认常为单图，需先切换） */
+async function _toutiaoSelectNoCover(page, taskId) {
+  appendLog(taskId, '正在选择展示封面：无封面…');
+  await afterHumanClick();
+
+  let selected = false;
+  try {
+    const label = page.locator('label.byte-radio').filter({ hasText: '无封面' });
+    await label.waitFor({ state: 'visible', timeout: 20000 });
+    const inner = label.locator('.byte-radio-inner').first();
+    await inner.scrollIntoViewIfNeeded();
+    await afterHumanClick();
+    await inner.click({ timeout: 8000 });
+    await afterHumanClick();
+    selected = true;
+    appendLog(taskId, '已点击「无封面」单选框');
+  } catch (err) {
+    appendLog(taskId, `⚠️ Playwright 选择无封面失败：${err.message}，尝试 DOM…`);
+  }
+
+  if (!selected) {
+    selected = await page.evaluate(() => {
+      const labels = [...document.querySelectorAll('label.byte-radio')];
+      for (const label of labels) {
+        if (!(label.textContent || '').includes('无封面')) continue;
+        const inner = label.querySelector('.byte-radio-inner');
+        if (inner) {
+          inner.scrollIntoView({ block: 'center' });
+          inner.click();
+          return true;
+        }
+        const input = label.querySelector('input[type="radio"]');
+        if (input) {
+          input.click();
+          return true;
+        }
+      }
+      const input = document.querySelector('label.byte-radio input[type="radio"][value="1"]');
+      if (input) {
+        input.click();
+        const inner = input.closest('label')?.querySelector('.byte-radio-inner');
+        if (inner) inner.click();
+        return true;
+      }
+      return false;
+    });
+    if (selected) {
+      appendLog(taskId, '已选择「无封面」（DOM 备用）');
+      await afterHumanClick();
+    }
+  }
+
+  if (!selected) {
+    throw new Error('未找到「无封面」选项（label.byte-radio / .byte-radio-inner）');
+  }
+}
+
+const TOUTIAO_CONFIRM_PUBLISH_TIMEOUT_MS = 10_000;
+const TOUTIAO_CONFIRM_PUBLISH_POLL_MS = 400;
+
+/** 点击「预览并发布」后轮询「确认发布」，10 秒内未出现则失败 */
+async function _toutiaoPollClickConfirmPublish(page, taskId) {
+  appendLog(taskId, '轮询查找「确认发布」按钮（最多 10 秒）…');
+  const deadline = Date.now() + TOUTIAO_CONFIRM_PUBLISH_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const hit = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll('button.publish-btn.publish-btn-last')];
+      for (const el of buttons) {
+        const text = (el.textContent || '').replace(/\s/g, '');
+        if (!text.includes('确认发布')) continue;
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+        if (el.offsetParent === null) continue;
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        el.click();
+        return true;
+      }
+      return false;
+    });
+    if (hit) {
+      appendLog(taskId, '已点击「确认发布」（button.publish-btn.publish-btn-last）');
+      await afterHumanClick();
+      return;
+    }
+
+    try {
+      const btn = page
+        .locator('button.publish-btn.publish-btn-last')
+        .filter({ hasText: '确认发布' })
+        .first();
+      if (await btn.isVisible().catch(() => false)) {
+        const enabled = await btn.isEnabled().catch(() => false);
+        if (enabled) {
+          await btn.scrollIntoViewIfNeeded();
+          await afterHumanClick();
+          await btn.click({ timeout: 5000 });
+          appendLog(taskId, '已点击「确认发布」（Playwright）');
+          await afterHumanClick();
+          return;
+        }
+      }
+    } catch {
+      /* 本轮未命中，继续轮询 */
+    }
+
+    await randomDelay(TOUTIAO_CONFIRM_PUBLISH_POLL_MS, TOUTIAO_CONFIRM_PUBLISH_POLL_MS);
+  }
+
+  throw new Error('10 秒内未找到可点击的「确认发布」按钮，发布超时');
+}
+
+async function _toutiaoSubmitPublish(page, taskId) {
+  appendLog(taskId, '正在查找并点击「预览并发布」…');
+
+  const PREVIEW_PUBLISH_SELECTOR = 'button.publish-btn.publish-btn-last';
+
+  let clicked = false;
+  try {
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('button.publish-btn.publish-btn-last');
+        if (!el) return false;
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+        if (el.offsetParent === null) return false;
+        return (el.textContent || '').includes('预览并发布');
+      },
+      { timeout: 90000 }
+    );
+
+    const btn = page.locator(PREVIEW_PUBLISH_SELECTOR).filter({ hasText: '预览并发布' });
+    await btn.waitFor({ state: 'visible', timeout: 10000 });
+    await btn.scrollIntoViewIfNeeded();
+    await afterHumanClick();
+    await btn.click({ timeout: 15000 });
+    await afterHumanClick();
+    clicked = true;
+    appendLog(taskId, '已点击「预览并发布」（button.publish-btn.publish-btn-last）');
+  } catch (err) {
+    appendLog(taskId, `⚠️ Playwright 点击失败：${err.message}，尝试 DOM 备用…`);
+  }
+
+  if (!clicked) {
+    clicked = await page.evaluate(() => {
+      const el = document.querySelector('button.publish-btn.publish-btn-last');
+      if (!el) return false;
+      const text = (el.textContent || '').trim();
+      if (!text.includes('预览并发布')) return false;
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+      if (el.offsetParent === null) return false;
+      el.scrollIntoView({ block: 'center' });
+      el.click();
+      return true;
+    });
+    if (clicked) {
+      appendLog(taskId, '已点击「预览并发布」（DOM 备用）');
+      await afterHumanClick();
+    }
+  }
+
+  if (!clicked) {
+    throw new Error(
+      '未找到可点击的「预览并发布」按钮（button.publish-btn.publish-btn-last）。请确认已填写标题/正文且已选择无封面'
+    );
+  }
+
+  await afterHumanClick();
+  await _toutiaoPollClickConfirmPublish(page, taskId);
+
+  let publishedUrl = '';
+  try {
+    await page.waitForURL(
+      (url) => {
+        const s = String(url);
+        return (
+          (s.includes('toutiao.com') || s.includes('mp.toutiao.com')) &&
+          !_isToutiaoSessionExpired(s) &&
+          (s.includes('/article/') ||
+            s.includes('/graphic/') ||
+            s.includes('/content/') ||
+            !s.includes('/publish'))
+        );
+      },
+      { timeout: 60000 }
+    );
+    publishedUrl = page.url();
+  } catch {
+    appendLog(taskId, '⚠️ 等待发布跳转超时，尝试读取页面链接…');
+    publishedUrl = page.url();
+    const link = await page.$('a[href*="toutiao.com"], a[href*="/article/"]');
+    if (link) {
+      const href = await link.getAttribute('href');
+      if (href) publishedUrl = href.startsWith('http') ? href : `https://www.toutiao.com${href}`;
+    }
+  }
   return publishedUrl;
 }
 
 /** 内部分发逻辑：根据平台路由到对应发布函数 */
 async function _runPublish(taskInfo) {
-  const { platform } = taskInfo;
-  // ✅ Bug修复：加 await，否则拿到的是 Promise 而非结果
+  const platform = normalizePublishPlatform(taskInfo.platform);
+  const payload = { ...taskInfo, platform };
   if (platform === '小红书') {
-    return await runPublishXHS(taskInfo);
-  } else if (platform === '知乎') {
-    return await runPublishZhihu(taskInfo);
-  } else if (platform === '微博') {
-    return await runPublishWeibo(taskInfo);
-  } else {
-    throw new Error(`暂不支持 ${platform} 平台的自动发布`);
+    return await runPublishXHS(payload);
   }
+  if (platform === '知乎') {
+    return await runPublishZhihu(payload);
+  }
+  if (platform === '微博') {
+    return await runPublishWeibo(payload);
+  }
+  if (platform === '今日头条') {
+    return await runPublishToutiao(payload);
+  }
+  throw new Error(
+    `暂不支持 ${taskInfo.platform || platform} 平台的自动发布（支持：小红书、知乎、微博、今日头条）`
+  );
 }
 
 /** 点击图文 tab */

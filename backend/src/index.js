@@ -24,6 +24,7 @@ import {
 import { parsePagination, pagedResponse } from './pagination.js';
 import { KEYWORD_TYPE_BOOTSTRAP_ROWS } from './config/keywordTypeSemantics.js';
 import { isBochaConfigured } from './services/bochaWebSearch.js';
+import { normalizePublishPlatform } from './utils/publishPlatformNormalize.js';
 
 const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
@@ -177,6 +178,23 @@ async function ensureSysDictAndMigrate() {
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
     [SYS_DICT_RUNTIME_BOOTSTRAP_META, '1']
   )
+
+  await pool
+    .query(
+      `INSERT INTO sys_dict_type (dict_type_key, dict_type_value) VALUES ('publish_platform', '发布平台')
+       ON CONFLICT (dict_type_key) DO UPDATE SET dict_type_value = EXCLUDED.dict_type_value`
+    )
+    .catch(() => {})
+  await pool
+    .query(
+      `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
+       VALUES ('publish_platform', 'toutiao', '今日头条', 50, true)
+       ON CONFLICT (dict_type, data_key) DO UPDATE SET
+         data_value = EXCLUDED.data_value,
+         sort_order = EXCLUDED.sort_order,
+         enabled = EXCLUDED.enabled`
+    )
+    .catch((e) => console.warn('publish_platform 今日头条 seed:', e.message))
 }
 
 /** 写入或更新字典类型中文名 */
@@ -333,7 +351,7 @@ const getUserId = (req) => {
 
 // 数据库表结构test
 const tableSchemas = {
-  users: `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, user_id VARCHAR(255) UNIQUE, username VARCHAR(200), email VARCHAR(200), password_hash VARCHAR(255), deepseek_api_key TEXT, doubao_api_key TEXT, kimi_api_key TEXT, company_name VARCHAR(500), website VARCHAR(500), industry VARCHAR(200), description TEXT, target_audience TEXT, default_ai_model VARCHAR(50) DEFAULT 'deepseek-chat', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`,
+  users: `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, user_id VARCHAR(255) UNIQUE, username VARCHAR(200), email VARCHAR(200), password_hash VARCHAR(255), deepseek_api_key TEXT, doubao_api_key TEXT, kimi_api_key TEXT, company_name VARCHAR(500), website VARCHAR(500), industry VARCHAR(200), description TEXT, target_audience TEXT, default_ai_model VARCHAR(50) DEFAULT 'deepseek-v4-flash', created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`,
   keywords: `CREATE TABLE IF NOT EXISTS keywords (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword VARCHAR(500), type VARCHAR(50), source VARCHAR(100), status VARCHAR(20) DEFAULT 'active', created_at TIMESTAMP DEFAULT NOW())`,
   questions: `CREATE TABLE IF NOT EXISTS questions (id SERIAL PRIMARY KEY, user_id VARCHAR(255), keyword_id INTEGER, question TEXT, answer TEXT, keyword_type VARCHAR(50), source_keyword VARCHAR(255), status VARCHAR(20) DEFAULT 'pending', created_at TIMESTAMP DEFAULT NOW())`,
   knowledge: `CREATE TABLE IF NOT EXISTS knowledge (id SERIAL PRIMARY KEY, user_id VARCHAR(255), name VARCHAR(500), filename VARCHAR(500), type VARCHAR(50), file_type VARCHAR(50), size INTEGER, content TEXT, summary TEXT, created_at TIMESTAMP DEFAULT NOW())`,
@@ -1274,7 +1292,7 @@ app.post('/api/auth/login', async (req, res) => {
         INSERT INTO users (user_id, username, deepseek_api_key, default_ai_model)
         VALUES ($1, $2, $3, $4)
         RETURNING *
-      `, [userId, '管理员', process.env.DEEPSEEK_API_KEY || '', 'deepseek-chat']);
+      `, [userId, '管理员', process.env.DEEPSEEK_API_KEY || '', 'deepseek-v4-flash']);
       res.json({ success: true, user_id: userId, username: '管理员' });
     } else {
       const user = result.rows[0];
@@ -1301,7 +1319,7 @@ app.get('/api/settings', async (req, res) => {
         deepseek_api_key: user.deepseek_api_key || '',
         doubao_api_key: user.doubao_api_key || '',
         kimi_api_key: user.kimi_api_key || '',
-        default_ai_model: user.default_ai_model || 'deepseek-chat',
+        default_ai_model: user.default_ai_model || 'deepseek-v4-flash',
         created_at: user.created_at instanceof Date ? user.created_at.toISOString() : user.created_at,
         updated_at: user.updated_at instanceof Date ? user.updated_at.toISOString() : user.updated_at
       });
@@ -1333,7 +1351,7 @@ app.put('/api/settings', async (req, res) => {
         default_ai_model = EXCLUDED.default_ai_model,
         updated_at = NOW()
       RETURNING *
-    `, [company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-chat']);
+    `, [company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-v4-flash']);
 
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -1375,11 +1393,12 @@ app.post('/api/platform-accounts', async (req, res) => {
   try {
     const { platform, account_name, phone_number } = req.body;
     if (!platform) return res.status(400).json({ error: '平台不能为空' });
+    const platformNorm = normalizePublishPlatform(platform);
     const result = await pool.query(
       `INSERT INTO media_accounts (platform, account_name, phone_number, auth_status, status)
        VALUES ($1, $2, $3, 'pending', 'active') RETURNING
        id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status, created_at`,
-      [platform, account_name || '', phone_number || null]
+      [platformNorm, account_name || '', phone_number || null]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1417,6 +1436,7 @@ const AUTH_TASK_STATUS_MAP = {
   waiting_agent: 'waiting_agent',
   agent_running: 'opening',
   browser_opened: 'browser_opened',
+  waiting_qr_scan: 'waiting_qr_scan',
   waiting_sms_code: 'waiting_sms_code',
   submitting: 'submitting',
   login_detected: 'authorized',
@@ -1765,6 +1785,8 @@ app.get('/api/agent/download', (req, res) => {
   const agentBundleFiles = [
     ['src/services/playwrightPublisher.js', join(__dirname, 'services/playwrightPublisher.js')],
     ['src/utils/playwrightLaunch.js', join(__dirname, 'utils/playwrightLaunch.js')],
+    ['src/utils/publishPlatformNormalize.js', join(__dirname, 'utils/publishPlatformNormalize.js')],
+    ['src/utils/htmlToPlainText.js', join(__dirname, 'utils/htmlToPlainText.js')],
   ];
   for (const [zipPath, srcPath] of agentBundleFiles) {
     if (fs.existsSync(srcPath)) {
@@ -1800,12 +1822,13 @@ app.post('/api/publish-tasks', async (req, res) => {
   try {
     const { task_name, draft_id, draft_title, platform, account_id, content, title, tags } = req.body;
     if (!platform || !account_id) return res.status(400).json({ error: '平台和账号不能为空' });
+    const platformNorm = normalizePublishPlatform(platform);
     const result = await pool.query(
       `INSERT INTO publish_tasks
          (task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')
        RETURNING *`,
-      [task_name || '', draft_id || null, draft_title || '', platform, account_id, content || '', title || '', tags || '']
+      [task_name || '', draft_id || null, draft_title || '', platformNorm, account_id, content || '', title || '', tags || '']
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }

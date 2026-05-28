@@ -2,7 +2,7 @@
  * GET/POST/PUT/DELETE /api/sentiment-lexicon
  * POST /api/sentiment-lexicon/batch-tier：批量修改主词 AI 情感（子词随主词级联）。
  * POST /api/sentiment-lexicon/merge-synonyms：复杂合并（子词、无子主词挂到目标下、有子主词删头并迁子级到目标）。
- * POST /api/sentiment-lexicon/rebuild-word-cloud：从探针原文重跑词云 AI 并覆盖入库。
+ * POST /api/sentiment-lexicon/rebuild-word-cloud：从探针原文重跑词云 AI 并覆盖入库（当前品牌最新已完成任务）
  * 与前端「情感词管理」路径、字段兼容；幕后数据源为「当前最新已完成体检任务」的
  * geo_health_word_cloud_item（AI 生成 + 用户编辑），不再读写全局 geo_sentiment_lexicon。
  */
@@ -14,8 +14,14 @@ import {
   extractProbeAnswerText,
   countProbeKeywordOccurrencesForTask,
 } from '../services/sentimentLexiconService.js';
-import { resolveLatestReportTaskId, persistAiWordCloudForTask } from '../services/geoHealthWordCloudPersistService.js';
+import {
+  resolveLatestReportTaskId,
+  persistAiWordCloudForTask,
+  awaitWordCloudPersistIfRunning,
+  isWordCloudPersistInFlight,
+} from '../services/geoHealthWordCloudPersistService.js';
 import { mergeKeyForWordCloudPhrase } from '../services/sentimentWordCloudAiService.js';
+import { startPhaseTimer, logPhaseDone } from '../utils/geoTaskTiming.js';
 
 const router = Router();
 
@@ -524,8 +530,8 @@ router.post('/sentiment-lexicon/merge-synonyms', async (req, res) => {
 });
 
 /**
- * 从本期探针回答原文重新跑词云 AI 并覆盖写入 geo_health_word_cloud_item（与任务完成时 persist 逻辑一致）。
- * 可能耗时数分钟；反向代理需足够 read timeout。
+ * 从探针回答原文重新跑词云 AI 并覆盖写入 geo_health_word_cloud_item（与任务完成时 persist 逻辑一致）。
+ * 目标：当前企业下最新一条已完成体检任务。可能耗时数分钟；反向代理需足够 read timeout。
  */
 router.post('/sentiment-lexicon/rebuild-word-cloud', async (req, res) => {
   try {
@@ -534,11 +540,20 @@ router.post('/sentiment-lexicon/rebuild-word-cloud', async (req, res) => {
     if (!taskId) {
       return res.status(400).json({ success: false, error: '暂无已完成的体检任务，无法重建词云' });
     }
+    await awaitWordCloudPersistIfRunning(taskId);
+    if (isWordCloudPersistInFlight(taskId)) {
+      return res.status(409).json({
+        success: false,
+        error: `任务 #${taskId} 词云正在生成中，请稍后再试`,
+      });
+    }
     const entRes = await pool.query(
       `SELECT company_name, industry, description, target_audience FROM users WHERE user_id = $1 LIMIT 1`,
       [uid]
     );
     const e = entRes.rows[0] || {};
+    console.log(`[sentiment-lexicon] rebuild-word-cloud task=${taskId} user=${uid}`);
+    const wcStartedAt = startPhaseTimer();
     const result = await persistAiWordCloudForTask(pool, taskId, uid, {
       brandName: String(e.company_name || '').trim() || '品牌',
       industry: String(e.industry || '').trim(),
@@ -546,8 +561,10 @@ router.post('/sentiment-lexicon/rebuild-word-cloud', async (req, res) => {
       targetAudience: String(e.target_audience || '').trim(),
     });
     if (!result.ok) {
-      return res.status(500).json({ success: false, error: result.error || '词云重建失败' });
+      logPhaseDone('wordcloud', taskId, '词云', wcStartedAt, { ok: false, manual: true });
+      return res.status(500).json({ success: false, error: result.error || '词云重建失败', taskId });
     }
+    logPhaseDone('wordcloud', taskId, '词云', wcStartedAt, { count: result.count ?? 0, manual: true });
     res.json({
       success: true,
       taskId,

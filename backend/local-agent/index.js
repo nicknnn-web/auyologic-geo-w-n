@@ -14,7 +14,14 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
-const { startAuth, submitSmsCode, captureSession, isLoggedIn, closeSession } = require('./auth');
+const {
+  startAuth,
+  submitSmsCode,
+  captureSession,
+  isLoggedIn,
+  closeSession,
+  shouldKeepBrowserOpenAfterAuth,
+} = require('./auth');
 
 const CONFIG_PATH = path.join(
   process.env.APPDATA || process.env.HOME || __dirname,
@@ -136,6 +143,9 @@ async function handleAuthTask(BASE_URL, task) {
           body: JSON.stringify({ accountId, storageState, userAgent }),
         });
         console.log('  ✅ 授权成功！登录状态已上传');
+        if (shouldKeepBrowserOpenAfterAuth()) {
+          console.log('  ℹ  浏览器未自动关闭，可在窗口内继续访问 mp.toutiao.com 等页面做对比');
+        }
       } catch (err) {
         console.error('  ❌ 捕获登录状态失败:', err.message);
         await updateStatus('browser_opened');
