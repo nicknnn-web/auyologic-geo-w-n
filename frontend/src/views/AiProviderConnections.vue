@@ -4,9 +4,11 @@
       <div>
         <div class="text-lg font-bold">大模型接入</div>
         <div class="text-sm text-gray-500 mt-1">
-          管理国内大模型与 ChatGPT / Gemini / Claude 等接入；API Key 以密文写入数据库。部署须配置环境变量
+          管理国内大模型与 ChatGPT / Gemini / Claude 等接入；另可添加
+          <strong class="font-normal text-gray-700">博查（信源 Web Search）</strong> 并「测试连接」验证密钥。
+          API Key 以密文写入数据库。部署须配置
           <code class="text-xs bg-gray-100 px-1 rounded">AI_CREDENTIALS_SECRET</code>（至少 16 位）。
-          业务探针若仍使用环境变量中的 Key，可与本页并存，后续可再关联本表。
+          博查也可继续用环境变量 <code class="text-xs bg-gray-100 px-1 rounded">BOCHA_API_KEY</code>，库内配置优先。
         </div>
       </div>
       <el-button
@@ -48,7 +50,12 @@
           <span class="text-gray-600">{{ keyMask(row) }}</span>
         </template>
       </el-table-column>
-      <el-table-column prop="defaultModel" label="模型" min-width="120" show-overflow-tooltip />
+      <el-table-column label="模型 / 用途" min-width="120" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span v-if="row.providerKey === 'bocha'" class="text-gray-600">信源检索</span>
+          <span v-else>{{ row.defaultModel || '—' }}</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="enabled" label="启用" width="80" align="center">
         <template #default="{ row }">
           <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
@@ -111,6 +118,12 @@
           <p v-if="!isEdit && hasAllProviderTypes" class="text-xs text-amber-600 mt-1">已添加全部厂商类型，无法再新增；可编辑或删除已有记录后再试。</p>
           <p v-else-if="!isEdit && usedProviderKeySet.size" class="text-xs text-gray-400 mt-1">灰色选项为已添加的类型，同类型仅允许一条接入。</p>
         </el-form-item>
+        <el-form-item v-if="form.providerKey === 'bocha'" label="说明">
+          <p class="text-sm text-gray-600 m-0 leading-relaxed">
+            用于品牌体检「信源穿透」阶段的网页检索，非对话大模型。保存后体检任务将优先使用此处密钥（高于环境变量
+            BOCHA_API_KEY）。
+          </p>
+        </el-form-item>
         <el-form-item v-if="form.providerKey === 'custom'" label="Base URL" prop="baseUrlOverride">
           <el-input
             v-model="form.baseUrlOverride"
@@ -119,15 +132,19 @@
             :rows="2"
           />
         </el-form-item>
-        <el-form-item v-else label="覆盖 Base URL">
+        <el-form-item v-else :label="form.providerKey === 'bocha' ? 'API 地址' : '覆盖 Base URL'">
           <el-input
             v-model="form.baseUrlOverride"
-            placeholder="留空则使用预设地址；需代理或专属网关时填写"
+            :placeholder="
+              form.providerKey === 'bocha'
+                ? '留空默认 https://api.bocha.cn/v1/web-search'
+                : '留空则使用预设地址；需代理或专属网关时填写'
+            "
             type="textarea"
             :rows="2"
           />
         </el-form-item>
-        <el-form-item label="模型名" prop="defaultModel">
+        <el-form-item v-if="form.providerKey !== 'bocha'" label="模型名" prop="defaultModel">
           <el-input v-model="form.defaultModel" placeholder="留空则使用该厂商默认模型" maxlength="128" />
         </el-form-item>
         <el-form-item :label="isEdit ? '新 API Key' : 'API Key'" :prop="isEdit ? undefined : 'apiKey'">
@@ -142,7 +159,7 @@
         <el-form-item label="启用" prop="enabled">
           <el-switch v-model="form.enabled" />
         </el-form-item>
-        <el-form-item label="Logo 底色">
+        <el-form-item v-if="form.providerKey !== 'bocha'" label="Logo 底色">
           <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-3">
             <el-color-picker v-model="form.logoBgColor" show-alpha clearable />
             <span class="text-xs text-gray-500">体检报告里模型图标区域背景；须与「厂家名称」和探针一致方可匹配</span>
@@ -372,6 +389,12 @@ const applyPresetDefaults = (pk) => {
 
 const onProviderChange = (pk) => {
   form.value.baseUrlOverride = ''
+  if (pk === 'bocha') {
+    if (!String(form.value.vendorName || '').trim()) {
+      form.value.vendorName = '博查'
+    }
+    form.value.defaultModel = 'web-search'
+  }
   applyPresetDefaults(pk)
 }
 
@@ -390,6 +413,10 @@ const openCreate = () => {
   }
   // 在预设加载完成后，默认选第一个尚未添加的类型
   form.value.providerKey = firstAvailableProviderKey()
+  if (form.value.providerKey === 'bocha') {
+    form.value.vendorName = '博查'
+    form.value.defaultModel = 'web-search'
+  }
   applyPresetDefaults(form.value.providerKey)
   dialogVisible.value = true
 }
@@ -427,7 +454,10 @@ const submitForm = async () => {
       vendorName: form.value.vendorName.trim(),
       providerKey: form.value.providerKey,
       baseUrlOverride: form.value.baseUrlOverride.trim(),
-      defaultModel: form.value.defaultModel.trim(),
+      defaultModel:
+        form.value.providerKey === 'bocha'
+          ? 'web-search'
+          : form.value.defaultModel.trim(),
       enabled: form.value.enabled,
       logoBgColor:
         form.value.logoBgColor == null || form.value.logoBgColor === '' ? null : form.value.logoBgColor,
@@ -504,9 +534,8 @@ const handleDelete = async (id) => {
   }
 }
 
-onMounted(async () => {
-  await loadPresets()
-  await loadData()
+onMounted(() => {
+  void Promise.all([loadPresets(), loadData()])
 })
 </script>
 

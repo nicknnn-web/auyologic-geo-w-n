@@ -4,7 +4,8 @@
 
 import crypto from 'crypto';
 import { createAiClientByConnectionId } from './aiClientFactory.js';
-import { bochaWebSearch, isBochaConfigured } from './bochaWebSearch.js';
+import { bochaWebSearch } from './bochaWebSearch.js';
+import { isBochaConfiguredForUser, resolveBochaCredentials } from './bochaCredentials.js';
 import {
   GEO_BOCHA_SEARCH_CONCURRENCY,
   GEO_SOURCE_CLASSIFY_CONCURRENCY,
@@ -213,13 +214,23 @@ async function fetchTaskContext(pool, taskId) {
  */
 export async function runBochaSourceSearchForTask(pool, taskId) {
   const bochaStartedAt = startPhaseTimer();
-  if (!isBochaConfigured()) {
+
+  const { rows: taskRows } = await pool.query(
+    `SELECT user_id FROM geo_health_task WHERE id = $1 LIMIT 1`,
+    [taskId]
+  );
+  const taskUserId = taskRows[0]?.user_id || 'default_user';
+  const bochaCreds = await resolveBochaCredentials(taskUserId);
+
+  if (!bochaCreds.apiKey) {
     console.warn(
-      `[geo-source] task=${taskId} 未配置 BOCHA_API_KEY，跳过信源检索（不影响探针分析与报告生成）`
+      `[geo-source] task=${taskId} 未配置博查（大模型接入或 BOCHA_API_KEY），跳过信源检索（不影响探针分析与报告生成）`
     );
     logPhaseDone('geo-bocha', taskId, '博查', bochaStartedAt, { skipped: true, reason: 'not_configured' });
     return { taskId, processed: 0, failedCount: 0, skipped: true, reason: 'bocha_not_configured' };
   }
+
+  const bochaSearchOpts = { apiKey: bochaCreds.apiKey, baseUrl: bochaCreds.baseUrl };
 
   const { rows: questions } = await pool.query(
     `SELECT id, question FROM geo_health_question WHERE task_id = $1 ORDER BY id ASC`,
@@ -244,7 +255,7 @@ export async function runBochaSourceSearchForTask(pool, taskId) {
       const questionId = q.id;
       const query = String(q.question || '').trim();
       try {
-        const result = await bochaWebSearch(query);
+        const result = await bochaWebSearch(query, bochaSearchOpts);
         const hits = result.hits || [];
         await pool.query(
           `INSERT INTO geo_health_source_search (task_id, question_id, query, hit_count, raw_json, error_text)

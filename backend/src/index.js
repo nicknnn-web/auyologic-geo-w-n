@@ -228,8 +228,14 @@ LEFT JOIN sys_dict dv ON dv.dict_type = '${INSTRUCTION_CONTENT_DICT_TYPE}'
  * 将 instruction_templates.content_type 仍为「字典展示值」的旧行对齐为 data_key（依赖库中已有 sys_dict 行）。
  * 不在此函数内向 sys_dict 插入业务字典项；初始数据请执行 docs/sql/sys_dict_content_seed.sql 或由字典管理维护。
  */
+const INSTRUCTION_CONTENT_TYPE_MIGRATE_META = 'instruction_content_type_data_key_v1'
+
 async function ensureContentAndPlatformDictSeeds() {
   try {
+    const done = await pool.query(`SELECT 1 FROM sys_dict_meta WHERE key = $1`, [
+      INSTRUCTION_CONTENT_TYPE_MIGRATE_META,
+    ])
+    if (done.rows.length > 0) return
     await ensureTable('instruction_templates')
     await pool.query(
       `UPDATE instruction_templates AS t
@@ -242,6 +248,11 @@ async function ensureContentAndPlatformDictSeeds() {
          AND TRIM(t.content_type::text) <> d.data_key`,
       [INSTRUCTION_CONTENT_DICT_TYPE]
     )
+    await pool.query(
+      `INSERT INTO sys_dict_meta (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [INSTRUCTION_CONTENT_TYPE_MIGRATE_META, '1']
+    )
   } catch (e) {
     console.warn('instruction_templates content_type → data_key:', e.message)
   }
@@ -249,6 +260,7 @@ async function ensureContentAndPlatformDictSeeds() {
 
 /** 拓展问题审核状态：字典 question_status；questions.status 存 data_key（pending/approved/rejected） */
 const QUESTION_STATUS_DICT_TYPE = 'question_status'
+const QUESTION_STATUS_MIGRATE_META = 'questions_status_key_migrate_v1'
 
 async function ensureQuestionStatusDictAndMigrate() {
   try {
@@ -277,10 +289,17 @@ async function ensureQuestionStatusDictAndMigrate() {
     }
   }
   try {
+    const done = await pool.query(`SELECT 1 FROM sys_dict_meta WHERE key = $1`, [QUESTION_STATUS_MIGRATE_META])
+    if (done.rows.length > 0) return
     await ensureTable('questions')
     await pool.query(`UPDATE questions SET status = 'pending' WHERE status IN ('待审核', 'pending')`)
     await pool.query(`UPDATE questions SET status = 'approved' WHERE status = '已审核'`)
     await pool.query(`UPDATE questions SET status = 'rejected' WHERE status = '已拒绝'`)
+    await pool.query(
+      `INSERT INTO sys_dict_meta (key, value) VALUES ($1, $2)
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [QUESTION_STATUS_MIGRATE_META, '1']
+    )
   } catch (e) {
     console.warn('questions.status migrate:', e.message)
   }
@@ -686,10 +705,6 @@ app.get('/api/sys-dict', async (req, res) => {
     if (!dictType) {
       return res.status(400).json({ error: 'dictType is required' })
     }
-    await ensureSysDictAndMigrate()
-    await ensureContentAndPlatformDictSeeds()
-    await ensureQuestionStatusDictAndMigrate()
-    await ensureKeywordTypeMigrateAndSync()
     const result = await pool.query(
       `SELECT data_key, data_value, sort_order FROM sys_dict
        WHERE dict_type = $1 AND enabled = true
@@ -708,10 +723,6 @@ const SYS_DICT_KEY_RE = /^[a-zA-Z0-9_-]{1,64}$/
 /** 字典类型列表（管理页筛选）：{ dictTypeKey, dictTypeValue }[] */
 app.get('/api/sys-dict/types', async (req, res) => {
   try {
-    await ensureSysDictAndMigrate()
-    await ensureContentAndPlatformDictSeeds()
-    await ensureQuestionStatusDictAndMigrate()
-    await ensureKeywordTypeMigrateAndSync()
     const r = await pool.query(
       `SELECT dict_type_key, dict_type_value FROM sys_dict_type ORDER BY dict_type_key ASC`
     )
@@ -725,10 +736,6 @@ app.get('/api/sys-dict/types', async (req, res) => {
 /** 字典条目列表（管理用，含禁用项，分页） */
 app.get('/api/sys-dict/entries', async (req, res) => {
   try {
-    await ensureSysDictAndMigrate()
-    await ensureContentAndPlatformDictSeeds()
-    await ensureQuestionStatusDictAndMigrate()
-    await ensureKeywordTypeMigrateAndSync()
     const dictType = req.query.dictType || req.query.type
     const { page, pageSize, offset } = parsePagination(req)
     const params = []

@@ -253,6 +253,8 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'Dashboard' })
+
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
@@ -420,6 +422,7 @@ const geoHistory = ref([])
 
 const formatHistoryDate = (dateStr) => (!dateStr ? '' : formatZhCnMdHm(dateStr))
 
+// 未启用 keep-alive：每次进入控制台都会重新挂载并拉取最新统计
 // ===== 初始化 =====
 onMounted(async () => {
   const userId = 'default_user'

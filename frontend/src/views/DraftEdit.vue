@@ -95,6 +95,8 @@
 </template>
 
 <script setup>
+defineOptions({ name: 'DraftEdit' })
+
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'

@@ -256,7 +256,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onDeactivated, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {Plus, CircleCheck, Loading, Download, Warning} from '@element-plus/icons-vue'
@@ -401,6 +401,10 @@ onMounted(async () => {
       form.value.task_name = `${draft.title || ''}投放`
     }
   }
+})
+
+onDeactivated(() => {
+  stopStatusPoll()
 })
 
 onUnmounted(() => {

@@ -172,7 +172,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, onDeactivated, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { fetchDictTypes, fetchDictEntries, getApiBase } from '../utils/sysDict.js'
@@ -491,6 +491,10 @@ const handleBatchDelete = async () => {
 
 onMounted(() => {
   refresh()
+})
+
+onDeactivated(() => {
+  loading.value = false
 })
 </script>
 

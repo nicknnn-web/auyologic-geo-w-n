@@ -22,6 +22,7 @@ import {
 } from '../services/geoHealthWordCloudPersistService.js';
 import { mergeKeyForWordCloudPhrase } from '../services/sentimentWordCloudAiService.js';
 import { startPhaseTimer, logPhaseDone } from '../utils/geoTaskTiming.js';
+import { parsePagination, pagedResponse } from '../pagination.js';
 
 const router = Router();
 
@@ -78,22 +79,71 @@ router.get('/sentiment-lexicon', async (req, res) => {
   try {
     const uid = userId(req);
     const tier = String(req.query.tier || 'all').toLowerCase();
+    const search = String(req.query.search || req.query.keyword || '').trim();
+    const { page, pageSize, offset } = parsePagination(req);
 
     const taskId = await requireLatestTaskId(uid);
     if (!taskId) {
-      return res.json({ success: true, list: [], total: 0 });
+      return res.json({ success: true, ...pagedResponse([], 0, page, pageSize) });
     }
 
-    const { rows } = await pool.query(
-      `SELECT id, user_id, keyword, tier, enabled, sort_order, hit_count, parent_id, created_at, updated_at
-       FROM geo_health_word_cloud_item WHERE task_id = $1`,
-      [taskId]
-    );
-    let roots = buildTreeRows(rows);
+    const params = [taskId];
+    let tierClause = '';
     if (tier === 'positive' || tier === 'neutral' || tier === 'negative') {
-      roots = roots.filter((r) => r.tier === tier);
+      params.push(tier);
+      tierClause = ` AND w.tier = $${params.length}`;
     }
-    res.json({ success: true, list: roots, total: roots.length });
+
+    let searchClause = '';
+    if (search) {
+      params.push(`%${search}%`);
+      const si = params.length;
+      searchClause = ` AND (
+        w.keyword ILIKE $${si}
+        OR EXISTS (
+          SELECT 1 FROM geo_health_word_cloud_item c
+          WHERE c.task_id = $1 AND c.parent_id = w.id AND c.keyword ILIKE $${si}
+        )
+      )`;
+    }
+
+    const countSql = `
+      SELECT COUNT(*)::int AS c
+      FROM geo_health_word_cloud_item w
+      WHERE w.task_id = $1 AND w.parent_id IS NULL${tierClause}${searchClause}`;
+    const countR = await pool.query(countSql, params);
+    const total = countR.rows[0]?.c ?? 0;
+
+    if (total === 0) {
+      return res.json({ success: true, ...pagedResponse([], 0, page, pageSize) });
+    }
+
+    const lim = params.length + 1;
+    const off = params.length + 2;
+    const rootsSql = `
+      SELECT w.id, w.user_id, w.keyword, w.tier, w.enabled, w.sort_order, w.hit_count,
+             w.parent_id, w.created_at, w.updated_at
+      FROM geo_health_word_cloud_item w
+      WHERE w.task_id = $1 AND w.parent_id IS NULL${tierClause}${searchClause}
+      ORDER BY w.hit_count DESC NULLS LAST, w.id ASC
+      LIMIT $${lim} OFFSET $${off}`;
+    const { rows: rootRows } = await pool.query(rootsSql, [...params, pageSize, offset]);
+
+    if (!rootRows.length) {
+      return res.json({ success: true, ...pagedResponse([], total, page, pageSize) });
+    }
+
+    const rootIds = rootRows.map((r) => r.id);
+    const { rows: childRows } = await pool.query(
+      `SELECT id, user_id, keyword, tier, enabled, sort_order, hit_count, parent_id, created_at, updated_at
+       FROM geo_health_word_cloud_item
+       WHERE task_id = $1 AND parent_id = ANY($2::int[])
+       ORDER BY hit_count DESC NULLS LAST, id ASC`,
+      [taskId, rootIds]
+    );
+
+    const list = buildTreeRows([...rootRows, ...childRows]);
+    res.json({ success: true, ...pagedResponse(list, total, page, pageSize) });
   } catch (e) {
     console.error('[sentiment-lexicon]', e);
     res.status(500).json({ success: false, error: e.message });

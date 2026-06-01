@@ -261,9 +261,17 @@
           </el-menu>
         </div>
 
-        <!-- Main Content -->
+        <!-- Main Content：单 keep-alive 避免双分支导致路由已变、视图仍滞留在上一页 -->
         <el-main class="bg-gray-100" :style="{ padding: isMobile ? '12px' : '18px' }">
-          <router-view />
+          <router-view v-slot="{ Component, route }">
+            <keep-alive :max="12" :exclude="keepAliveExclude">
+              <component
+                v-if="Component"
+                :is="Component"
+                :key="routeComponentKey(route)"
+              />
+            </keep-alive>
+          </router-view>
         </el-main>
       </el-container>
     </el-container>
@@ -273,6 +281,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Histogram, Menu, Close, TrendCharts, Management, Comment, Connection } from '@element-plus/icons-vue'
+
+/** 与各页 defineOptions({ name }) 一致；不缓存则每次进控制台拉最新统计 */
+const keepAliveExclude = ['Dashboard', 'DraftEdit']
+
+const routeComponentKey = (route) =>
+  route.meta?.keepAlive ? String(route.name) : route.fullPath
 
 const isCollapse = ref(false)
 const mobileMenuOpen = ref(false)

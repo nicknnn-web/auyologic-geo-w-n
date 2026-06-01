@@ -14,6 +14,8 @@ import {
   getPresetBaseURL,
   createAiClientFromConnectionParams,
 } from '../services/aiClientFactory.js';
+import { testBochaWebSearch } from '../services/bochaWebSearch.js';
+import { getBochaBaseUrlFromEnv } from '../services/bochaCredentials.js';
 import {
   resolveAiLogoPublicUrl,
   removeAiLogoStored,
@@ -35,6 +37,7 @@ const ALLOWED_KEYS = new Set([
   'hunyuan',
   'wenxin',
   'custom',
+  'bocha',
 ]);
 
 function safePathSegment(s) {
@@ -82,11 +85,13 @@ function keyLast4(plain) {
 function resolveBaseUrl(row) {
   const override = (row.base_url_override || '').trim();
   if (override) return override;
+  if (row.provider_key === 'bocha') return getBochaBaseUrlFromEnv();
   if (row.provider_key === 'custom') return '';
   return getPresetBaseURL(row.provider_key) || '';
 }
 
 function defaultModelForRow(row) {
+  if (row.provider_key === 'bocha') return 'web-search';
   const m = (row.default_model || '').trim();
   if (m) return m;
   const p = PROVIDERS[row.provider_key];
@@ -147,6 +152,12 @@ router.get('/ai-provider-connections/presets', (req, res) => {
     label: '自定义（OpenAI 兼容）',
     defaultBaseUrl: '',
     defaultModel: 'gpt-4o-mini',
+  });
+  list.push({
+    providerKey: 'bocha',
+    label: '博查（信源 Web Search）',
+    defaultBaseUrl: getBochaBaseUrlFromEnv(),
+    defaultModel: 'web-search',
   });
   res.json({ success: true, presets: list });
 });
@@ -241,7 +252,8 @@ router.post('/ai-provider-connections', async (req, res) => {
     }
     const cipher = encryptSecret(apiKeyTrim, secret);
     const kl4 = keyLast4(apiKeyTrim);
-    const dm = String(defaultModel || '').trim();
+    let dm = String(defaultModel || '').trim();
+    if (pk === 'bocha' && !dm) dm = 'web-search';
     const { rows } = await pool.query(
       `INSERT INTO ai_provider_connection (
         user_id, vendor_name, provider_key, base_url_override, api_key_cipher, key_last4,
@@ -402,7 +414,7 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
       return res.status(404).json({ success: false, error: '未找到' });
     }
     const baseURL = resolveBaseUrl(row);
-    if (!baseURL) {
+    if (!baseURL && row.provider_key !== 'bocha') {
       await pool.query(
         `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
         ['fail', '无法解析 Base URL，请检查预设或自定义地址', id]
@@ -418,6 +430,38 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
         ['fail', '密钥解密失败，请检查 AI_CREDENTIALS_SECRET 是否与写入时一致', id]
       );
       return res.status(500).json({ success: false, ok: false, error: '密钥解密失败' });
+    }
+
+    if (row.provider_key === 'bocha') {
+      try {
+        const result = await testBochaWebSearch({
+          apiKey,
+          baseUrl: baseURL || getBochaBaseUrlFromEnv(),
+          query: '连接测试',
+        });
+        const n = (result.hits || []).length;
+        const msg = `连接成功，返回 ${n} 条网页结果`;
+        await pool.query(
+          `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+          ['ok', msg, id]
+        );
+        return res.json({ success: true, ok: true, message: msg });
+      } catch (err) {
+        const msg = err?.message || String(err);
+        await pool.query(
+          `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+          ['fail', msg.slice(0, 2000), id]
+        );
+        return res.json({ success: true, ok: false, message: msg });
+      }
+    }
+
+    if (!baseURL) {
+      await pool.query(
+        `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
+        ['fail', '无法解析 Base URL，请检查预设或自定义地址', id]
+      );
+      return res.json({ success: false, ok: false, message: '无法解析 Base URL' });
     }
     const model = defaultModelForRow(row);
     const client = createAiClientFromConnectionParams({

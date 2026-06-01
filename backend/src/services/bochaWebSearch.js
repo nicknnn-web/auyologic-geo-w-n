@@ -15,8 +15,9 @@ import {
   GEO_BOCHA_TIMEOUT_MS,
 } from '../config/geoBrandTaskConfig.js';
 import { isAcceptableSourceUrl } from '../utils/sourceUrlValidation.js';
+import { getBochaApiKeyFromEnv, getBochaBaseUrlFromEnv } from './bochaCredentials.js';
 
-const DEFAULT_URL = 'https://api.bochaai.com/v1/web-search';
+const DEFAULT_URL = 'https://api.bocha.cn/v1/web-search';
 
 /** 全局串行队列，避免多题并发打满博查 QPS */
 let bochaQueue = Promise.resolve();
@@ -31,15 +32,25 @@ function strEnv(name, fallback = '') {
   return v !== undefined && String(v).trim() !== '' ? String(v).trim() : fallback;
 }
 
+/** @deprecated 同步仅读环境变量；运行时请用 resolveBochaCredentials / isBochaConfiguredForUser */
 export function getBochaApiKey() {
-  let key = strEnv('BOCHA_API_KEY');
-  if (!key) return '';
-  if (/^bearer\s+/i.test(key)) key = key.replace(/^bearer\s+/i, '').trim();
-  return key;
+  return getBochaApiKeyFromEnv();
 }
 
 export function isBochaConfigured() {
-  return !!getBochaApiKey();
+  return !!getBochaApiKeyFromEnv();
+}
+
+/** 管理页「测试连接」用 */
+export async function testBochaWebSearch({ apiKey, baseUrl, query = '连接测试' } = {}) {
+  const key = String(apiKey || '').trim() || getBochaApiKeyFromEnv();
+  if (!key) throw new Error('未配置博查 API Key');
+  return bochaWebSearchOnce(String(query || '连接测试').trim() || '连接测试', {
+    apiKey: key,
+    baseUrl: String(baseUrl || '').trim() || getBochaBaseUrlFromEnv(),
+    count: 1,
+    timeoutMs: Math.min(GEO_BOCHA_TIMEOUT_MS, 20_000),
+  });
 }
 
 function isRateLimitMessage(msg) {
@@ -126,13 +137,13 @@ export function parseBochaSearchResponse(body) {
  * 单次 HTTP 请求（无重试、无排队）
  */
 async function bochaWebSearchOnce(query, opts = {}) {
-  const apiKey = getBochaApiKey();
-  if (!apiKey) throw new Error('未配置 BOCHA_API_KEY');
+  const apiKey = String(opts.apiKey || '').trim() || getBochaApiKeyFromEnv();
+  if (!apiKey) throw new Error('未配置博查 API Key（环境变量 BOCHA_API_KEY 或大模型接入中的博查）');
 
   const q = String(query || '').trim();
   if (!q) throw new Error('博查 query 不能为空');
 
-  const url = strEnv('BOCHA_BASE_URL', DEFAULT_URL);
+  const url = String(opts.baseUrl || '').trim() || getBochaBaseUrlFromEnv() || DEFAULT_URL;
   const count = Math.min(50, Math.max(1, opts.count ?? GEO_BOCHA_COUNT));
   const freshness = opts.freshness ?? GEO_BOCHA_FRESHNESS;
   const summary = opts.summary ?? GEO_BOCHA_SUMMARY;

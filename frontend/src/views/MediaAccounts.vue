@@ -327,7 +327,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, onDeactivated, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Key, Phone, Loading, CircleCheck, Warning, Download } from '@element-plus/icons-vue'
 import api, { mediaAccountsAPI } from '../utils/api'
@@ -575,6 +575,10 @@ const stopPolling = () => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   pollStartTime = null
 }
+
+onDeactivated(() => {
+  stopPolling()
+})
 
 onUnmounted(() => {
   stopPolling()

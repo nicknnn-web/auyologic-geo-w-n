@@ -25,7 +25,7 @@ import {
 } from '../services/geoBrandTaskService.js';
 import { runAllAnalysisForTask } from '../services/geoBrandAnalysisService.js';
 import { runGeoHealthSourcePipelineForTask } from '../services/geoHealthSourcePipeline.js';
-import { isBochaConfigured } from '../services/bochaWebSearch.js';
+import { isBochaConfiguredForUser } from '../services/bochaCredentials.js';
 
 const router = Router();
 
@@ -45,14 +45,16 @@ function taskRow(r) {
 }
 
 /** 只读：当前抽题/并发配置（与 config/geoBrandTaskConfig.js 一致） */
-router.get('/geo-brand/config', (req, res) => {
+router.get('/geo-brand/config', async (req, res) => {
+  const userId = getUserId(req);
+  const bochaConfigured = await isBochaConfiguredForUser(userId);
   res.json({
     success: true,
     questionsPerType: GEO_HEALTH_QUESTIONS_PER_TYPE,
     probeConcurrency: GEO_HEALTH_PROBE_CONCURRENCY,
     probeBatchDelayMs: GEO_HEALTH_PROBE_BATCH_DELAY_MS,
-    bochaConfigured: isBochaConfigured(),
-    hint: '探针/分析使用的模型由前端创建任务时传入 connectionIds 决定；信源检索需 BOCHA_API_KEY（放在 backend/.env 或项目根 .env）',
+    bochaConfigured,
+    hint: '探针/分析使用的模型由前端创建任务时传入 connectionIds 决定；信源检索需在本页添加「博查」接入或配置 BOCHA_API_KEY',
   });
 });
 
@@ -67,7 +69,7 @@ router.get('/geo-brand/available-models', async (req, res) => {
       `SELECT id, vendor_name, provider_key, default_model, base_url_override,
               key_last4, last_test_status, last_test_at, last_test_message
        FROM ai_provider_connection
-       WHERE user_id = $1 AND enabled = true
+       WHERE user_id = $1 AND enabled = true AND provider_key <> 'bocha'
        ORDER BY id ASC`,
       [userId]
     );

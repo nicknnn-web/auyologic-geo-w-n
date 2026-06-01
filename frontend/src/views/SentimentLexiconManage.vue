@@ -68,7 +68,7 @@
       :key="tableRenderKey"
       ref="tableRef"
       v-loading="loading"
-      :data="filteredTree"
+      :data="tableData"
       row-key="id"
       :tree-props="{ children: 'children' }"
       :row-class-name="slTableRowClassName"
@@ -123,6 +123,16 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-empty v-if="!loading && total === 0" class="mt-4" description="暂无词条，可重建词云或新增关键词" />
+
+    <AppPaginationBar
+      v-model:page="page"
+      v-model:page-size="pageSize"
+      :total="total"
+      :disabled="loading"
+      @change="loadData"
+    />
 
     <el-dialog
       v-model="batchTierDialogVisible"
@@ -229,9 +239,11 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, nextTick, computed } from 'vue'
+import { ref, watch, onMounted, onDeactivated, nextTick, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval, unwrapListPayload } from '../utils/pagedApi.js'
+import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const API_BASE = window.VITE_API_URL || window.location.origin
 const headers = { 'Content-Type': 'application/json', 'x-user-id': 'default_user' }
@@ -243,6 +255,9 @@ const rebuildingWc = ref(false)
 const tableRef = ref(null)
 const selectedRows = ref([])
 const tableData = ref([])
+const total = ref(0)
+const page = ref(1)
+const pageSize = ref(DEFAULT_PAGE_SIZE)
 const activeTier = ref('all')
 const searchText = ref('')
 
@@ -317,21 +332,16 @@ const parseJsonResponse = async (res) => {
   }
 }
 
-const filterNode = (row, q) => {
-  if (!q) return true
-  const kw = String(row.keyword || '')
-  if (kw.includes(q)) return true
-  const ch = row.children || []
-  return ch.some((c) => filterNode(c, q))
-}
-
-const filteredTree = computed(() => {
-  const q = String(searchText.value || '').trim()
-  if (!q) return tableData.value
-  return tableData.value.filter((r) => filterNode(r, q))
-})
-
 const REBUILD_WORDCLOUD_TIMEOUT_MS = 720000
+
+let searchDebounceTimer = null
+watch(searchText, () => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    page.value = 1
+    loadData()
+  }, 300)
+})
 
 const handleRebuildWordCloud = async () => {
   try {
@@ -384,17 +394,26 @@ const handleRebuildWordCloud = async () => {
 const loadData = async () => {
   loading.value = true
   try {
-    const q = new URLSearchParams({ tier: activeTier.value })
-    const res = await fetch(`${API_BASE}/api/sentiment-lexicon?${q}`, { headers })
+    const params = new URLSearchParams({
+      tier: activeTier.value,
+      page: String(page.value),
+      pageSize: String(pageSize.value),
+    })
+    const q = String(searchText.value || '').trim()
+    if (q) params.set('search', q)
+    const res = await fetch(`${API_BASE}/api/sentiment-lexicon?${params}`, { headers })
     const data = await parseJsonResponse(res)
     if (!res.ok || !data.success) throw new Error(data.error || '加载失败')
-    tableData.value = Array.isArray(data.list) ? data.list : []
+    const { list, total: t } = unwrapListPayload(data)
+    tableData.value = list
+    total.value = t
     tableRenderKey.value += 1
     await nextTick()
     clearSelection()
   } catch (e) {
     ElMessage.error(e.message || '加载失败')
     tableData.value = []
+    total.value = 0
     tableRenderKey.value += 1
     await nextTick()
     clearSelection()
@@ -541,6 +560,7 @@ const submitBatchTier = async () => {
 }
 
 watch(activeTier, () => {
+  page.value = 1
   clearSelection()
   loadData()
 })
@@ -733,7 +753,7 @@ const handleDelete = async (id) => {
     if (!res.ok || !data.success) throw new Error(data.error || '删除失败')
     ElMessage.success('已删除')
     clearSelection()
-    await loadData()
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   } catch (e) {
     ElMessage.error(e.message || '删除失败')
   }
@@ -770,7 +790,7 @@ const handleBatchDelete = async () => {
     const n = Number(data.deletedCount) || 0
     ElMessage.success(n > 0 ? `已删除 ${n} 条` : '没有可删除的记录')
     clearSelection()
-    await loadData()
+    await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
   } catch {
     ElMessage.error('网络错误')
   } finally {
@@ -780,6 +800,10 @@ const handleBatchDelete = async () => {
 
 onMounted(() => {
   loadData()
+})
+
+onDeactivated(() => {
+  loading.value = false
 })
 </script>
 
