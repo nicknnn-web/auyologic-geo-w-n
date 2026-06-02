@@ -35,15 +35,10 @@
 import { Router } from 'express';
 import pool from '../db.js';
 import { SOURCE_CATEGORY, SOURCE_CATEGORY_LABEL } from '../services/sourceClassifier.js';
-import {
-  buildSentimentSourceDetailRows,
-  extractProbeAnswerText,
-} from '../services/sentimentLexiconService.js';
+import { extractProbeAnswerText } from '../services/sentimentLexiconService.js';
+import { querySentimentSourcePage } from '../services/sentimentSourceDetailCache.js';
 import { inferCategory } from '../services/geoBrandAnalysisService.js';
-import {
-  loadWordCloudLexEntriesForTask,
-  loadPersistedWordCloudPayload,
-} from '../services/geoHealthWordCloudPersistService.js';
+import { loadPersistedWordCloudPayload } from '../services/geoHealthWordCloudPersistService.js';
 import {
   computeGeoTaskCacheFingerprints,
   getGeoTaskReportCache,
@@ -835,7 +830,7 @@ router.patch('/geo-health-report/diagnostic-suggestions', async (req, res) => {
 });
 
 /**
- * 词云来源明细：每条探针回答原文 × 本期词云词条命中一行，支持分页与内容模糊筛选（q）
+ * 词云来源明细：每条探针回答原文 × 本期词云词条命中一行，支持分页；q 仅匹配情绪词 keyword
  */
 router.get('/geo-health-report/sentiment-sources', async (req, res) => {
   try {
@@ -859,31 +854,11 @@ router.get('/geo-health-report/sentiment-sources', async (req, res) => {
       return res.status(404).json({ success: false, error: '任务不存在、未完成或无权访问' });
     }
 
-    const answerRes = await pool.query(
-      `SELECT a.task_id, a.question_id, ga.raw_json
-       FROM geo_health_analysis a
-       INNER JOIN geo_health_answer ga ON ga.id = a.answer_id AND ga.task_id = a.task_id
-       WHERE a.task_id = $1 AND a.error_text IS NULL
-       ORDER BY a.question_id ASC, a.id ASC`,
-      [taskId]
-    );
-
-    const lexEntries = await loadWordCloudLexEntriesForTask(pool, taskId);
-
-    const allRows = buildSentimentSourceDetailRows(answerRes.rows, lexEntries);
-
-    let filtered = allRows;
-    if (q) {
-      const ql = q.toLowerCase();
-      filtered = allRows.filter((r) => {
-        const hay = `${r.taskId} ${r.questionId} ${r.answerText} ${r.keyword}`.toLowerCase();
-        return hay.includes(ql);
-      });
-    }
-
-    const total = filtered.length;
-    const start = (page - 1) * pageSize;
-    const list = filtered.slice(start, start + pageSize);
+    const { list, total } = await querySentimentSourcePage(pool, taskId, {
+      q,
+      page,
+      pageSize,
+    });
 
     return res.json({
       success: true,

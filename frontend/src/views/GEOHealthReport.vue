@@ -1311,7 +1311,7 @@
         <el-input
           v-model="sentimentSourceSearch"
           clearable
-          placeholder="模糊搜索：任务 id、问题 id、回答原文、情绪词…"
+          placeholder="搜索情绪词（关键词）"
           class="sentiment-source-search"
           @clear="onSentimentSourceSearchCommit"
           @keyup.enter="onSentimentSourceSearchCommit"
@@ -1330,7 +1330,6 @@
           empty-text="暂无命中记录（或当前筛选无结果）"
         >
           <el-table-column prop="taskId" label="任务 id" width="68" align="center" />
-          <el-table-column prop="questionId" label="问题 id" width="76" align="center" />
           <el-table-column label="回答原文" min-width="120">
         <template #default="{ row }">
           <el-tooltip

@@ -9,6 +9,7 @@ import {
   orderWordCloudItemsForPersist,
 } from './sentimentWordCloudAiService.js';
 import { extractProbeAnswerText } from './sentimentLexiconService.js';
+import { invalidateSentimentSourceCache } from './sentimentSourceDetailCache.js';
 import { startPhaseTimer, logPhaseDone } from '../utils/geoTaskTiming.js';
 
 /** @type {Map<number, Promise<{ ok: boolean, count?: number, error?: string }>>} */
@@ -226,6 +227,7 @@ export async function persistAiWordCloudForTask(pool, taskId, userId, enterprise
       if (Number.isFinite(Number(newId))) idByPhrasePolarity.set(mapKey, Number(newId));
     }
     await client.query('COMMIT');
+    invalidateSentimentSourceCache(tid);
     console.log(`[wordcloud] task=${tid} persist 写入完成 count=${ordered.length}`);
     return { ok: true, count: ordered.length };
   } catch (e) {
