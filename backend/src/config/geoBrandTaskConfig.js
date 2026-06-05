@@ -10,12 +10,9 @@
  * GEO_HEALTH_PROBE_EXTRACT_ENABLED=false 可减半探针 API 次数（分析读 raw_answer，默认关）。
  * GEO_HEALTH_PROBE_TEMPERATURE 探针第 1 步直问温度（默认 1.3，贴近 DeepSeek 官网一般对话）。
  * GEO_HEALTH_PROBE_EXTRACT_MAX_TOKENS / GEO_HEALTH_PROBE_EXTRACT_TEMPERATURE 控制第 2 步抽取。
- * PROBE_MODELS
- *   逗号分隔的 provider key 列表，每个 key 对应 aiClientFactory.PROVIDERS 里的 key。
- *   同一道题会对每个 provider 各调用一次，结果分别存入 geo_health_answer（不同 model_name）。
- *   例如：PROBE_MODELS=deepseek,qwen  → 每题产生 2 条 geo_health_answer
- *   默认只用 deepseek。
- *   ⚠️ 增加 provider 前须确保对应 API Key 环境变量已配置，否则探针会报错。
+ * 探针所用连接：创建任务时 body.connectionIds（ai_provider_connection.id 数组）。
+ *   实际请求 model 名 = 各连接的 default_model（大模型接入页配置）。
+ *   环境变量 PROBE_MODELS 已废弃，运行时不读取。
  *
  * GEO_HEALTH_PROBE_CONCURRENCY
  *   同时并发探针的题目数（建议 1～3）
@@ -24,9 +21,9 @@
  *   每批之间停顿（毫秒）
  *
  * ────── 分析（Analysis） ──────
- * ANALYSIS_MODEL
- *   做 visibility / position 等二次分析用的 provider key（只需一个，选最准的）。
- *   与 PROBE_MODELS 解耦：可以用 deepseek 探针、用 qwen 分析，互不影响。
+ * 分析所用连接：geo_health_task.analysis_connection_id（缺省取 connection_ids[0]）。
+ *   实际 model 名 = 该连接的 default_model。
+ *   环境变量 ANALYSIS_MODEL 已废弃，运行时不读取。
  *
  * GEO_HEALTH_ANALYSIS_CONCURRENCY / GEO_HEALTH_ANALYSIS_DELAY_MS
  *   分析阶段的并发与延迟（建议 2-3 / 300ms）

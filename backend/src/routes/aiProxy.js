@@ -38,7 +38,7 @@ async function resolveConnectionId(userId, connectionId) {
 router.post('/generate', async (req, res) => {
   try {
     const userId = getUserId(req);
-    const { prompt, connectionId, model, max_tokens, temperature, systemPrompt } = req.body || {};
+    const { prompt, connectionId, max_tokens, temperature, systemPrompt } = req.body || {};
 
     if (!prompt) {
       return res.status(400).json({ error: 'prompt 是必填项' });
@@ -57,7 +57,6 @@ router.post('/generate', async (req, res) => {
     messages.push({ role: 'user', content: prompt });
 
     const result = await client.chat(messages, {
-      model: model || undefined,
       maxTokens: max_tokens || 2000,
       temperature: temperature ?? 0.7,
     });

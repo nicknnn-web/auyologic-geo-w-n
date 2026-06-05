@@ -24,12 +24,19 @@ export function mergeKeyForWordCloudPhrase(s) {
   return t;
 }
 
-async function resolveFirstEnabledConnectionId(pool, userId) {
+/**
+ * 词云 AI：优先任务指定的 analysis_connection_id，否则该用户第一条 enabled 大模型（排除博查）。
+ */
+async function resolveWordCloudConnectionId(pool, userId, ctx = {}) {
+  const fromCtx = Number(ctx.analysisConnectionId ?? ctx.connectionId);
+  if (Number.isFinite(fromCtx) && fromCtx > 0) return fromCtx;
+
+  const uid = String(userId || 'default_user').trim() || 'default_user';
   const { rows } = await pool.query(
     `SELECT id FROM ai_provider_connection
-     WHERE user_id = $1 AND enabled = true
+     WHERE user_id = $1 AND enabled = true AND provider_key <> 'bocha'
      ORDER BY id ASC LIMIT 1`,
-    [userId]
+    [uid]
   );
   const id = rows[0]?.id;
   return Number.isFinite(Number(id)) && Number(id) > 0 ? Number(id) : null;
@@ -125,7 +132,7 @@ function chunkAnswerRowsForWordCloudAi(rows) {
 export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
   if (wordCloudAiDisabled()) return [];
 
-  const cid = await resolveFirstEnabledConnectionId(pool, userId);
+  const cid = await resolveWordCloudConnectionId(pool, userId, ctx);
   if (!cid) {
     console.warn('[wordcloud-ai] 无可用大模型连接，跳过 AI 词云补充');
     return [];
@@ -138,6 +145,9 @@ export async function fetchWordCloudPhrasesFromAi(pool, userId, ctx) {
     console.warn('[wordcloud-ai] 创建 AI 客户端失败，跳过:', e.message || e);
     return [];
   }
+  console.log(
+    `[wordcloud-ai] 使用连接 id=${cid} model=${client.model} provider=${client.providerKey}`
+  );
 
   const batches = chunkAnswerRowsForWordCloudAi(ctx.answerRows);
   const totalBatches = batches.length;

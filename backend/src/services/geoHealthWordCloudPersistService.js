@@ -174,11 +174,22 @@ export async function persistAiWordCloudForTask(pool, taskId, userId, enterprise
   );
 
   const brandName = String(enterpriseCtx?.brandName || '品牌').trim();
+  const { rows: taskMetaRows } = await pool.query(
+    `SELECT analysis_connection_id, connection_ids FROM geo_health_task WHERE id = $1 LIMIT 1`,
+    [tid]
+  );
+  const taskMeta = taskMetaRows[0] || {};
+  let wordCloudConnectionId = taskMeta.analysis_connection_id;
+  if (!wordCloudConnectionId && Array.isArray(taskMeta.connection_ids) && taskMeta.connection_ids.length) {
+    wordCloudConnectionId = taskMeta.connection_ids[0];
+  }
   console.log(
-    `[wordcloud] task=${tid} persist 开始 answerRows=${rows.length}（成功分析条数）`
+    `[wordcloud] task=${tid} persist 开始 answerRows=${rows.length}（成功分析条数）` +
+      (wordCloudConnectionId ? ` wordCloudConnectionId=${wordCloudConnectionId}` : '')
   );
   const aiRows = await fetchWordCloudPhrasesFromAi(pool, uid, {
     taskId: tid,
+    analysisConnectionId: wordCloudConnectionId,
     brandName,
     industry: enterpriseCtx?.industry || '',
     brandDescription: enterpriseCtx?.brandDescription || '',

@@ -180,12 +180,16 @@ async function validateConnectionIdsForUser(pool, userId, ids) {
     throw new Error('请至少选择一个用于体检的大模型连接');
   }
   const { rows } = await pool.query(
-    `SELECT id FROM ai_provider_connection
+    `SELECT id, provider_key FROM ai_provider_connection
      WHERE user_id = $1 AND enabled = true AND id = ANY($2::int[])`,
     [userId, intIds]
   );
-  const ok = new Set(rows.map((r) => r.id));
+  const ok = new Set(rows.filter((r) => r.provider_key !== 'bocha').map((r) => r.id));
+  const bochaPicked = rows.filter((r) => r.provider_key === 'bocha').map((r) => r.id);
   const invalid = intIds.filter((id) => !ok.has(id));
+  if (bochaPicked.length) {
+    throw new Error('博查仅用于信源检索，不能作为探针/分析大模型，请在大模型接入中选择对话模型');
+  }
   if (invalid.length) {
     throw new Error(`所选连接不可用或不属于当前用户：${invalid.join(', ')}`);
   }
@@ -204,11 +208,14 @@ export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, a
   let analysisId = analysisConnectionId ? parseInt(String(analysisConnectionId), 10) : null;
   if (analysisId) {
     const { rows } = await pool.query(
-      `SELECT id FROM ai_provider_connection
+      `SELECT id, provider_key FROM ai_provider_connection
        WHERE user_id = $1 AND enabled = true AND id = $2`,
       [userId, analysisId]
     );
     if (!rows[0]) throw new Error(`分析模型连接不可用：${analysisId}`);
+    if (rows[0].provider_key === 'bocha') {
+      throw new Error('分析模型不能选择博查，请选择对话大模型连接');
+    }
   } else {
     // 默认分析模型 = 探针列表第一个（一项任务用一个分析模型已够）
     analysisId = validIds[0];

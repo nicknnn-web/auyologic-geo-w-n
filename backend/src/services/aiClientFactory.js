@@ -108,10 +108,19 @@ export function resolveConnectionBaseURL(row) {
   return getPresetBaseURL(row?.provider_key) || '';
 }
 
+/**
+ * 模型名仅以 ai_provider_connection.default_model 为准（不用 PROVIDERS / 环境变量兜底）。
+ */
 export function resolveConnectionModel(row) {
+  const pk = String(row?.provider_key || '').trim();
+  if (pk === 'bocha') return 'web-search';
   const m = String(row?.default_model || '').trim();
-  if (m) return m;
-  return PROVIDERS[row?.provider_key]?.defaultModel || 'gpt-4o-mini';
+  if (!m) {
+    const label = row?.vendor_name || pk || '未知';
+    const id = row?.id != null ? `（id=${row.id}）` : '';
+    throw new Error(`大模型连接「${label}」${id} 未配置模型名，请在大模型接入页填写「模型名」`);
+  }
+  return m;
 }
 
 /** 连接是否可不配置 Base URL（走官方 SDK 默认端点） */
@@ -265,7 +274,6 @@ export function createAnthropicClient({ baseURL, apiKey, defaultModel = 'claude-
     model,
     async chat(messages, opts = {}) {
       const {
-        model: m = model,
         maxTokens = 4096,
         temperature = 0.3,
         signal: externalSignal,
@@ -274,7 +282,7 @@ export function createAnthropicClient({ baseURL, apiKey, defaultModel = 'claude-
 
       const { system, messages: anthropicMessages } = toAnthropicPayload(messages);
       const body = {
-        model: m,
+        model,
         max_tokens: maxTokens,
         temperature,
         messages: anthropicMessages,
@@ -336,7 +344,6 @@ export function createOpenAiResponsesClient({ apiKey, baseURL, defaultModel = 'g
     model,
     async chat(messages, opts = {}) {
       const {
-        model: m = model,
         maxTokens = 4096,
         signal: externalSignal,
         timeoutMs,
@@ -347,7 +354,7 @@ export function createOpenAiResponsesClient({ apiKey, baseURL, defaultModel = 'g
       try {
         const response = await openaiClient.responses.create(
           {
-            model: m,
+            model,
             input,
             ...(instructions ? { instructions } : {}),
             max_output_tokens: maxTokens,
@@ -376,7 +383,6 @@ export function createGeminiClient({ apiKey, defaultModel = 'gemini-2.5-flash' }
     model,
     async chat(messages, opts = {}) {
       const {
-        model: m = model,
         maxTokens = 4096,
         temperature = 0.3,
         signal: externalSignal,
@@ -387,7 +393,7 @@ export function createGeminiClient({ apiKey, defaultModel = 'gemini-2.5-flash' }
       const { signal, cleanup } = attachAbortHandling(externalSignal, timeoutMs);
       try {
         const response = await ai.models.generateContent({
-          model: m,
+          model,
           contents,
           config: {
             maxOutputTokens: maxTokens,
@@ -568,7 +574,6 @@ export function createOpenAiCompatibleClient({
     model,
     async chat(messages, opts = {}) {
       const {
-        model: m = model,
         maxTokens = 4096,
         temperature = 0.3,
         signal: externalSignal,
@@ -585,7 +590,7 @@ export function createOpenAiCompatibleClient({
       }
 
       const requestBody = buildChatCompletionRequestBody({
-        model: m,
+        model,
         messages: finalMessages,
         maxTokens,
         temperature,

@@ -11,15 +11,25 @@
           博查也可继续用环境变量 <code class="text-xs bg-gray-100 px-1 rounded">BOCHA_API_KEY</code>，库内配置优先。
         </div>
       </div>
-      <el-button
-        type="primary"
-        :disabled="hasAllProviderTypes"
-        :title="hasAllProviderTypes ? '已配置全部厂商类型' : ''"
-        @click="openCreate"
-      >
-        <el-icon class="mr-1"><Plus /></el-icon>
-        新增接入
-      </el-button>
+      <div class="flex flex-wrap items-center gap-2">
+<!--        <el-button-->
+<!--          type="success"-->
+<!--          plain-->
+<!--          :disabled="!tableData.length"-->
+<!--          @click="openPromptTestDialog"-->
+<!--        >-->
+<!--          对话测试-->
+<!--        </el-button>-->
+        <el-button
+          type="primary"
+          :disabled="hasAllProviderTypes"
+          :title="hasAllProviderTypes ? '已配置全部厂商类型' : ''"
+          @click="openCreate"
+        >
+          <el-icon class="mr-1"><Plus /></el-icon>
+          新增接入
+        </el-button>
+      </div>
     </div>
 
     <el-alert
@@ -145,7 +155,11 @@
           />
         </el-form-item>
         <el-form-item v-if="form.providerKey !== 'bocha'" label="模型名" prop="defaultModel">
-          <el-input v-model="form.defaultModel" placeholder="留空则使用该厂商默认模型" maxlength="128" />
+          <el-input
+            v-model="form.defaultModel"
+            placeholder="必填，与厂商控制台模型 ID 一致（如 deepseek-chat）"
+            maxlength="128"
+          />
         </el-form-item>
         <el-form-item :label="isEdit ? '新 API Key' : 'API Key'" :prop="isEdit ? undefined : 'apiKey'">
           <el-input
@@ -204,6 +218,66 @@
         <el-button type="primary" :loading="saving" @click="submitForm">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="promptTestVisible"
+      title="对话测试"
+      width="640px"
+      destroy-on-close
+      align-center
+      @closed="onPromptTestDialogClosed"
+    >
+      <el-form label-width="88px" class="apc-prompt-test-form">
+        <el-form-item label="选择接入" required>
+          <el-select
+            v-model="promptTestConnectionId"
+            class="w-full"
+            filterable
+            placeholder="请选择已接入的模型"
+            :disabled="promptTestLoading"
+          >
+            <el-option
+              v-for="row in tableData"
+              :key="row.id"
+              :label="promptTestOptionLabel(row)"
+              :value="row.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="测试问题" required>
+          <el-input
+            v-model="promptTestMessage"
+            type="textarea"
+            :rows="4"
+            placeholder="输入即将发送给模型的问题"
+            maxlength="8000"
+            show-word-limit
+            :disabled="promptTestLoading"
+          />
+        </el-form-item>
+        <el-form-item v-if="promptTestMeta" label="本次调用">
+          <span class="text-sm text-gray-600">{{ promptTestMeta }}</span>
+        </el-form-item>
+        <el-form-item label="返回结果">
+          <div v-if="promptTestLoading" class="text-sm text-gray-500 py-6 text-center">请求中，请稍候…</div>
+          <el-input
+            v-else
+            v-model="promptTestResult"
+            type="textarea"
+            :rows="12"
+            readonly
+            placeholder="点击「发送测试」后在此展示模型回复"
+            class="apc-prompt-result"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="promptTestVisible = false" :disabled="promptTestLoading">关闭</el-button>
+        <el-button type="primary" :loading="promptTestLoading" :disabled="!canSendPromptTest" @click="sendPromptTest">
+          发送测试
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -227,6 +301,88 @@ const editId = ref(null)
 const formRef = ref(null)
 const presetOptions = ref([])
 const encryptionWarning = ref(false)
+
+const promptTestVisible = ref(false)
+const promptTestConnectionId = ref(null)
+const promptTestMessage = ref('你好，请用一句话介绍你自己。')
+const promptTestResult = ref('')
+const promptTestMeta = ref('')
+const promptTestLoading = ref(false)
+
+const promptTestOptionLabel = (row) => {
+  const name = row.vendorName || row.providerKey || '未命名'
+  if (row.providerKey === 'bocha') return `${name}（博查 · 信源检索）`
+  const model = row.defaultModel ? ` · ${row.defaultModel}` : ''
+  return `${name}${model}`
+}
+
+const canSendPromptTest = computed(
+  () =>
+    promptTestConnectionId.value != null &&
+    String(promptTestMessage.value || '').trim().length > 0 &&
+    !promptTestLoading.value
+)
+
+const openPromptTestDialog = () => {
+  if (!tableData.value.length) {
+    ElMessage.warning('请先添加至少一条接入')
+    return
+  }
+  const preferred = tableData.value.find((r) => r.enabled) || tableData.value[0]
+  promptTestConnectionId.value = preferred?.id ?? null
+  promptTestMessage.value = '你好，请用一句话介绍你自己。'
+  promptTestResult.value = ''
+  promptTestMeta.value = ''
+  promptTestVisible.value = true
+}
+
+const onPromptTestDialogClosed = () => {
+  promptTestLoading.value = false
+  promptTestResult.value = ''
+  promptTestMeta.value = ''
+}
+
+const sendPromptTest = async () => {
+  const id = promptTestConnectionId.value
+  const prompt = String(promptTestMessage.value || '').trim()
+  if (id == null || !prompt) return
+
+  promptTestLoading.value = true
+  promptTestResult.value = ''
+  promptTestMeta.value = ''
+  try {
+    const res = await fetch(`${API_BASE}/api/ai-provider-connections/${id}/try-prompt`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ prompt, maxTokens: 2048 }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.status === 503) {
+      encryptionWarning.value = true
+      throw new Error(data.error || '请先配置 AI_CREDENTIALS_SECRET')
+    }
+    if (!data.success && res.status >= 400) {
+      throw new Error(data.error || `HTTP ${res.status}`)
+    }
+    const row = tableData.value.find((r) => r.id === id)
+    const modelHint = data.model || row?.defaultModel || ''
+    promptTestMeta.value = [data.vendorName || row?.vendorName, data.providerKey || row?.providerKey, modelHint]
+      .filter(Boolean)
+      .join(' · ')
+
+    if (data.ok && data.content) {
+      promptTestResult.value = data.content
+    } else {
+      promptTestResult.value = ''
+      ElMessage.error(data.error || data.message || '请求失败')
+    }
+  } catch (e) {
+    promptTestResult.value = ''
+    ElMessage.error(e.message || '发送失败')
+  } finally {
+    promptTestLoading.value = false
+  }
+}
 
 const form = ref({
   vendorName: '',
@@ -309,6 +465,9 @@ const rules = computed(() => {
   }
   if (form.value.providerKey === 'custom') {
     base.baseUrlOverride = [{ required: true, message: '请填写 Base URL', trigger: 'blur' }]
+  }
+  if (form.value.providerKey !== 'bocha') {
+    base.defaultModel = [{ required: true, message: '请填写模型名', trigger: 'blur' }]
   }
   return base
 })
@@ -567,5 +726,13 @@ onMounted(() => {
   color: #c0c4cc;
   font-size: 12px;
   line-height: 1;
+}
+.apc-prompt-test-form :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+.apc-prompt-result :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
 }
 </style>

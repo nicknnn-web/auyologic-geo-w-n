@@ -13,6 +13,7 @@ import {
   PROVIDERS,
   getPresetBaseURL,
   createAiClientFromConnectionParams,
+  resolveConnectionModel,
 } from '../services/aiClientFactory.js';
 import { testBochaWebSearch } from '../services/bochaWebSearch.js';
 import { getBochaBaseUrlFromEnv } from '../services/bochaCredentials.js';
@@ -91,11 +92,7 @@ function resolveBaseUrl(row) {
 }
 
 function defaultModelForRow(row) {
-  if (row.provider_key === 'bocha') return 'web-search';
-  const m = (row.default_model || '').trim();
-  if (m) return m;
-  const p = PROVIDERS[row.provider_key];
-  return p?.defaultModel || 'gpt-4o-mini';
+  return resolveConnectionModel(row);
 }
 
 function toDto(row) {
@@ -240,6 +237,9 @@ router.post('/ai-provider-connections', async (req, res) => {
     if (pk === 'custom' && !override) {
       return res.status(400).json({ success: false, error: '自定义接入须填写 Base URL' });
     }
+    if (pk !== 'bocha' && !String(defaultModel || '').trim()) {
+      return res.status(400).json({ success: false, error: '请填写模型名（须与厂商控制台一致）' });
+    }
     if (await existsOtherByProviderKey(uid, pk, null)) {
       return res.status(400).json({
         success: false,
@@ -328,6 +328,9 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
       defaultModel !== undefined
         ? String(defaultModel || '').trim()
         : (exist[0].default_model || '');
+    if (pk !== 'bocha' && !dm) {
+      return res.status(400).json({ success: false, error: '请填写模型名（须与厂商控制台一致）' });
+    }
     const en = enabled !== undefined ? !!enabled : exist[0].enabled;
 
     let nextLogoBg = exist[0].logo_bg_color;
@@ -463,15 +466,14 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
       );
       return res.json({ success: false, ok: false, message: '无法解析 Base URL' });
     }
-    const model = defaultModelForRow(row);
     const client = createAiClientFromConnectionParams({
       providerKey: row.provider_key,
       baseURL,
       apiKey,
-      defaultModel: model,
+      defaultModel: defaultModelForRow(row),
     });
     try {
-      await client.chat([{ role: 'user', content: 'hi' }], { maxTokens: 8, temperature: 0, model });
+      await client.chat([{ role: 'user', content: 'hi' }], { maxTokens: 8, temperature: 0 });
       await pool.query(
         `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
         ['ok', '连接成功', id]
@@ -487,6 +489,135 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
     }
   } catch (e) {
     console.error('[ai-provider-connections test]', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/** 自定义问题试跑：大模型返回对话内容；博查返回检索摘要（不写 last_test_status） */
+router.post('/ai-provider-connections/:id/try-prompt', async (req, res) => {
+  try {
+    const secret = process.env.AI_CREDENTIALS_SECRET;
+    if (!isEncryptionConfigured(secret)) {
+      return res.status(503).json({
+        success: false,
+        error: '服务端未配置 AI_CREDENTIALS_SECRET（至少 16 字符）',
+      });
+    }
+    const uid = userId(req);
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      return res.status(400).json({ success: false, error: '无效 id' });
+    }
+    const prompt = String(req.body?.prompt ?? req.body?.message ?? '').trim();
+    if (!prompt) {
+      return res.status(400).json({ success: false, error: '请填写测试问题' });
+    }
+    let maxTokens = parseInt(String(req.body?.maxTokens ?? req.body?.max_tokens ?? '2048'), 10);
+    if (!Number.isFinite(maxTokens) || maxTokens < 1) maxTokens = 2048;
+    maxTokens = Math.min(maxTokens, 8192);
+
+    const { rows } = await pool.query(
+      `SELECT * FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
+      [id, uid]
+    );
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ success: false, error: '未找到' });
+    }
+
+    const baseURL = resolveBaseUrl(row);
+    let apiKey;
+    try {
+      apiKey = decryptSecret(row.api_key_cipher, secret);
+    } catch (err) {
+      return res.status(500).json({ success: false, ok: false, error: '密钥解密失败' });
+    }
+
+    const vendorName = row.vendor_name;
+    const providerKey = row.provider_key;
+    if (providerKey === 'bocha') {
+      try {
+        const result = await testBochaWebSearch({
+          apiKey,
+          baseUrl: baseURL || getBochaBaseUrlFromEnv(),
+          query: prompt,
+        });
+        const hits = result.hits || [];
+        const lines = hits.slice(0, 8).map((h, i) => {
+          const title = h.title || h.name || '无标题';
+          const url = h.url || '';
+          return `${i + 1}. ${title}${url ? `\n   ${url}` : ''}`;
+        });
+        const content =
+          lines.length > 0
+            ? `检索「${prompt}」共 ${hits.length} 条（展示前 ${lines.length} 条）：\n\n${lines.join('\n\n')}`
+            : `检索「${prompt}」未返回网页结果。`;
+        return res.json({
+          success: true,
+          ok: true,
+          content,
+          vendorName,
+          providerKey,
+          model: 'web-search',
+        });
+      } catch (err) {
+        return res.json({
+          success: true,
+          ok: false,
+          error: err?.message || String(err),
+          vendorName,
+          providerKey,
+        });
+      }
+    }
+
+    if (!baseURL) {
+      return res.json({ success: false, ok: false, error: '无法解析 Base URL' });
+    }
+
+    const configuredModel = defaultModelForRow(row);
+    const client = createAiClientFromConnectionParams({
+      providerKey: row.provider_key,
+      baseURL,
+      apiKey,
+      defaultModel: configuredModel,
+    });
+    try {
+      const result = await client.chat([{ role: 'user', content: prompt }], {
+        maxTokens,
+        temperature: 0.7,
+      });
+      const content = String(result?.content ?? '').trim();
+      if (!content) {
+        return res.json({
+          success: true,
+          ok: false,
+          error: '模型返回内容为空',
+          vendorName,
+          providerKey,
+          model: configuredModel,
+        });
+      }
+      return res.json({
+        success: true,
+        ok: true,
+        content,
+        vendorName,
+        providerKey,
+        model: configuredModel,
+      });
+    } catch (err) {
+      return res.json({
+        success: true,
+        ok: false,
+        error: err?.message || String(err),
+        vendorName,
+        providerKey,
+        model: configuredModel,
+      });
+    }
+  } catch (e) {
+    console.error('[ai-provider-connections try-prompt]', e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
