@@ -44,6 +44,10 @@ import {
   getGeoTaskReportCache,
   upsertGeoTaskReportCache,
 } from '../services/geoTaskCacheService.js';
+import {
+  generateGeoHealthAiSummary,
+  loadGeoHealthAiSummary,
+} from '../services/geoHealthAiSummaryService.js';
 import { computeAiHealthScore } from '../utils/aiHealthScore.js';
 import { isAcceptableSourceUrl } from '../utils/sourceUrlValidation.js';
 import {
@@ -424,6 +428,12 @@ router.get('/geo-health-report', async (req, res) => {
         userId,
         cachedPayload
       );
+      cachedPayload.aiSummary = await loadGeoHealthAiSummary(
+        pool,
+        taskId,
+        userId,
+        cacheFps.analysisFp
+      );
       return res.json(cachedPayload);
     }
 
@@ -794,6 +804,8 @@ router.get('/geo-health-report', async (req, res) => {
 
     await mergeDiagnosticSuggestionsFromDb(pool, taskId, userId, payload);
 
+    payload.aiSummary = await loadGeoHealthAiSummary(pool, taskId, userId, cacheFps.analysisFp);
+
     res.json(payload);
   } catch (err) {
     console.error('[geo-health-report]', err);
@@ -825,6 +837,40 @@ router.patch('/geo-health-report/diagnostic-suggestions', async (req, res) => {
     return res.json({ success: true });
   } catch (err) {
     console.error('[geo-health-report/diagnostic-suggestions]', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** 生成/重新生成「AI 智能总结」（结果解读）。基于已缓存的报告 payload 调用任务配置的分析模型。 */
+router.post('/geo-health-report/ai-summary', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default_user';
+    const taskId = parseInt(String(req.body?.taskId ?? ''), 10);
+    if (!Number.isFinite(taskId) || taskId <= 0) {
+      return res.status(400).json({ success: false, error: '需要有效的 taskId' });
+    }
+    const taskRow = await resolveCompletedReportTask(pool, userId, { taskId });
+    if (!taskRow) {
+      return res.status(404).json({ success: false, error: '报告不存在或无权访问' });
+    }
+
+    const cacheFps = await computeGeoTaskCacheFingerprints(pool, taskId, userId);
+    const report = await getGeoTaskReportCache(pool, taskId, userId, cacheFps);
+    if (!report) {
+      return res
+        .status(409)
+        .json({ success: false, error: '报告数据尚未就绪，请先打开/刷新报告后再生成总结' });
+    }
+
+    const result = await generateGeoHealthAiSummary(pool, {
+      taskId,
+      userId,
+      report,
+      analysisFp: cacheFps.analysisFp,
+    });
+    return res.json({ success: true, aiSummary: { ...result, stale: false } });
+  } catch (err) {
+    console.error('[geo-health-report/ai-summary]', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });

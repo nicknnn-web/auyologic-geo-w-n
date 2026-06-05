@@ -298,6 +298,15 @@ export async function initDB() {
     await client.query(
       `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS diagnostic_suggestion_overrides JSONB DEFAULT '{}'::jsonb`
     );
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS ai_summary TEXT`
+    );
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS ai_summary_at TIMESTAMP`
+    );
+    await client.query(
+      `ALTER TABLE geo_health_task ADD COLUMN IF NOT EXISTS ai_summary_fp VARCHAR(128)`
+    );
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_health_question (
         id SERIAL PRIMARY KEY,

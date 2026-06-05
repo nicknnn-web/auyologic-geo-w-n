@@ -986,6 +986,33 @@
                 </div>
               </div>
             </div>
+
+            <!-- AI 智能总结（结果解读） -->
+            <div class="ai-summary-block">
+              <div class="ai-summary-head">
+                <div class="ai-summary-title">
+                  <span class="ai-summary-spark">✦</span>
+                  AI 智能总结
+                  <span v-if="aiSummary && aiSummary.stale" class="ai-summary-stale">数据已更新，建议重新生成</span>
+                </div>
+                <el-button
+                  type="primary"
+                  size="small"
+                  :loading="aiSummaryLoading"
+                  @click="generateAiSummary"
+                >{{ aiSummary && aiSummary.text ? '重新生成' : '生成智能总结' }}</el-button>
+              </div>
+
+              <div v-if="aiSummary && aiSummary.text" class="ai-summary-body">
+                <div class="ai-summary-render" v-html="formatSuggestionRichHtml(aiSummary.text)" />
+                <div v-if="aiSummaryGeneratedLabel" class="ai-summary-meta">生成于 {{ aiSummaryGeneratedLabel }}</div>
+              </div>
+              <div v-else class="ai-summary-empty">
+                <p class="ai-summary-empty-tip">
+                  点击「生成智能总结」，AI 将根据本报告的可见度、负面、竞品与信源等数据，自动给出一段面向客户的结果解读：发生了什么、为什么、哪些因素导致了当前结果。
+                </p>
+              </div>
+            </div>
           </template>
         </el-skeleton>
       </div>
@@ -3251,6 +3278,10 @@ const diagnosticSuggestions = ref([])
 /** 综合语境矩阵 API 摘要（matrixContext） */
 const matrixContext = ref(null)
 
+/** AI 智能总结（结果解读）：{ text, generatedAt, stale } 或 null */
+const aiSummary = ref(null)
+const aiSummaryLoading = ref(false)
+
 let suggestionBlurTimer = null
 const cancelPendingSuggestionBlur = () => {
   if (suggestionBlurTimer) {
@@ -3404,6 +3435,47 @@ const removeSuggestionLine = async (item, li) => {
     suggestionEditingKey.value = null
   }
   await persistDiagnosticSuggestions({ silent: true })
+}
+
+/** AI 智能总结：调用后端基于报告数据生成「结果解读」 */
+const aiSummaryGeneratedLabel = computed(() => {
+  const t = aiSummary.value?.generatedAt
+  if (!t) return ''
+  try {
+    return new Date(t).toLocaleString('zh-CN', { hour12: false })
+  } catch {
+    return ''
+  }
+})
+
+const generateAiSummary = async () => {
+  const taskId = reportTaskId.value || viewingReportTaskId.value
+  if (!(Number(taskId) > 0)) {
+    ElMessage.warning('暂无可用报告数据，请先完成一次可见度检测')
+    return
+  }
+  aiSummaryLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-health-report/ai-summary`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-id': HEALTH_REPORT_USER_ID,
+      },
+      body: JSON.stringify({ taskId: Number(taskId) }),
+    })
+    const data = await res.json()
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${res.status}`)
+    }
+    aiSummary.value = data.aiSummary
+    ElMessage.success('AI 智能总结已生成')
+  } catch (err) {
+    console.error('生成 AI 智能总结失败:', err)
+    ElMessage.error('生成 AI 智能总结失败：' + (err?.message || String(err)))
+  } finally {
+    aiSummaryLoading.value = false
+  }
 }
 
 /** ECharts 词云：与 DOM/卸载时序解耦，避免 dispose 后仍 resize */
@@ -4023,6 +4095,7 @@ function applyHealthReportPayload(data) {
       })
     )
     matrixContext.value = data.matrixContext ?? null
+    aiSummary.value = data.aiSummary && data.aiSummary.text ? data.aiSummary : null
 
     // 填充信源权威
     if (data.sourceData) sourceData.value = data.sourceData
@@ -4734,7 +4807,9 @@ onUnmounted(() => {
 .health-page--pdf-export .competitor-click-hint,
 .health-page--pdf-export .sentiment-source-detail-btn,
 .health-page--pdf-export .diagnosis-suggest-row-actions,
-.health-page--pdf-export .diagnosis-suggest-add-row {
+.health-page--pdf-export .diagnosis-suggest-add-row,
+.health-page--pdf-export .ai-summary-head .el-button,
+.health-page--pdf-export .ai-summary-empty {
   display: none !important;
 }
 
@@ -7349,6 +7424,81 @@ onUnmounted(() => {
   outline: none;
   border-color: #409eff;
   box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.15);
+}
+
+/* ===== AI 智能总结（结果解读） ===== */
+.ai-summary-block {
+  margin-top: 18px;
+  padding: 16px 18px;
+  border: 1px solid #e3e8ff;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f6f8ff 0%, #f3fbff 100%);
+}
+
+.ai-summary-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-summary-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #303133;
+}
+
+.ai-summary-spark {
+  color: #6366f1;
+  font-size: 16px;
+}
+
+.ai-summary-stale {
+  margin-left: 4px;
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #d48806;
+  background: #fff7e6;
+  border: 1px solid #ffe7ba;
+  border-radius: 10px;
+}
+
+.ai-summary-body {
+  margin-top: 12px;
+}
+
+.ai-summary-render {
+  font-size: 14px;
+  line-height: 1.85;
+  color: #303133;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.ai-summary-render :deep(strong) {
+  color: #1d39c4;
+}
+
+.ai-summary-meta {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.ai-summary-empty {
+  margin-top: 10px;
+}
+
+.ai-summary-empty-tip {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #6b7280;
 }
 
 /* ===== 区块5：信源权威 ===== */
