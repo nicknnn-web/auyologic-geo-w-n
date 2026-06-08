@@ -20,7 +20,11 @@ export const GEO_HEALTH_AI_SUMMARY_SYSTEM = `你是一名资深的品牌 GEO（�
 3. 小标题只用上面三个，正文里关键术语/数据/竞品名可用 **加粗** 强调。
 4. 必须基于给定数据，禁止编造数字、竞品名或负面内容；数据没有的不要硬说。
 5. 即使整体表现好，"问题与原因"段也要给出仍可优化的点；即使表现差，"优势与亮点"段也要找出相对可取之处。
-6. 每段 2～4 句，全文约 350～600 字。`;
+6. 【结合原文举例】当下方提供了「原文摘录」时，"优势与亮点"和"问题与原因"两段要尽量结合原文佐证：
+   - 例如优点写法："在问题《……》中，**XX模型**的回答提到"……（原文片段）"，体现了权威/专业/可靠等认知。"
+   - 例如缺点写法："在问题《……》中，**XX模型**给出的结果是"……（原文片段）"，反映出负面舆情/被竞品替代等问题。"
+   - 引用的原文片段必须简短（控制在 30 字内）并加引号，且只能取自给定的「原文摘录」，严禁编造或改写原意；每段引用 1～2 处即可，不要堆砌。
+7. 每段 3～5 句，全文约 400～700 字。`;
 
 function pct(n) {
   const v = Number(n);
@@ -32,11 +36,26 @@ function pickList(arr, n) {
   return (Array.isArray(arr) ? arr : []).slice(0, n);
 }
 
+function renderExcerptBlock(title, items) {
+  const list = (Array.isArray(items) ? items : []).filter((it) => it && it.excerpt);
+  if (!list.length) return '';
+  const body = list
+    .map((it, i) => {
+      const q = String(it.question || '').replace(/\s+/g, ' ').slice(0, 60);
+      const model = String(it.model || '模型');
+      const ex = String(it.excerpt || '').replace(/\s+/g, ' ').slice(0, 220);
+      return `${i + 1}. 问题《${q}》｜${model}回答原文："${ex}"`;
+    })
+    .join('\n');
+  return `${title}\n${body}`;
+}
+
 /**
- * 从报告 payload 中抽取关键指标，拼成给模型的紧凑事实块。
+ * 从报告 payload 抽取关键指标 + 探针原文摘录，拼成给模型的紧凑事实块。
  * @param {object} report 主报告 payload（getGeoTaskReportCache 的返回）
+ * @param {{ positives?: Array, negatives?: Array }} [excerpts] 原文摘录（佐证用）
  */
-export function buildGeoHealthAiSummaryUserPrompt(report) {
+export function buildGeoHealthAiSummaryUserPrompt(report, excerpts = {}) {
   const r = report || {};
   const lines = [];
 
@@ -101,9 +120,19 @@ export function buildGeoHealthAiSummaryUserPrompt(report) {
     .filter((s) => s.trim() && s.trim() !== '：');
   if (diag.length) lines.push(`系统诊断要点（仅供参考）：\n${diag.join('\n')}`);
 
+  const posBlock = renderExcerptBlock(
+    '【原文摘录·正面/品牌被提及】（用于佐证"优势与亮点"，引用须加引号且不得改写）：',
+    excerpts.positives
+  );
+  const negBlock = renderExcerptBlock(
+    '【原文摘录·负面/被竞品压制】（用于佐证"问题与原因"，引用须加引号且不得改写）：',
+    excerpts.negatives
+  );
+  const excerptText = [posBlock, negBlock].filter(Boolean).join('\n\n');
+
   return `以下是该品牌在 AI 搜索场景中的体检数据，请据此生成一段"结果解读"：
 
-${lines.join('\n')}
+${lines.join('\n')}${excerptText ? `\n\n${excerptText}` : ''}
 
-请严格按「整体判断 / 优势与亮点 / 问题与原因」三段式输出面向业务人员的结论性解读，便于他们直接与客户沟通。`;
+请严格按「整体判断 / 优势与亮点 / 问题与原因」三段式输出面向业务人员的结论性解读，便于他们直接与客户沟通；当上方提供了「原文摘录」时，请在优劣两段中结合原文片段举例佐证。`;
 }

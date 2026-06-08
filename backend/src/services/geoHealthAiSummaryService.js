@@ -5,13 +5,88 @@
  * 并将结果与当时的分析指纹一起落库到 geo_health_task，便于下次直接展示并判断是否过期。
  */
 import { createAiClientByConnectionId } from './aiClientFactory.js';
+import { extractProbeAnswerText } from './sentimentLexiconService.js';
 import {
   GEO_HEALTH_AI_SUMMARY_SYSTEM,
   buildGeoHealthAiSummaryUserPrompt,
 } from '../prompts/geoHealthAiSummary.js';
 
-const AI_SUMMARY_MAX_TOKENS = 1200;
+const AI_SUMMARY_MAX_TOKENS = 1600;
 const AI_SUMMARY_TIMEOUT_MS = 60000;
+/** 每侧（正面/负面）原文摘录条数与单条最大字数 */
+const EXCERPT_PER_SIDE = 4;
+const EXCERPT_MAX_CHARS = 220;
+
+/**
+ * 拉取用于佐证的探针回答原文摘录：
+ * - positives：品牌被提及且无负面（佐证"优势与亮点"）
+ * - negatives：含负面或被竞品压制 lose（佐证"问题与原因"）
+ */
+async function loadAnswerExcerptsForSummary(pool, taskId) {
+  let rows = [];
+  try {
+    const r = await pool.query(
+      `SELECT a.has_negative, a.compare_status, a.brand_mentioned, a.top_brand, a.model_name,
+              COALESCE(jsonb_array_length(a.sentiment_keywords), 0) AS kw_count,
+              COALESCE(NULLIF(trim(q.question), ''), NULLIF(trim(sq.question), '')) AS question_text,
+              ans.raw_json AS raw_json
+       FROM geo_health_analysis a
+       JOIN geo_health_answer ans ON ans.id = a.answer_id
+       LEFT JOIN geo_health_question q ON q.id = a.question_id AND q.task_id = a.task_id
+       LEFT JOIN questions sq ON sq.id = COALESCE(NULLIF(a.source_question_id, 0), q.source_question_id)
+       WHERE a.task_id = $1 AND a.error_text IS NULL`,
+      [taskId]
+    );
+    rows = r.rows || [];
+  } catch (e) {
+    console.warn('[geo-health-ai-summary] load excerpts:', e?.message || e);
+    return { positives: [], negatives: [] };
+  }
+
+  const toItem = (row) => {
+    const excerpt = String(extractProbeAnswerText(row.raw_json) || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, EXCERPT_MAX_CHARS);
+    if (!excerpt) return null;
+    return {
+      question: String(row.question_text || '').trim() || '相关问题',
+      model: String(row.model_name || '模型').trim() || '模型',
+      excerpt,
+      topBrand: String(row.top_brand || '').trim(),
+    };
+  };
+
+  const dedupeByQuestion = (list) => {
+    const seen = new Set();
+    const out = [];
+    for (const it of list) {
+      const key = it.question;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(it);
+      if (out.length >= EXCERPT_PER_SIDE) break;
+    }
+    return out;
+  };
+
+  const posCandidates = rows
+    .filter((r) => r.brand_mentioned === true && r.has_negative !== true)
+    .sort((a, b) => (b.kw_count || 0) - (a.kw_count || 0))
+    .map(toItem)
+    .filter(Boolean);
+
+  const negCandidates = rows
+    .filter((r) => r.has_negative === true || r.compare_status === 'lose')
+    .sort((a, b) => (b.has_negative === true ? 1 : 0) - (a.has_negative === true ? 1 : 0))
+    .map(toItem)
+    .filter(Boolean);
+
+  return {
+    positives: dedupeByQuestion(posCandidates),
+    negatives: dedupeByQuestion(negCandidates),
+  };
+}
 
 /**
  * 【可在此处修改 AI 智能总结使用的模型】
@@ -75,10 +150,11 @@ export async function generateGeoHealthAiSummary(pool, { taskId, userId, report,
     throw new Error('未找到可用的大模型连接，请先在「大模型接入」中配置并启用一个模型');
   }
 
+  const excerpts = await loadAnswerExcerptsForSummary(pool, taskId);
   const client = await createAiClientByConnectionId(pool, cid, { userId });
   const messages = [
     { role: 'system', content: GEO_HEALTH_AI_SUMMARY_SYSTEM },
-    { role: 'user', content: buildGeoHealthAiSummaryUserPrompt(report) },
+    { role: 'user', content: buildGeoHealthAiSummaryUserPrompt(report, excerpts) },
   ];
   const { content } = await client.chat(messages, {
     maxTokens: AI_SUMMARY_MAX_TOKENS,
