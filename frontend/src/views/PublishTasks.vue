@@ -257,7 +257,7 @@
 
 <script setup>
 import { getToken } from '../utils/auth.js'
-import { ref, computed, onMounted, onUnmounted, onDeactivated, nextTick } from 'vue'
+import { ref, computed, onMounted, onActivated, onUnmounted, onDeactivated, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {Plus, CircleCheck, Loading, Download, Warning} from '@element-plus/icons-vue'
@@ -267,7 +267,8 @@ import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
 import { fetchDictList } from '../utils/sysDict.js'
-import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
+import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
+import { normalizePublishPlatform } from '../utils/publishPlatformNormalize.js'
 import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
 import {
   getPlatformAuthMeta,
@@ -307,6 +308,15 @@ const publishPlatformValues = computed(() =>
     .map((o) => o.value)
     .filter(Boolean)
 )
+
+/** 账号平台与下拉选项对齐（兼容 data_key / 别名 / 字典展示值） */
+const canonicalPlatform = (name) => {
+  const fromDict = resolveToDataValue(platformDictRows.value, name)
+  return normalizePublishPlatform(fromDict || name)
+}
+
+const platformMatches = (accountPlatform, selectedPlatform) =>
+  canonicalPlatform(accountPlatform) === canonicalPlatform(selectedPlatform)
 
 const selectedPlatformMeta = computed(() => getPlatformAuthMeta(form.value.platform || ''))
 
@@ -387,9 +397,13 @@ const loadDrafts = async () => {
   }
 }
 
+const refreshPageData = async () => {
+  await Promise.all([loadTasks(), loadAccounts(), loadDrafts()])
+}
+
 onMounted(async () => {
   await loadPlatformDict()
-  await Promise.all([loadTasks(), loadAccounts(), loadDrafts()])
+  await refreshPageData()
   // 支持从草稿箱跳转时带 draftId
   if (route.query.draftId) {
     const id = Number(route.query.draftId)
@@ -401,6 +415,10 @@ onMounted(async () => {
       form.value.task_name = `${draft.title || ''}投放`
     }
   }
+})
+
+onActivated(() => {
+  refreshPageData()
 })
 
 onDeactivated(() => {
@@ -431,17 +449,18 @@ const availablePlatforms = computed(() => {
   return publishPlatformValues.value.map((p) => ({
     value: p,
     label: p,
-    accountCount: authorizedAccounts.value.filter((a) => a.platform === p).length,
+    accountCount: authorizedAccounts.value.filter((a) => platformMatches(a.platform, p)).length,
   }))
 })
 
 const filteredAccounts = computed(() =>
-  authorizedAccounts.value.filter(a => a.platform === form.value.platform)
+  authorizedAccounts.value.filter((a) => platformMatches(a.platform, form.value.platform))
 )
 
-const openCreateDialog = () => {
+const openCreateDialog = async () => {
   form.value = { task_name: '', draft_id: null, title: '', platform: '', account_id: null, tags: '' }
   createDialogVisible.value = true
+  await loadAccounts()
 }
 
 const resetForm = () => {

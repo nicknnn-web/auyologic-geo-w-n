@@ -3,6 +3,7 @@
  * 使用 fetch + 正则解析 HTML
  */
 import { getAIFriendlinessPromptSet, buildAIFriendlinessPrompt } from '../prompts/index.js'
+import { callAiGenerate } from './api.js'
 
 // 浏览器 User-Agent 池，用于绕过反爬虫
 const USER_AGENTS = [
@@ -728,23 +729,13 @@ const checkAIFriendlinessDeep = async (html, url) => {
     // 根据页面类型选择 prompt 组合（已抽到 frontend/src/prompts/websiteAnalyzer.js）
     const { systemPrompt, scoringRules } = getAIFriendlinessPromptSet(pageType)
 
-    const response = await fetch(getAIBaseURL(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'deepseek-v4-flash',
-        systemPrompt,
-        prompt: buildAIFriendlinessPrompt({ scoringRules, url, truncatedText }),
-        temperature: 0.3,
-        max_tokens: 1000
-      })
+    const data = await callAiGenerate({
+      model: 'deepseek-v4-flash',
+      systemPrompt,
+      prompt: buildAIFriendlinessPrompt({ scoringRules, url, truncatedText }),
+      temperature: 0.3,
+      max_tokens: 1000,
     })
-
-    if (!response.ok) {
-      throw new Error(`API请求失败: ${response.status}`)
-    }
-
-    const data = await response.json()
     const content = data.content || ''
 
     if (!content) {

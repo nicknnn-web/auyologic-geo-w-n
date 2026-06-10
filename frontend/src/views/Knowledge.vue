@@ -355,7 +355,7 @@ import { ref, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { UploadFilled, Document, InfoFilled, FolderAdd, Delete } from '@element-plus/icons-vue'
 import { marked } from 'marked'
-import { knowledgeAPI, knowledgeFolderAPI } from '../utils/api'
+import { knowledgeAPI, knowledgeFolderAPI, callAiGenerate } from '../utils/api'
 import { uploadFile, downloadFromMinIO, deleteFromMinIO } from '../services/uploadService'
 import { buildKnowledgeAnalyzePrompt } from '../prompts/index.js'
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
@@ -847,9 +847,6 @@ const formatFileSize = (bytes) => {
 }
 
 // ==================== AI 分析功能 ====================
-// AI 代理端点
-const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
-
 // AI 分析状态
 const analyzingIds = ref(new Set()) // 正在分析的文档ID集合
 const extractTextIds = ref(new Set()) // 正在抽取 PDF/Word 正文的文档 ID
@@ -863,22 +860,12 @@ const batchAnalyzing = ref(false) // 批量分析中
 const analyzeWithDeepSeek = async (content) => {
   const prompt = buildKnowledgeAnalyzePrompt(content)
 
-  const response = await fetch(AI_PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'deepseek-v4-flash',
-      prompt,
-      temperature: 0.7,
-      max_tokens: 1000
-    })
+  const data = await callAiGenerate({
+    model: 'deepseek-v4-flash',
+    prompt,
+    temperature: 0.7,
+    max_tokens: 1000,
   })
-
-  if (!response.ok) {
-    throw new Error(`API 请求失败: ${response.status}`)
-  }
-
-  const data = await response.json()
   const resultText = data.content || ''
 
   // 解析 JSON 响应

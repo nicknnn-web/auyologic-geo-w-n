@@ -110,3 +110,16 @@ export function getCurrentUser() {
 export function isLoggedIn() {
   return !!getToken()
 }
+
+/** 带 Bearer 的 fetch 请求头；json=true 时附加 Content-Type */
+export function authHeaders(json = false, extra = {}) {
+  const h = { ...extra }
+  const token = getToken()
+  if (token) h.Authorization = `Bearer ${token}`
+  if (json) h['Content-Type'] = 'application/json'
+  return h
+}
+
+export function authJsonHeaders(extra = {}) {
+  return authHeaders(true, extra)
+}

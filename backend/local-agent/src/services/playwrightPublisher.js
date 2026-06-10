@@ -33,9 +33,9 @@ function randomDelay(min, max) {
   return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
 }
 
-/** 模拟人工：每次点击操作后等待 1.5～2 秒 */
+/** 模拟人工：每次点击操作后等待 2～3 秒 */
 function afterHumanClick() {
-  return randomDelay(1500, 2000);
+  return randomDelay(2000, 3000);
 }
 
 /** 追加任务日志（同时更新内存状态） */
@@ -1152,6 +1152,7 @@ function _isBaijiahaoSessionExpired(url) {
   return u.includes('baijiahao.baidu.com') && (u.includes('/login') || u.includes('/bjh/login'));
 }
 
+/** 按按钮文案点击（百家号发布页按钮类名多变） */
 async function _clickButtonByTexts(page, taskId, texts, logPrefix) {
   for (const text of texts) {
     const hit = await page.evaluate((label) => {
@@ -1178,6 +1179,9 @@ async function _clickButtonByTexts(page, taskId, texts, logPrefix) {
   return false;
 }
 
+/**
+ * 百度百家号 · 图文发布
+ */
 async function runPublishBaijiahao(taskInfo) {
   const { taskId, sessionState, content, title, tags } = taskInfo;
   appendLog(taskId, '正在启动浏览器…');
@@ -1198,7 +1202,7 @@ async function runPublishBaijiahao(taskInfo) {
 
     appendLog(taskId, '已进入编辑页，开始填写图文…');
 
-    const safeTitle = (title || '未命名文章').slice(0, 30);
+    const safeTitle = (title || '未命名文章').slice(0, 64);
     await _baijiahaoFillTitle(page, taskId, safeTitle);
     await afterHumanClick();
     await _baijiahaoFillContent(page, taskId, content || '');
@@ -1280,8 +1284,10 @@ async function _baijiahaoFillContent(page, taskId, content) {
       const body = frame.locator('body[contenteditable="true"], [contenteditable="true"]').first();
       if (await body.count().catch(() => 0)) {
         await body.click();
+        await afterHumanClick();
         await page.keyboard.type(plainContent.slice(0, 5000), { delay: 10 });
         appendLog(taskId, '正文填写完成（iframe 编辑器）');
+        await afterHumanClick();
         return;
       }
       continue;
@@ -1297,8 +1303,10 @@ async function _baijiahaoFillContent(page, taskId, content) {
       const chunks = plainContent.match(/.{1,200}/gs) || [plainContent];
       for (const chunk of chunks) {
         await editor.type(chunk, { delay: 12 + Math.random() * 12 });
+        await randomDelay(300, 600);
       }
       appendLog(taskId, '正文填写完成');
+      await afterHumanClick();
       return;
     }
   }
@@ -1322,30 +1330,100 @@ async function _baijiahaoSyncEditorState(page, taskId) {
   }
 }
 
-async function _baijiahaoSubmitPublish(page, taskId) {
-  appendLog(taskId, '正在查找发布按钮…');
+/**
+ * 百家号确认弹窗：在标题/正文匹配的 .cheetah-modal-content 内点指定按钮
+ * @returns {boolean} 是否处理了一个弹窗
+ */
+async function _baijiahaoClickModalButton(page, taskId, { titleText, bodyContains, buttonText }) {
+  const modals = page.locator('.cheetah-modal-content');
+  const count = await modals.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const modal = modals.nth(i);
+    const visible = await modal.isVisible().catch(() => false);
+    if (!visible) continue;
 
-  const previewClicked = await _clickButtonByTexts(
-    page,
-    taskId,
-    ['预览并发布', '下一步', '继续发布'],
-    '已点击'
-  );
+    const titleEl = modal.locator('.cheetah-modal-title');
+    const titleOk = await titleEl
+      .filter({ hasText: titleText })
+      .isVisible()
+      .catch(() => false);
+    if (!titleOk) continue;
 
-  if (!previewClicked) {
-    appendLog(taskId, '未找到预览步骤按钮，尝试直接发布…');
+    if (bodyContains) {
+      const bodyOk = await modal
+        .locator('.cheetah-modal-confirm-content')
+        .filter({ hasText: bodyContains })
+        .isVisible()
+        .catch(() => false);
+      if (!bodyOk) continue;
+    }
+
+    const btn = modal
+      .locator('.cheetah-modal-confirm-btns button')
+      .filter({ hasText: buttonText })
+      .first();
+    const btnVisible = await btn.isVisible({ timeout: 3000 }).catch(() => false);
+    if (!btnVisible) continue;
+
+    await btn.scrollIntoViewIfNeeded();
+    await randomDelay(1000, 2000);
+    await btn.click();
+    appendLog(taskId, `已处理弹窗「${titleText}」→ 点击「${buttonText}」`);
+    await afterHumanClick();
+    return true;
+  }
+  return false;
+}
+
+/** 点击发布后：短正文「提醒」「温馨提示」等弹窗（可多轮，避免连点过快） */
+async function _baijiahaoHandlePostPublishModals(page, taskId) {
+  const steps = [
+    { titleText: '提醒', bodyContains: '正文少于200字', buttonText: '确定' },
+    { titleText: '温馨提示', bodyContains: '少于40字', buttonText: '保持图文发布' },
+  ];
+
+  appendLog(taskId, '检查发布后确认弹窗…');
+  await randomDelay(1500, 2500);
+
+  for (let round = 0; round < 4; round++) {
+    let handledAny = false;
+    for (const step of steps) {
+      const ok = await _baijiahaoClickModalButton(page, taskId, step);
+      if (ok) handledAny = true;
+    }
+    if (!handledAny) break;
+    await randomDelay(1200, 2200);
+  }
+}
+
+async function _baijiahaoClickMainPublishButton(page, taskId) {
+  appendLog(taskId, '正在查找主发布按钮…');
+  await randomDelay(1500, 2500);
+
+  const publishBtn = page.locator('button[data-testid="publish-btn"]');
+  try {
+    await publishBtn.waitFor({ state: 'visible', timeout: 20000 });
+    await publishBtn.scrollIntoViewIfNeeded();
+    await randomDelay(1000, 2000);
+    await publishBtn.click();
+    appendLog(taskId, '已点击「发布」（data-testid=publish-btn）');
+    await afterHumanClick();
+    return true;
+  } catch (err) {
+    appendLog(taskId, `⚠️ 未找到 publish-btn：${err.message}，尝试文案匹配…`);
   }
 
-  const publishClicked = await _clickButtonByTexts(
-    page,
-    taskId,
-    ['确认发布', '立即发布', '发布', '发表', '提交'],
-    '已点击'
-  );
+  return _clickButtonByTexts(page, taskId, ['发布', '立即发布', '确认发布', '发表'], '已点击');
+}
 
+async function _baijiahaoSubmitPublish(page, taskId) {
+  const publishClicked = await _baijiahaoClickMainPublishButton(page, taskId);
   if (!publishClicked) {
     throw new Error('未找到可点击的发布按钮，请确认标题/正文已填写且账号有发稿权限');
   }
+
+  await _baijiahaoHandlePostPublishModals(page, taskId);
+  await randomDelay(2000, 3500);
 
   let publishedUrl = '';
   try {
@@ -1373,28 +1451,27 @@ async function _baijiahaoSubmitPublish(page, taskId) {
   return publishedUrl;
 }
 
+/** 本地代理 zip 内 playwrightPublisher 构建标识（更新后请重新下载代理） */
+export const PUBLISHER_BUILD_ID = '2026-06-10-bjh-v3';
+
+const PUBLISH_RUNNERS = {
+  小红书: runPublishXHS,
+  知乎: runPublishZhihu,
+  微博: runPublishWeibo,
+  今日头条: runPublishToutiao,
+  百度百家号: runPublishBaijiahao,
+};
+
 /** 内部分发逻辑：根据平台路由到对应发布函数 */
 async function _runPublish(taskInfo) {
   const platform = normalizePublishPlatform(taskInfo.platform);
-  const payload = { ...taskInfo, platform };
-  if (platform === '小红书') {
-    return await runPublishXHS(payload);
+  const runner = PUBLISH_RUNNERS[platform];
+  if (!runner) {
+    throw new Error(
+      `暂不支持 ${taskInfo.platform || platform} 平台的自动发布（支持：${Object.keys(PUBLISH_RUNNERS).join('、')}）`
+    );
   }
-  if (platform === '知乎') {
-    return await runPublishZhihu(payload);
-  }
-  if (platform === '微博') {
-    return await runPublishWeibo(payload);
-  }
-  if (platform === '今日头条') {
-    return await runPublishToutiao(payload);
-  }
-  if (platform === '百度百家号') {
-    return await runPublishBaijiahao(payload);
-  }
-  throw new Error(
-    `暂不支持 ${taskInfo.platform || platform} 平台的自动发布（支持：小红书、知乎、微博、今日头条、百度百家号）`
-  );
+  return runner({ ...taskInfo, platform });
 }
 
 /** 点击图文 tab */

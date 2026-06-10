@@ -345,6 +345,7 @@
 
 <script setup>
 import { getToken, getCurrentUserId } from '../utils/auth.js'
+import { callAiGenerate } from '../utils/api.js'
 import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -604,25 +605,15 @@ const getStatusType = (statusKey) => {
 }
 
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
-const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
-
 const analyzeEnterpriseProfileForQuestions = async (name, industry, description) => {
   try {
     const prompt = buildBusinessTermsPrompt({ name, industry, description })
 
-    const response = await fetch(AI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        temperature: 0.3,
-        max_tokens: 300
-      })
+    const data = await callAiGenerate({
+      prompt,
+      temperature: 0.3,
+      max_tokens: 300,
     })
-
-    if (!response.ok) return null
-
-    const data = await response.json()
     const content = data.content || ''
 
     const keywords = content
@@ -818,27 +809,11 @@ const generateKeywordBatchFromGeoPrompt = async (keywords, searchKeywords = []) 
     extraBusinessHints: extraHints,
   })
 
-  const response = await fetch(AI_PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt,
-      temperature: 0.65,
-      max_tokens: 8192,
-    }),
+  const data = await callAiGenerate({
+    prompt,
+    temperature: 0.65,
+    max_tokens: 8192,
   })
-
-  let data
-  try {
-    data = await response.json()
-  } catch {
-    data = {}
-  }
-
-  if (!response.ok) {
-    const serverMsg = String(data?.error || data?.message || '').trim()
-    throw new Error(serverMsg || `AI 请求失败（HTTP ${response.status}）`)
-  }
 
   const rawContent = String(data?.content ?? '').trim()
   if (!rawContent) {
@@ -899,19 +874,16 @@ const generateParaphrasesFromAI = async (originalQuestion) => {
 
 直接输出替代表述，每行一个，不要编号，不要解释。`
 
-  const response = await fetch(AI_PROXY_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  let data
+  try {
+    data = await callAiGenerate({
       prompt,
       temperature: 0.7,
-      max_tokens: 400
+      max_tokens: 400,
     })
-  })
-
-  if (!response.ok) return []
-
-  const data = await response.json()
+  } catch {
+    return []
+  }
   const content = data.content || ''
 
   const paraphrases = content
@@ -1502,20 +1474,11 @@ const submitGeoGenerate = async () => {
   }
   try {
     const prompt = buildGeoPrompt({ brand, product, targetCustomer })
-    const res = await fetch(AI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        temperature: 0.7,
-        max_tokens: 6000,
-      }),
+    const data = await callAiGenerate({
+      prompt,
+      temperature: 0.7,
+      max_tokens: 6000,
     })
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '')
-      throw new Error(`AI请求失败（${res.status}）${txt.slice(0, 120)}`)
-    }
-    const data = await res.json()
     const parsed = extractGeoJson(data?.content)
     const list = Array.isArray(parsed?.questions) ? parsed.questions : []
     if (list.length === 0) {

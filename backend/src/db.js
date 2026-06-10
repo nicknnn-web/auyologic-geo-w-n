@@ -1,4 +1,6 @@
 import pg from 'pg';
+import { normalizePublishPlatform } from './utils/publishPlatformNormalize.js';
+
 const { Pool } = pg;
 
 // 与报告「检测时间」等业务一致：连接池创建前默认东八区，便于解析 PG 的 timestamp（无时区）与序列化 ISO
@@ -603,6 +605,16 @@ export async function initDB() {
         AND (pr.user_id IS NULL OR trim(coalesce(pr.user_id::text, '')) = '')
         AND pt.user_id IS NOT NULL AND trim(coalesce(pt.user_id::text, '')) <> ''
     `).catch(() => {});
+
+    for (const table of ['media_accounts', 'publish_tasks']) {
+      const rows = await client.query(`SELECT id, platform FROM ${table} WHERE platform IS NOT NULL`);
+      for (const row of rows.rows) {
+        const norm = normalizePublishPlatform(row.platform);
+        if (norm && norm !== row.platform) {
+          await client.query(`UPDATE ${table} SET platform = $1 WHERE id = $2`, [norm, row.id]);
+        }
+      }
+    }
 
     console.log('✅ 数据库表初始化完成');
   } finally {

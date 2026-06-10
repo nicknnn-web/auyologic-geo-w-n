@@ -276,7 +276,7 @@ async function handlePublishTask(BASE_URL, task) {
 
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   Auyologic 本地代理  v1.1.0         ║');
+  console.log('║   Auyologic 本地代理  v1.1.3         ║');
   console.log('╚══════════════════════════════════════╝\n');
 
   // 服务器地址：优先命令行参数 → 配置文件 → 交互输入

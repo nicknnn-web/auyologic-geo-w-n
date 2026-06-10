@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { unwrapListPayload } from './pagedApi.js'
-import { getToken, clearAuth } from './auth.js'
+import { getToken, clearAuth, authJsonHeaders } from './auth.js'
 
 // API 服务层 - 直接连接后端（Zeabur 环境下）test
 const BASE_URL = window.VITE_API_URL || window.location.origin
@@ -109,9 +109,40 @@ export const uploadAPI = {
   },
 }
 
-// AI 生成
+// AI 生成（走后端 /api/ai/generate，密钥来自「大模型接入」）
 export const aiAPI = {
-  generate: (prompt) => api.post('/ai/generate', { prompt, type: 'content' }),
+  generate: (body) => api.post('/ai/generate', body),
+}
+
+/**
+ * 原生 fetch 调用 AI 代理（供未接入 axios 的页面使用）
+ * @param {Record<string, unknown>} body prompt / temperature / max_tokens / systemPrompt / connectionId 等
+ * @returns {Promise<{ content: string, vendorName?: string, model?: string }>}
+ */
+export async function callAiGenerate(body) {
+  if (!getToken()) {
+    throw new Error('未登录或登录已过期，请重新登录')
+  }
+  const res = await fetch(`${BASE_URL}/api/ai/generate`, {
+    method: 'POST',
+    headers: authJsonHeaders(),
+    body: JSON.stringify(body || {}),
+  })
+  let data = {}
+  try {
+    data = await res.json()
+  } catch {
+    data = {}
+  }
+  if (!res.ok) {
+    const err =
+      (typeof data.error === 'string' && data.error) ||
+      data.error?.message ||
+      data.message ||
+      `API请求失败: ${res.status}`
+    throw new Error(err)
+  }
+  return data
 }
 
 export default api

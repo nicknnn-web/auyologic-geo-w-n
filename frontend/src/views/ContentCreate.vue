@@ -363,7 +363,7 @@ import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
-import { knowledgeAPI, historyAPI, draftFolderAPI } from '../utils/api'
+import { knowledgeAPI, historyAPI, draftFolderAPI, callAiGenerate } from '../utils/api'
 import { fetchAllPages } from '../utils/pagedApi.js'
 import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
@@ -372,8 +372,6 @@ import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 
 // ========== API 配置 ==========
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
-const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
-
 const router = useRouter()
 const route = useRoute()
 
@@ -1309,23 +1307,12 @@ ${randomStyle}
 // Step 1: AI 代理调用
 const callDeepSeekAPI = async (prompt) => {
   try {
-    const response = await fetch(AI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'deepseek-v4-flash',
-        prompt,
-        temperature: 0.7,
-        max_tokens: 2000
-      })
+    const data = await callAiGenerate({
+      model: 'deepseek-v4-flash',
+      prompt,
+      temperature: 0.7,
+      max_tokens: 2000,
     })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.error?.message || `API请求失败: ${response.status}`)
-    }
-
-    const data = await response.json()
     return data.content || ''
   } catch (error) {
     console.error('DeepSeek API 调用失败:', error)

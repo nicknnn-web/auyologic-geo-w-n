@@ -1432,7 +1432,11 @@ app.get('/api/platform-accounts', async (req, res) => {
        FROM media_accounts ${where} ORDER BY created_at DESC LIMIT $${lim} OFFSET $${off}`,
       [...params, pageSize, offset]
     )
-    res.json(pagedResponse(result.rows, total, page, pageSize))
+    const list = result.rows.map((row) => ({
+      ...row,
+      platform: normalizePublishPlatform(row.platform),
+    }))
+    res.json(pagedResponse(list, total, page, pageSize))
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1648,7 +1652,7 @@ app.get('/api/agent/pending-publish', async (req, res) => {
     res.json({
       task: {
         taskId: task.id,
-        platform: task.platform,
+        platform: normalizePublishPlatform(task.platform),
         accountId: task.account_id,
         accountName: account_name,
         content: task.content,
@@ -1814,7 +1818,18 @@ app.get('/api/agent/download', (req, res) => {
   });
   archive.pipe(res);
 
-  const IGNORE = ['node_modules/**', 'dist/**', 'node.exe', '*.zip', '.auyologic-agent.json'];
+  const IGNORE = [
+    'node_modules/**',
+    'dist/**',
+    'node.exe',
+    '*.zip',
+    '.auyologic-agent.json',
+    // 以下由 agentBundleFiles 从 backend/src 注入，避免 zip 内重复条目导致解压到旧版
+    'src/services/playwrightPublisher.js',
+    'src/utils/playwrightLaunch.js',
+    'src/utils/publishPlatformNormalize.js',
+    'src/utils/htmlToPlainText.js',
+  ];
 
   // .bat 文件：读取内容，转换为 CRLF 后作为 buffer 写入（Windows CMD 需要 CRLF）
   const batFiles = fs.readdirSync(agentDir).filter(f => f.endsWith('.bat'));
@@ -1919,7 +1934,7 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
       executePublishTask(
         {
           taskId,
-          platform: task.platform,
+          platform: normalizePublishPlatform(task.platform),
           sessionState: account.session_state,
           content: task.content || '',
           title: task.title || '',

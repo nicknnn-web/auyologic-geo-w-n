@@ -20,15 +20,26 @@ const ALIASES = {
   '百度百家号': '百度百家号',
 };
 
-const SUPPORTED = new Set(['小红书', '知乎', '微博', '今日头条', '百度百家号']);
+export const SUPPORTED_PUBLISH_PLATFORMS = ['小红书', '知乎', '微博', '今日头条', '百度百家号'];
+const SUPPORTED = new Set(SUPPORTED_PUBLISH_PLATFORMS);
+
+function cleanPlatformRaw(platform) {
+  return String(platform || '')
+    .trim()
+    .replace(/[\u200b-\u200d\ufeff]/g, '')
+    .normalize('NFKC');
+}
 
 export function normalizePublishPlatform(platform) {
-  const raw = String(platform || '').trim();
+  const raw = cleanPlatformRaw(platform);
   if (!raw) return '';
   if (SUPPORTED.has(raw)) return raw;
   const lower = raw.toLowerCase();
   if (ALIASES[raw]) return ALIASES[raw];
   if (ALIASES[lower]) return ALIASES[lower];
+  for (const name of SUPPORTED_PUBLISH_PLATFORMS) {
+    if (raw.includes(name) || name.includes(raw)) return name;
+  }
   return raw;
 }
 

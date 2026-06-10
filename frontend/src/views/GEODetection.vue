@@ -278,6 +278,7 @@
 
 <script setup>
 import { getToken, getCurrentUserId } from '../utils/auth.js'
+import { callAiGenerate } from '../utils/api.js'
 import { getUserLocalData, patchUserLocalData, getUserLocalBucket, setUserLocalBucket } from '../utils/userStorage.js'
 import { ref, computed, onMounted, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
@@ -405,9 +406,6 @@ const RadarChart = {
     ])
   }
 }
-
-// ==================== AI 代理配置 ====================
-const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
 
 // ==================== 权威网站白名单 ====================
 // 这些是行业知名品牌官网，检测时有额外加权
@@ -604,22 +602,12 @@ const setCachedResult = (question, keyword, platformId, result) => {
 const detectDeepseekReal = async (question, keywords) => {
   try {
     // 直接将用户问题发给 AI 代理，不做任何分析指令
-    const response = await fetch(AI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'deepseek-v4-flash',
-        prompt: question,
-        temperature: 0.7,
-        max_tokens: 800
-      })
+    const data = await callAiGenerate({
+      model: 'deepseek-v4-flash',
+      prompt: question,
+      temperature: 0.7,
+      max_tokens: 800,
     })
-
-    if (!response.ok) {
-      throw new Error(`AI代理请求失败: ${response.status}`)
-    }
-
-    const data = await response.json()
     const answerText = data.content || ''
 
     if (!answerText) {
@@ -769,23 +757,13 @@ const detectWithDeepSeek = async (question, keywords, platformId) => {
   const prompt = buildGeoDetectionPrompt({ question, keyword, platformId })
 
   try {
-    const response = await fetch(AI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'deepseek-v4-flash',
-        systemPrompt: GEO_DETECTION_SYSTEM_PROMPT,
-        prompt,
-        temperature: 0.3,
-        max_tokens: 1000
-      })
+    const data = await callAiGenerate({
+      model: 'deepseek-v4-flash',
+      systemPrompt: GEO_DETECTION_SYSTEM_PROMPT,
+      prompt,
+      temperature: 0.3,
+      max_tokens: 1000,
     })
-
-    if (!response.ok) {
-      throw new Error(`API请求失败: ${response.status}`)
-    }
-
-    const data = await response.json()
     const content = data.content || ''
 
     if (!content) {

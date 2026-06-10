@@ -278,6 +278,7 @@
 
 <script setup>
 import { getToken, getCurrentUserId } from '../utils/auth.js'
+import { callAiGenerate } from '../utils/api.js'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
@@ -795,25 +796,15 @@ const extractCoreBusinessWords = (description) => {
 // ===== Step 1: AI分析企业画像（替代Web搜索，解决CORS问题） =====
 // 用 AI 代理分析企业描述，提取核心业务词
 // 比 Web 搜索更可靠，不受跨域限制
-const AI_PROXY_URL = `${window.VITE_API_URL || window.location.origin}/api/ai/generate`
-
 const analyzeEnterpriseProfile = async (name, industry, description) => {
   const prompt = buildCoreKeywordsPrompt({ name, industry, description })
 
   try {
-    const response = await fetch(AI_PROXY_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        temperature: 0.3,
-        max_tokens: 500,
-      }),
+    const data = await callAiGenerate({
+      prompt,
+      temperature: 0.3,
+      max_tokens: 500,
     })
-
-    if (!response.ok) return null
-
-    const data = await response.json()
     const content = data.content || ''
 
     // 解析关键词（每行一个），并过滤碎片词
