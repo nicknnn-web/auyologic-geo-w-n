@@ -7,7 +7,7 @@ import pool from '../db.js';
 const router = Router();
 
 function getUserId(req) {
-  return (req.get('x-user-id') || 'default_user').trim() || 'default_user';
+  return req.userId;
 }
 
 function toCamelCase(obj) {
@@ -212,10 +212,7 @@ router.get('/knowledge', async (req, res) => {
     const folderKey = String(req.query.folderId ?? req.query.folder_id ?? '__all__').trim();
 
     const params = [userId];
-    // 兼容历史数据：旧版创建未写 user_id，与 default_user 一并展示
-    const where = [
-      `(k.user_id = $1 OR k.user_id IS NULL OR trim(coalesce(k.user_id, '')) = '')`,
-    ];
+    const where = [`k.user_id = $1`];
     let pi = 2;
 
     if (q) {
@@ -240,13 +237,15 @@ router.get('/knowledge', async (req, res) => {
         where.push(`k.folder_id = $${pi}`);
         params.push(fid);
         pi += 1;
+        // 文件夹须属于当前用户
+        where.push(`EXISTS (SELECT 1 FROM knowledge_folders kf WHERE kf.id = $${pi - 1} AND kf.user_id = $1)`);
       }
     }
 
     const sql = `
       SELECT ${KNOWLEDGE_LIST_COLUMNS}
       FROM knowledge k
-      LEFT JOIN knowledge_folders f ON f.id = k.folder_id
+      LEFT JOIN knowledge_folders f ON f.id = k.folder_id AND f.user_id = $1
       WHERE ${where.join(' AND ')}
       ORDER BY k.id DESC
     `;

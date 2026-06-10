@@ -285,7 +285,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { getToken, AUTH_CHANGE_EVENT } from '../utils/auth.js'
+import { ref, computed, onMounted, onUnmounted, onActivated, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, ElNotification } from 'element-plus'
 import {
@@ -296,6 +297,12 @@ import { formatZhCnYmdHm, formatZhCnYmd } from '../utils/dateTime.js'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const WEBSITE_REPORTS_API = `${API_BASE_URL}/api/website-reports`
+
+const authHeaders = (json = false) => {
+  const h = { Authorization: `Bearer ${getToken()}` }
+  if (json) h['Content-Type'] = 'application/json'
+  return h
+}
 
 const router = useRouter()
 const route = useRoute()
@@ -432,7 +439,7 @@ const handleStartCheck = async () => {
     // 通过后端 API 检测（解决浏览器 CORS 问题）
     const res = await fetch(`${API_BASE_URL}/api/website-analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({
         url: inputUrl.value,
         apiKey: 'dummy' // 后端服务目前不需要真实 key
@@ -513,8 +520,6 @@ const handleStartCheck = async () => {
   }
   checking.value = false
   if (report.value) {
-    syncToDashboard()
-    // 自动保存到后端
     await autoSaveReport()
   }
 }
@@ -550,7 +555,6 @@ function isValidUrl(url) {
 const autoSaveReport = async () => {
   if (!report.value) return
 
-  const userId = 'default_user'
   const reportData = {
     url: report.value.url,
     score: report.value.score,
@@ -563,7 +567,7 @@ const autoSaveReport = async () => {
   try {
     // 先检查是否已存在相同 URL 的记录
     const checkRes = await fetch(WEBSITE_REPORTS_API, {
-      headers: { 'x-user-id': userId }
+      headers: authHeaders()
     })
     let existingId = null
     if (checkRes.ok) {
@@ -577,26 +581,21 @@ const autoSaveReport = async () => {
       // 存在则更新
       res = await fetch(`${WEBSITE_REPORTS_API}/${existingId}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': userId
-        },
+        headers: authHeaders(true),
         body: JSON.stringify(reportData)
       })
     } else {
       // 不存在则新增
       res = await fetch(WEBSITE_REPORTS_API, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': userId
-        },
+        headers: authHeaders(true),
         body: JSON.stringify(reportData)
       })
     }
 
     if (res.ok) {
-      console.log('✅ 报告已保存到后端')
+      const saved = await res.json()
+      if (saved?.id) report.value = { ...report.value, id: saved.id }
       await loadHistory()
     }
   } catch (e) {
@@ -611,26 +610,8 @@ const handleNewCheck = () => {
 }
 
 const handleSaveReport = async () => {
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-
-  // 保存到历史记录
-  if (!allData['website-reports']) allData['website-reports'] = []
-  allData['website-reports'].unshift({ ...report.value })
-  if (allData['website-reports'].length > 20) allData['website-reports'].pop()
-
-  // 同步最新得分到 Dashboard
-  allData['dashboard-site-score'] = {
-    score: report.value.score,
-    url: report.value.url,
-    updatedAt: report.value.checkedAt
-  }
-
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
-  loadHistory()
-
-  // 同时保存到后端
   await autoSaveReport()
-
+  await loadHistory()
   ElMessage.success({ message: '报告已保存', offset: 80 })
 }
 
@@ -674,41 +655,33 @@ const handleRecheck = async (url) => {
 }
 
 const handleClearHistory = async () => {
-  const userId = 'default_user'
-  // 同步删除后端全部记录
   try {
     await fetch(WEBSITE_REPORTS_API, {
       method: 'DELETE',
-      headers: { 'x-user-id': userId }
+      headers: authHeaders()
     })
   } catch (e) {
     console.warn('从后端删除失败:', e)
   }
-
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  allData['website-reports'] = []
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
   selectedHistory.value = []
-  loadHistory()
+  await loadHistory()
   ElMessage.success({ message: '历史已清空', offset: 80 })
 }
 
 const loadHistory = async () => {
-  const userId = 'default_user'
   try {
     const res = await fetch(WEBSITE_REPORTS_API, {
-      headers: { 'x-user-id': userId }
+      headers: authHeaders()
     })
     if (res.ok) {
       const data = await res.json()
-      // 转换后端数据格式
-      reportHistory.value = Array.isArray(data) ? data.map(r => ({
-        id: r.id, // 后端返回的记录ID
+      reportHistory.value = Array.isArray(data) ? data.map((r) => ({
+        id: r.id,
         url: r.url,
-        score: r.score,
-        items: JSON.parse(r.items || '{}'),
-        issues: JSON.parse(r.issues || '{"warn":[],"pass":[]}'),
-        details: JSON.parse(r.details || '[]'),
+        score: r.score ?? r.overallScore ?? 0,
+        items: typeof r.items === 'string' ? JSON.parse(r.items || '{}') : (r.items || {}),
+        issues: typeof r.issues === 'string' ? JSON.parse(r.issues || '{"warn":[],"pass":[]}') : (r.issues || { warn: [], pass: [] }),
+        details: typeof r.details === 'string' ? JSON.parse(r.details || '[]') : (r.details || []),
         checkedAt: r.checkedAt
       })) : []
       return
@@ -730,45 +703,55 @@ const toggleSelect = (idx) => {
 }
 
 const handleBatchDelete = async () => {
-  const userId = 'default_user'
-
-  // 从后端删除选中的记录
   const idsToDelete = selectedHistory.value.map(i => reportHistory.value[i].id).filter(Boolean)
   for (const id of idsToDelete) {
     try {
       await fetch(`${API_BASE_URL}/api/website-reports/${id}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': userId }
+        headers: authHeaders()
       })
     } catch (e) {
       console.warn('从后端删除失败:', e)
     }
   }
-
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  const filtered = (allData['website-reports'] || []).filter((_, i) => !selectedHistory.value.includes(i))
-  allData['website-reports'] = filtered
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
   selectedHistory.value = []
-  loadHistory()
+  await loadHistory()
   ElMessage.success({ message: '已删除选中的报告', offset: 80 })
 }
 
-// 检查指定记录是否有GEO报告
-const hasGeoReport = (record) => {
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  const geoReport = allData['geo-report']
-  if (!geoReport || !geoReport.generatedAt) return false
-  const geoTime = new Date(geoReport.generatedAt).getTime()
-  const recordTime = record.checkedAt ? new Date(record.checkedAt).getTime() : 0
-  return geoTime >= recordTime - 5000 // 报告生成时间晚于记录时间（5秒容差）
+const latestImprovementMeta = ref(null)
+
+const loadImprovementMeta = async () => {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-improvement-report`, { headers: authHeaders() })
+    if (res.ok) latestImprovementMeta.value = await res.json()
+  } catch {
+    latestImprovementMeta.value = null
+  }
 }
 
-// 跳转到GEO报告（绑定当前选中的历史记录）
+// 检查当前用户是否已基于该检测记录生成过改进方案
+const hasGeoReport = (record) => {
+  const meta = latestImprovementMeta.value
+  if (!meta?.generatedAt || !record?.id) return false
+  const linked = meta.websiteReportIds || []
+  if (linked.length && linked.includes(record.id)) return true
+  const geoTime = new Date(meta.generatedAt).getTime()
+  const recordTime = record.checkedAt ? new Date(record.checkedAt).getTime() : 0
+  return geoTime >= recordTime - 5000
+}
+
+// 跳转到 GEO 改进方案（使用数据库记录 ID）
 const generateReport = () => {
   if (selectedHistory.value.length === 0) return
-  const recordIds = selectedHistory.value.join(',')
-  router.push(`/geo-report?recordId=${recordIds}`)
+  const dbIds = selectedHistory.value
+    .map((i) => reportHistory.value[i]?.id)
+    .filter(Boolean)
+  if (!dbIds.length) {
+    ElMessage.warning('请先保存检测记录后再生成报告')
+    return
+  }
+  router.push(`/geo-report?websiteReportIds=${dbIds.join(',')}`)
 }
 
 const getScoreClass = (score) => {
@@ -790,16 +773,6 @@ const getGradeTagType = (score) => {
   return 'danger'
 }
 
-const syncToDashboard = () => {
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  allData['dashboard-site-score'] = {
-    score: report.value.score,
-    url: report.value.url,
-    updatedAt: report.value.checkedAt
-  }
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
-}
-
 const formatTime = (isoString) => formatZhCnYmdHm(isoString)
 
 watch(
@@ -813,8 +786,25 @@ watch(
   { immediate: true }
 )
 
+const reloadForCurrentUser = async () => {
+  report.value = null
+  selectedHistory.value = []
+  reportHistory.value = []
+  latestImprovementMeta.value = null
+  await Promise.all([loadHistory(), loadImprovementMeta()])
+}
+
 onMounted(() => {
-  loadHistory()
+  reloadForCurrentUser()
+  window.addEventListener(AUTH_CHANGE_EVENT, reloadForCurrentUser)
+})
+
+onActivated(() => {
+  reloadForCurrentUser()
+})
+
+onUnmounted(() => {
+  window.removeEventListener(AUTH_CHANGE_EVENT, reloadForCurrentUser)
 })
 </script>
 

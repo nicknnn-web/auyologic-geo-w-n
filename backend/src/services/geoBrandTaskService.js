@@ -85,7 +85,7 @@ export async function pickApprovedQuestions(pool, { keywordType, keywordTypesIn,
   `;
   if (userId != null && String(userId).trim() !== '') {
     const uid = String(userId).trim();
-    sql += ` AND COALESCE(NULLIF(trim(q.user_id), ''), 'default_user') = $${i}`;
+    sql += ` AND q.user_id = $${i}`;
     params.push(uid);
     i += 1;
   }
@@ -155,7 +155,7 @@ export function extractJsonFromText(text) {
  * geo_health_task.keyword 存创建时的企业品牌名称（与「企业设置」中的公司名称一致），供报告按品牌区分任务。
  */
 async function fetchEnterpriseBrandKeyword(pool, userId) {
-  const uid = String(userId || '').trim() || 'default_user';
+  const uid = String(userId || '').trim();
   const { rows } = await pool.query(`SELECT company_name FROM users WHERE user_id = $1 LIMIT 1`, [uid]);
   const name = String(rows[0]?.company_name || '').trim();
   return name.slice(0, 500);
@@ -181,8 +181,8 @@ async function validateConnectionIdsForUser(pool, userId, ids) {
   }
   const { rows } = await pool.query(
     `SELECT id, provider_key FROM ai_provider_connection
-     WHERE user_id = $1 AND enabled = true AND id = ANY($2::int[])`,
-    [userId, intIds]
+     WHERE enabled = true AND id = ANY($1::int[])`,
+    [intIds]
   );
   const ok = new Set(rows.filter((r) => r.provider_key !== 'bocha').map((r) => r.id));
   const bochaPicked = rows.filter((r) => r.provider_key === 'bocha').map((r) => r.id);
@@ -191,7 +191,7 @@ async function validateConnectionIdsForUser(pool, userId, ids) {
     throw new Error('博查仅用于信源检索，不能作为探针/分析大模型，请在大模型接入中选择对话模型');
   }
   if (invalid.length) {
-    throw new Error(`所选连接不可用或不属于当前用户：${invalid.join(', ')}`);
+    throw new Error(`所选连接不可用或已禁用：${invalid.join(', ')}`);
   }
   return intIds;
 }
@@ -209,8 +209,8 @@ export async function createGeoTaskAndQuestions(pool, { userId, connectionIds, a
   if (analysisId) {
     const { rows } = await pool.query(
       `SELECT id, provider_key FROM ai_provider_connection
-       WHERE user_id = $1 AND enabled = true AND id = $2`,
-      [userId, analysisId]
+       WHERE enabled = true AND id = $1`,
+      [analysisId]
     );
     if (!rows[0]) throw new Error(`分析模型连接不可用：${analysisId}`);
     if (rows[0].provider_key === 'bocha') {

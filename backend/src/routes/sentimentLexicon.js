@@ -27,7 +27,7 @@ import { parsePagination, pagedResponse } from '../pagination.js';
 const router = Router();
 
 function userId(req) {
-  return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+  return req.userId;
 }
 
 function normKeyword(s) {

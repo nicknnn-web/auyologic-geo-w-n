@@ -106,7 +106,7 @@ function resolveForcedSummaryConnectionId() {
 }
 
 /**
- * 解析用于生成总结的大模型连接，优先级：
+ *
  * ① 强制指定（FORCE_SUMMARY_CONNECTION_ID / 环境变量）
  * ② 任务配置的分析模型 analysis_connection_id
  * ③ 该用户第一条 enabled 且非博查的连接
@@ -117,19 +117,17 @@ async function resolveSummaryConnectionId(pool, userId, analysisConnectionId) {
 
   const fromTask = Number(analysisConnectionId);
   if (Number.isFinite(fromTask) && fromTask > 0) return fromTask;
-  const uid = String(userId || 'default_user').trim() || 'default_user';
   const { rows } = await pool.query(
     `SELECT id FROM ai_provider_connection
-     WHERE user_id = $1 AND enabled = true AND provider_key <> 'bocha'
-     ORDER BY id ASC LIMIT 1`,
-    [uid]
+     WHERE enabled = true AND provider_key <> 'bocha'
+     ORDER BY id ASC LIMIT 1`
   );
   const id = rows[0]?.id;
   return Number.isFinite(Number(id)) && Number(id) > 0 ? Number(id) : null;
 }
 
 /**
- * 生成并落库 AI 智能总结。
+ * 【可在此处修改 AI 智能总结使用的模型】
  * @param {import('pg').Pool} pool
  * @param {object} args
  * @param {number} args.taskId

@@ -219,7 +219,7 @@ export async function runBochaSourceSearchForTask(pool, taskId) {
     `SELECT user_id FROM geo_health_task WHERE id = $1 LIMIT 1`,
     [taskId]
   );
-  const taskUserId = taskRows[0]?.user_id || 'default_user';
+  const taskUserId = taskRows[0]?.user_id;
   const bochaCreds = await resolveBochaCredentials(taskUserId);
 
   if (!bochaCreds.apiKey) {

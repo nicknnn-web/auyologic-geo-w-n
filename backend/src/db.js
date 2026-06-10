@@ -41,6 +41,15 @@ export async function initDB() {
         updated_at TIMESTAMP DEFAULT NOW()
       )
     `);
+    // 为 username 创建唯一索引（注册时去重）
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username ON users(username)`
+    ).catch(() => {});
+
+    // 为 email 创建唯一索引（忽略大小写，注册时去重）
+    await client.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email ON users(LOWER(email)) WHERE email IS NOT NULL`
+    ).catch(() => {});
 
     // 创建用户设置表
     await client.query(`
@@ -272,6 +281,19 @@ export async function initDB() {
         overall_score INTEGER DEFAULT 0,
         report JSONB,
         checked_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // GEO 改进方案报告（每用户保留最新一份）
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS geo_improvement_report (
+        user_id VARCHAR(255) PRIMARY KEY,
+        website_report_ids INTEGER[],
+        visibility_score INTEGER DEFAULT 0,
+        tech_score INTEGER DEFAULT 0,
+        combined_score INTEGER DEFAULT 0,
+        report_data JSONB,
+        generated_at TIMESTAMP DEFAULT NOW()
       )
     `);
 
@@ -560,6 +582,27 @@ export async function initDB() {
       `);
       console.log('✅ 已为 default_user 写入情感词种子（正面/中性/负面各 20 条）');
     }
+
+    // 历史数据：无 user_id 的自媒体/投放记录归属 admin（default_user）
+    const legacyOwnedTables = ['media_accounts', 'publish_tasks', 'publish_records'];
+    for (const table of legacyOwnedTables) {
+      const r = await client.query(`
+        UPDATE ${table}
+        SET user_id = 'default_user'
+        WHERE user_id IS NULL OR trim(coalesce(user_id::text, '')) = ''
+      `);
+      if (r.rowCount > 0) {
+        console.log(`✅ [迁移] ${table}: ${r.rowCount} 条记录归属 default_user`);
+      }
+    }
+    await client.query(`
+      UPDATE publish_records pr
+      SET user_id = pt.user_id
+      FROM publish_tasks pt
+      WHERE pr.task_id = pt.id
+        AND (pr.user_id IS NULL OR trim(coalesce(pr.user_id::text, '')) = '')
+        AND pt.user_id IS NOT NULL AND trim(coalesce(pt.user_id::text, '')) <> ''
+    `).catch(() => {});
 
     console.log('✅ 数据库表初始化完成');
   } finally {

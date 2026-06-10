@@ -178,6 +178,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -389,12 +390,12 @@ const handleSelectionChange = (rows) => {
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   const ids = selectedRows.value.map((row) => row.id)
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   for (const id of ids) {
     try {
       await fetch(`${API_BASE_URL}/api/drafts/${id}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': userId },
+        headers: { 'Authorization': 'Bearer ' + getToken() },
       })
     } catch (e) {
       console.warn(`删除草稿 ${id} 失败:`, e)
@@ -420,11 +421,11 @@ const handlePublish = () => {
 }
 
 const handleDelete = async (id) => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   try {
     await fetch(`${API_BASE_URL}/api/drafts/${id}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': userId },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
   } catch (e) {
     console.warn(`删除草稿 ${id} 失败:`, e)

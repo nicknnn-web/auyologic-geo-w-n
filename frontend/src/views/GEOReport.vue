@@ -210,11 +210,17 @@ import { ElMessage } from 'element-plus'
 import { DataAnalysis, Histogram, Monitor, RefreshRight, Document, WarningFilled, Flag, TrendCharts, View, Cpu, DataLine, List, DocumentCopy, Download, ArrowLeft } from '@element-plus/icons-vue'
 import { GEO_REPORT_SYSTEM_PROMPT, buildGeoReportPrompt } from '../prompts/index.js'
 import { formatZhCnDateTime, formatZhCnYmd } from '../utils/dateTime.js'
-
+import { getToken } from '../utils/auth.js'
+import { getUserLocalData } from '../utils/userStorage.js'
 
 // API配置
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 const AI_PROXY_URL = `${API_BASE_URL}/api/ai/generate`
+
+const authHeaders = () => ({
+  'Content-Type': 'application/json',
+  Authorization: `Bearer ${getToken()}`,
+})
 
 const router = useRouter()
 const route = useRoute()
@@ -254,45 +260,66 @@ const getSeverityName = (severity) => {
   return map[severity] || severity
 }
 
-// 加载检测数据
-// recordId: 可选，逗号分隔的 website-reports 数组索引，支持单条或多条（多条的techScore取加权平均）
-const loadDetectionData = (recordId) => {
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  const geoResult = allData['geo-detection-result'] || null
-  if (geoResult) {
-    visibilityScore.value = geoResult.overallScore || 0
+const loadedWebsiteReports = ref([])
+
+/** 从后端拉取当前用户可见度得分（最新 geo_reports） */
+async function fetchVisibilityScore() {
+  const local = getUserLocalData()['geo-detection-result']
+  if (local?.overallScore) {
+    visibilityScore.value = Number(local.overallScore) || 0
+  }
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-reports`, { headers: authHeaders() })
+    if (!res.ok) return
+    const rows = await res.json()
+    if (Array.isArray(rows) && rows.length > 0) {
+      visibilityScore.value = Number(rows[0].overallScore) || visibilityScore.value
+    }
+  } catch (e) {
+    console.warn('加载可见度检测数据失败:', e)
+  }
+}
+
+/** 按数据库 ID 拉取当前用户的网站优化报告 */
+async function fetchWebsiteReportsByIds(idParam) {
+  const idStr = String(idParam || '').trim()
+  if (!idStr) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/website-reports`, { headers: authHeaders() })
+      if (res.ok) {
+        const rows = await res.json()
+        loadedWebsiteReports.value = Array.isArray(rows) ? rows : []
+        if (loadedWebsiteReports.value.length > 0) {
+          techScore.value = Number(loadedWebsiteReports.value[0].score) || 0
+        }
+      }
+    } catch (e) {
+      console.warn('加载网站优化报告失败:', e)
+    }
+    return
   }
 
-  const websiteReports = allData['website-reports'] || []
-
-  if (recordId !== undefined && recordId !== null && recordId !== '') {
-    // 有 recordId：精确加载指定记录（支持逗号分隔多ID，取加权平均）
-    const ids = recordId.split(',').map(i => parseInt(i.trim())).filter(i => !isNaN(i) && websiteReports[i])
-    if (ids.length > 0) {
-      const totalWeight = ids.length
-      const avgTechScore = ids.reduce((sum, i) => sum + (websiteReports[i].score || 0), 0) / totalWeight
-      techScore.value = Math.round(avgTechScore)
-    } else {
-      // ID无效，兜底
-      if (websiteReports.length > 0) {
-        techScore.value = websiteReports[0].score || 0
-      } else {
-        const siteScore = allData['dashboard-site-score']
-        techScore.value = siteScore ? siteScore.score || 0 : 0
-      }
-    }
-  } else {
-    // 无 recordId：兜底逻辑（取最新）
-    if (websiteReports.length > 0) {
-      techScore.value = websiteReports[0].score || 0
-    } else {
-      const siteScore = allData['dashboard-site-score']
-      if (siteScore) {
-        techScore.value = siteScore.score || 0
-      }
+  const ids = idStr.split(',').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n))
+  const reports = []
+  for (const id of ids) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/website-reports/${id}`, { headers: authHeaders() })
+      if (res.ok) reports.push(await res.json())
+    } catch (e) {
+      console.warn(`加载网站报告 ${id} 失败:`, e)
     }
   }
+  loadedWebsiteReports.value = reports
+  if (reports.length > 0) {
+    const avg = reports.reduce((sum, r) => sum + (Number(r.score) || 0), 0) / reports.length
+    techScore.value = Math.round(avg)
+  }
+}
 
+// websiteReportIds / recordId：逗号分隔的数据库 ID（兼容旧 query 名 recordId）
+const loadDetectionData = async (websiteReportIds) => {
+  await fetchVisibilityScore()
+  await fetchWebsiteReportsByIds(websiteReportIds)
   combinedScore.value = Math.round(visibilityScore.value * 0.4 + techScore.value * 0.6)
   hasData.value = visibilityScore.value > 0 || techScore.value > 0
 }
@@ -307,16 +334,11 @@ const generateReport = async () => {
   generating.value = true
 
   try {
-    const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-    const geoResult = allData['geo-detection-result'] || {}
-    const websiteReports = allData['website-reports'] || []
-    const recordId = route.query.recordId
-    let techReportToUse = websiteReports[0] || null
-    if (recordId) {
-      const ids = recordId.split(',').map(i => parseInt(i.trim())).filter(i => !isNaN(i))
-      if (ids.length > 0 && websiteReports[ids[0]]) {
-        techReportToUse = websiteReports[ids[0]]
-      }
+    const geoResult = getUserLocalData()['geo-detection-result'] || {}
+    const websiteReportIds = route.query.websiteReportIds || route.query.recordId
+    let techReportToUse = loadedWebsiteReports.value[0] || null
+    if (websiteReportIds && loadedWebsiteReports.value.length > 0) {
+      techReportToUse = loadedWebsiteReports.value[0]
     }
 
     const detectionData = {
@@ -337,7 +359,7 @@ const generateReport = async () => {
     const aiReport = await generateAIReport(detectionData)
 
     reportData.value = { ...aiReport, detectionData: detectionData }
-    saveReportToStorage()
+    await saveReportToStorage()
 
     ElMessage.success('报告生成成功')
   } catch (error) {
@@ -355,7 +377,7 @@ const generateAIReport = async (detectionData) => {
   try {
     const response = await fetch(AI_PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify({
         model: 'deepseek-v4-flash',
         systemPrompt: GEO_REPORT_SYSTEM_PROMPT,
@@ -414,17 +436,36 @@ const getDefaultReport = (detectionData) => {
   }
 }
 
-// 保存报告
-const saveReportToStorage = () => {
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  const recordId = route.query.recordId
-  allData['geo-report'] = {
+// 保存报告到后端（按当前用户隔离）
+const saveReportToStorage = async () => {
+  const websiteReportIds = route.query.websiteReportIds || route.query.recordId
+  const ids = String(websiteReportIds || '')
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n))
+  const generatedAt = new Date().toISOString()
+  const payload = {
     ...reportData.value,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     scores: { combined: combinedScore.value, visibility: visibilityScore.value, tech: techScore.value },
-    recordId: recordId || null
+    websiteReportIds: ids,
   }
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
+  try {
+    await fetch(`${API_BASE_URL}/api/geo-improvement-report`, {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        websiteReportIds: ids,
+        visibilityScore: visibilityScore.value,
+        techScore: techScore.value,
+        combinedScore: combinedScore.value,
+        reportData: payload,
+        generatedAt,
+      }),
+    })
+  } catch (e) {
+    console.warn('保存改进方案报告失败:', e)
+  }
 }
 
 // 复制报告
@@ -497,13 +538,24 @@ const goToGEODetection = () => router.push('/geo-detection')
 const goToWebsiteOptimization = () => router.push('/website-optimization')
 
 // 初始化
-onMounted(() => {
-  const recordId = route.query.recordId
-  loadDetectionData(recordId)
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  const savedReport = allData['geo-report']
-  if (savedReport && savedReport.scores) {
-    reportData.value = savedReport
+onMounted(async () => {
+  const websiteReportIds = route.query.websiteReportIds || route.query.recordId
+  await loadDetectionData(websiteReportIds)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/geo-improvement-report`, { headers: authHeaders() })
+    if (res.ok) {
+      const savedReport = await res.json()
+      if (savedReport && (savedReport.scores || savedReport.executiveSummary)) {
+        reportData.value = savedReport
+        if (savedReport.scores) {
+          combinedScore.value = savedReport.scores.combined ?? combinedScore.value
+          visibilityScore.value = savedReport.scores.visibility ?? visibilityScore.value
+          techScore.value = savedReport.scores.tech ?? techScore.value
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('加载已保存改进方案失败:', e)
   }
 })
 </script>

@@ -1143,6 +1143,240 @@ async function _toutiaoSubmitPublish(page, taskId) {
   return publishedUrl;
 }
 
+const BAIJIAHAO_PUBLISH_URL =
+  'https://baijiahao.baidu.com/builder/rc/edit?type=news&is_from_cms=1';
+
+function _isBaijiahaoSessionExpired(url) {
+  const u = String(url || '');
+  if (u.includes('passport.baidu.com')) return true;
+  return u.includes('baijiahao.baidu.com') && (u.includes('/login') || u.includes('/bjh/login'));
+}
+
+/** 按按钮文案点击（百家号发布页按钮类名多变） */
+async function _clickButtonByTexts(page, taskId, texts, logPrefix) {
+  for (const text of texts) {
+    const hit = await page.evaluate((label) => {
+      const nodes = [
+        ...document.querySelectorAll('button, a, [role="button"], span[class*="btn"], div[class*="btn"]'),
+      ];
+      for (const el of nodes) {
+        const t = (el.textContent || '').replace(/\s/g, '');
+        if (!t.includes(label)) continue;
+        if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+        if (el.offsetParent === null) continue;
+        el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        el.click();
+        return true;
+      }
+      return false;
+    }, text);
+    if (hit) {
+      appendLog(taskId, `${logPrefix}「${text}」`);
+      await afterHumanClick();
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 百度百家号 · 图文发布
+ */
+async function runPublishBaijiahao(taskInfo) {
+  const { taskId, sessionState, content, title, tags } = taskInfo;
+  appendLog(taskId, '正在启动浏览器…');
+
+  const { browser, page } = await _createBrowserSession(taskId, sessionState);
+
+  try {
+    appendLog(taskId, '正在打开百度百家号图文编辑页…');
+    await page.goto(BAIJIAHAO_PUBLISH_URL, {
+      waitUntil: 'domcontentloaded',
+      timeout: 45000,
+    });
+    await randomDelay(2500, 4000);
+
+    if (_isBaijiahaoSessionExpired(page.url())) {
+      throw new Error('SESSION_EXPIRED:百度百家号登录状态已失效，请在账号管理页重新授权');
+    }
+
+    appendLog(taskId, '已进入编辑页，开始填写图文…');
+
+    const safeTitle = (title || '未命名文章').slice(0, 30);
+    await _baijiahaoFillTitle(page, taskId, safeTitle);
+    await afterHumanClick();
+    await _baijiahaoFillContent(page, taskId, content || '');
+    await afterHumanClick();
+
+    if (tags && String(tags).trim()) {
+      appendLog(taskId, 'ℹ️ 百度百家号图文暂不支持话题标签字段，已忽略 tags');
+    }
+
+    await _baijiahaoSyncEditorState(page, taskId);
+    const publishedUrl = await _baijiahaoSubmitPublish(page, taskId);
+
+    appendLog(taskId, `✅ 百度百家号发布成功！链接：${publishedUrl || '（请在百家号内容管理查看）'}`);
+    return {
+      publishedUrl: publishedUrl || 'https://baijiahao.baidu.com/builder/rc/content',
+    };
+  } catch (err) {
+    appendLog(taskId, `❌ 百度百家号发布失败：${err.message}`);
+    throw err;
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+async function _baijiahaoFillTitle(page, taskId, title) {
+  if (!title) return;
+  appendLog(taskId, `正在填写标题：${title}`);
+  const selectors = [
+    'textarea[placeholder*="标题"]',
+    'input[placeholder*="标题"]',
+    '[class*="title"] textarea',
+    '[class*="title"] input',
+    '#title',
+    '[data-testid*="title"]',
+  ];
+  for (const sel of selectors) {
+    const input = await page.$(sel);
+    if (!input) continue;
+    await input.click();
+    await afterHumanClick();
+    await input.fill('');
+    await input.type(title, { delay: 35 + Math.random() * 35 });
+    appendLog(taskId, '标题填写完成');
+    return;
+  }
+  const filled = await page.evaluate((t) => {
+    for (const el of document.querySelectorAll('textarea, input[type="text"]')) {
+      const ph = (el.getAttribute('placeholder') || '').toLowerCase();
+      if (!ph.includes('标题') && !ph.includes('title')) continue;
+      el.focus();
+      el.value = t;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, title);
+  if (filled) appendLog(taskId, '标题填写完成（备用方式）');
+  else appendLog(taskId, '⚠️ 未找到标题输入框');
+}
+
+async function _baijiahaoFillContent(page, taskId, content) {
+  if (!content) return;
+  const plainContent = htmlToPlainText(content);
+  if (plainContent !== content) {
+    appendLog(taskId, '正文含 HTML 标签，已转为纯文本再填入编辑器');
+  }
+  appendLog(taskId, '正在填写正文…');
+  const selectors = [
+    '.ProseMirror[contenteditable="true"]',
+    '.public-DraftEditor-content[contenteditable="true"]',
+    '[contenteditable="true"][class*="editor"]',
+    '.editor-content [contenteditable="true"]',
+    'iframe[id*="editor"]',
+    '[contenteditable="true"]',
+  ];
+  for (const sel of selectors) {
+    if (sel.includes('iframe')) {
+      const frame = page.frameLocator(sel).first();
+      const body = frame.locator('body[contenteditable="true"], [contenteditable="true"]').first();
+      if (await body.count().catch(() => 0)) {
+        await body.click();
+        await page.keyboard.type(plainContent.slice(0, 5000), { delay: 10 });
+        appendLog(taskId, '正文填写完成（iframe 编辑器）');
+        return;
+      }
+      continue;
+    }
+    const editors = await page.$$(sel);
+    for (const editor of editors) {
+      const box = await editor.boundingBox();
+      if (!box || box.height < 60) continue;
+      await editor.click();
+      await afterHumanClick();
+      await page.keyboard.press('Control+a');
+      await randomDelay(200, 400);
+      const chunks = plainContent.match(/.{1,200}/gs) || [plainContent];
+      for (const chunk of chunks) {
+        await editor.type(chunk, { delay: 12 + Math.random() * 12 });
+      }
+      appendLog(taskId, '正文填写完成');
+      return;
+    }
+  }
+  appendLog(taskId, '⚠️ 未找到正文编辑框');
+}
+
+async function _baijiahaoSyncEditorState(page, taskId) {
+  try {
+    await page.evaluate(() => {
+      for (const el of document.querySelectorAll('[contenteditable="true"], textarea, input')) {
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+      }
+    });
+    await page.keyboard.press('Tab').catch(() => {});
+    await afterHumanClick();
+    appendLog(taskId, '已同步编辑器状态');
+  } catch (err) {
+    appendLog(taskId, `⚠️ 同步编辑器状态：${err.message}`);
+  }
+}
+
+async function _baijiahaoSubmitPublish(page, taskId) {
+  appendLog(taskId, '正在查找发布按钮…');
+
+  const previewClicked = await _clickButtonByTexts(
+    page,
+    taskId,
+    ['预览并发布', '下一步', '继续发布'],
+    '已点击'
+  );
+
+  if (!previewClicked) {
+    appendLog(taskId, '未找到预览步骤按钮，尝试直接发布…');
+  }
+
+  const publishClicked = await _clickButtonByTexts(
+    page,
+    taskId,
+    ['确认发布', '立即发布', '发布', '发表', '提交'],
+    '已点击'
+  );
+
+  if (!publishClicked) {
+    throw new Error('未找到可点击的发布按钮，请确认标题/正文已填写且账号有发稿权限');
+  }
+
+  let publishedUrl = '';
+  try {
+    await page.waitForURL(
+      (url) => {
+        const s = String(url);
+        return (
+          s.includes('baijiahao.baidu.com') &&
+          !_isBaijiahaoSessionExpired(s) &&
+          (!s.includes('/edit') || s.includes('/content') || s.includes('/manage'))
+        );
+      },
+      { timeout: 60000 }
+    );
+    publishedUrl = page.url();
+  } catch {
+    appendLog(taskId, '⚠️ 等待发布跳转超时，尝试读取页面链接…');
+    publishedUrl = page.url();
+    const link = await page.$('a[href*="baijiahao.baidu.com"], a[href*="mbd.baidu.com"]');
+    if (link) {
+      const href = await link.getAttribute('href');
+      if (href) publishedUrl = href.startsWith('http') ? href : `https://baijiahao.baidu.com${href}`;
+    }
+  }
+  return publishedUrl;
+}
+
 /** 内部分发逻辑：根据平台路由到对应发布函数 */
 async function _runPublish(taskInfo) {
   const platform = normalizePublishPlatform(taskInfo.platform);
@@ -1159,8 +1393,11 @@ async function _runPublish(taskInfo) {
   if (platform === '今日头条') {
     return await runPublishToutiao(payload);
   }
+  if (platform === '百度百家号') {
+    return await runPublishBaijiahao(payload);
+  }
   throw new Error(
-    `暂不支持 ${taskInfo.platform || platform} 平台的自动发布（支持：小红书、知乎、微博、今日头条）`
+    `暂不支持 ${taskInfo.platform || platform} 平台的自动发布（支持：小红书、知乎、微博、今日头条、百度百家号）`
   );
 }
 

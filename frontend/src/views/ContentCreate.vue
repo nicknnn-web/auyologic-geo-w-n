@@ -358,6 +358,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -853,7 +854,7 @@ const selectedCommand = computed(() => {
 })
 
 onMounted(async () => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
 
   await loadContentDicts()
 
@@ -861,7 +862,7 @@ onMounted(async () => {
   try {
     const rawKeywords = await fetchAllPages(
       (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
-      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+      { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
     )
     keywords.value = dedupeKeywordOptions(rawKeywords)
   } catch {
@@ -873,7 +874,7 @@ onMounted(async () => {
   try {
     const tplList = await fetchAllPages(
       (p, ps) => `${API_BASE_URL}/api/instruction-templates?page=${p}&pageSize=${ps}`,
-      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+      { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
     )
     commands.value = migrateCommands(tplList)
   } catch {
@@ -1606,10 +1607,10 @@ const performSaveDraft = async (folderId) => {
     ...(folderId != null ? { folderId } : {}),
   }
 
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const headers = {
     'Content-Type': 'application/json',
-    'x-user-id': userId,
+    'Authorization': 'Bearer ' + getToken(),
   }
 
   const isUpdate =

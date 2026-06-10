@@ -209,10 +209,10 @@ function applyFreshVendorLogos(payload, vendorLogoMap) {
 // - 强制红：  negative_risk / hijack_risk
 //
 // 前端根据返回的 state 字段渲染对应配色与文案
-
 function clamp100(n) {
   return Math.min(100, Math.max(0, Math.round(n || 0)));
 }
+
 
 // 判断信源是否属于"可信"（用于 authorityScore 分子）
 const CREDIBLE_SOURCE_HINTS = ['官网', '媒体', '百科', '认证', '官方', '新闻', '期刊'];
@@ -263,7 +263,7 @@ async function loadCompetitorDetailRows(pool, taskId, competitorName = null) {
   return pool.query(`${COMP_DETAIL_SELECT} ${COMP_DETAIL_FROM}`, [taskId]);
 }
 
-/** 将明细行聚合成前端「竞品详情面板」单条对象 */
+/** 拉取竞品展开明细行（可选仅某一竞品名） */
 function buildCompetitorDetailPayload(name, count, pct, detailRows) {
   const pushQuestion = (bucket, r) => {
     const key = String(r.question_id ?? '');
@@ -369,11 +369,12 @@ async function resolveCompletedReportTask(pool, userId, { taskId: requestedTaskI
 }
 
 // ─────────────────────────────────────────────
-// 主路由
+
 // ─────────────────────────────────────────────
+// 主路由
 router.get('/geo-health-report', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const requestedTaskId = parseInt(String(req.query.taskId ?? ''), 10);
     const explicitTaskId =
       Number.isFinite(requestedTaskId) && requestedTaskId > 0 ? requestedTaskId : null;
@@ -412,9 +413,7 @@ router.get('/geo-health-report', async (req, res) => {
 
     const logoConnRes = await pool.query(
       `SELECT vendor_name, logo_relpath, logo_bg_color
-       FROM ai_provider_connection
-       WHERE user_id = $1`,
-      [userId]
+       FROM ai_provider_connection`
     );
     const vendorLogoMap = buildVendorLogoMap(logoConnRes.rows);
 
@@ -471,8 +470,8 @@ router.get('/geo-health-report', async (req, res) => {
     });
 
     // modelVisibilityCards 在 KPI（拦截/负面/品牌行业）算完后按「单模型」生成，见下方
-
     // ── 2. KPI ──
+
 
     // 2a. 首行心智拦截率（visibility=visible 占比，分母：仅开放式提问 category='open'，不足降级为全部）
     //   开放式提问 = 场景词 / 功能词 / 价格词（排除品牌词 brand 和对比词 compare）
@@ -495,6 +494,7 @@ router.get('/geo-health-report', async (req, res) => {
     const kpiDenominator = (kpiOpenRes.rows[0].total > 0) ? 'open_only' : 'all_fallback';
     const interceptRate = clamp100(kpiRow.intercept_rate);
     const totalChecks   = kpiAllRes.rows[0].total;
+
 
     // 2a-ext. 品牌提及率 vs 行业品牌提及率（仅开放式提问）
     //   指标A/B 分母 open_total：分析成功条数（题×模型）
@@ -533,6 +533,7 @@ router.get('/geo-health-report', async (req, res) => {
       ? clamp100((brandMentionCount / openMentionTotal) * 100) : 0;
     const industryMentionRate = openMentionTotal > 0
       ? clamp100((industryMentionCount / openMentionTotal) * 100) : 0;
+
 
     // 2b. 大模型盲区指数
     //   定义：针对单一模型，若该模型在所有开放式提问（category='open'）回答中均未提及品牌，
@@ -585,6 +586,7 @@ router.get('/geo-health-report', async (req, res) => {
           : negativeRatio < 0.3
             ? '高风险'
             : '超高风险';
+
 
     // 各模型可见度卡片 + 按大模型的 AI 健康分（与核心指标同一套任务级 KPI，仅「可见度」为当前模型得分）
     const modelVisibilityCards = mvRes.rows.map((r) => {
@@ -815,7 +817,7 @@ router.get('/geo-health-report', async (req, res) => {
 
 router.patch('/geo-health-report/diagnostic-suggestions', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.body?.taskId ?? ''), 10);
     const suggestionsByItem = sanitizeSuggestionsByItem(req.body?.suggestionsByItem);
     if (!Number.isFinite(taskId) || taskId <= 0) {
@@ -844,7 +846,7 @@ router.patch('/geo-health-report/diagnostic-suggestions', async (req, res) => {
 /** 生成/重新生成「AI 智能总结」（结果解读）。基于已缓存的报告 payload 调用任务配置的分析模型。 */
 router.post('/geo-health-report/ai-summary', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.body?.taskId ?? ''), 10);
     if (!Number.isFinite(taskId) || taskId <= 0) {
       return res.status(400).json({ success: false, error: '需要有效的 taskId' });
@@ -880,7 +882,7 @@ router.post('/geo-health-report/ai-summary', async (req, res) => {
  */
 router.get('/geo-health-report/sentiment-sources', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.query.taskId ?? ''), 10);
     const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize ?? '10'), 10) || 10));
@@ -924,7 +926,7 @@ router.get('/geo-health-report/sentiment-sources', async (req, res) => {
  */
 router.get('/geo-health-report/source-articles', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.query.taskId ?? ''), 10);
     const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize ?? '10'), 10) || 10));
@@ -1009,7 +1011,7 @@ router.get('/geo-health-report/source-articles', async (req, res) => {
  */
 router.get('/geo-health-report/source-stats', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.query.taskId ?? ''), 10);
     if (!Number.isFinite(taskId) || taskId <= 0) {
       return res.status(400).json({ success: false, error: '需要有效的 taskId 查询参数' });
@@ -1038,7 +1040,7 @@ router.get('/geo-health-report/source-stats', async (req, res) => {
  */
 router.get('/geo-health-report/task-qa', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.query.taskId ?? ''), 10);
     if (!Number.isFinite(taskId) || taskId <= 0) {
       return res.status(400).json({ success: false, error: '需要有效的 taskId 查询参数' });
@@ -1121,7 +1123,7 @@ router.get('/geo-health-report/task-qa', async (req, res) => {
  */
 router.get('/geo-health-report/competitor', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.query.taskId ?? ''), 10);
     const name = String(req.query.name ?? '').trim();
     if (!Number.isFinite(taskId) || taskId <= 0 || !name) {
@@ -1170,7 +1172,6 @@ router.get('/geo-health-report/competitor', async (req, res) => {
 // ─────────────────────────────────────────────
 
 /**
- * 开放式（场景/功能/价格）单元格规则
  * 赋分：T0=3 / T1=1 / T2=0；T3 触发风险
  * 均分阈值：≥2.5 → 行业首位；[1,2.5) → 头部梯队；(0,1) → 认知偏少；=0 → 心智缺失
  * 风险触发：任意 T3 → 强制 negative_risk（红）
@@ -1275,7 +1276,7 @@ function buildModelBullets({ score, total, visibleCount }) {
  */
 router.get('/geo-health-report/history', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const brandQ = String(req.query.brand ?? req.query.q ?? '').trim();
     const dateFrom = String(req.query.dateFrom ?? '').trim();
     const dateTo = String(req.query.dateTo ?? '').trim();
@@ -1356,11 +1357,11 @@ router.get('/geo-health-report/history', async (req, res) => {
 });
 
 /**
- * 删除已完成的历史报告任务（级联分析、词云、缓存等）
+ * 单个竞品详情（问题类型、模型、情感分布、各桶源问题列表）
  */
 router.delete('/geo-health-report/history/:taskId', async (req, res) => {
   try {
-    const userId = req.headers['x-user-id'] || 'default_user';
+    const userId = req.userId;
     const taskId = parseInt(String(req.params.taskId ?? ''), 10);
     if (!Number.isFinite(taskId) || taskId <= 0) {
       return res.status(400).json({ success: false, error: '无效的任务 id' });

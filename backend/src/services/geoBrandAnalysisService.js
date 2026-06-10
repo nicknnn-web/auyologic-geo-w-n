@@ -322,7 +322,7 @@ export async function runAllAnalysisForTask(pool, taskId) {
   }
 
   // 读取企业名称 —— 必须有值，否则分析结果无意义，直接中断
-  const brand = await fetchBrandName(pool);
+  const brand = await fetchBrandName(pool, taskRow.user_id);
   if (!brand) {
     const warnMsg = '请先在「企业设置」中配置品牌名称（企业名称），再生成体检报告';
     console.warn(`[geo-analysis] task=${taskId} 中断：${warnMsg}`);
@@ -409,10 +409,11 @@ export async function runAllAnalysisForTask(pool, taskId) {
 // ─────────────────────────────────────────────
 
 /** 从 users 表读取企业名称，失败时返回空字符串 */
-async function fetchBrandName(pool) {
+async function fetchBrandName(pool, userId) {
   try {
     const { rows } = await pool.query(
-      `SELECT company_name FROM users WHERE user_id = 'default_user' LIMIT 1`
+      `SELECT company_name FROM users WHERE user_id = $1 LIMIT 1`,
+      [userId]
     );
     return String(rows[0]?.company_name || '').trim();
   } catch {

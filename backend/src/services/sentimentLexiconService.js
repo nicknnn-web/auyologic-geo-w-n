@@ -20,7 +20,7 @@ export function isSentimentKeywordLengthValid(s) {
  * @returns {Promise<{ positive: string[]; neutral: string[]; negative: string[] }>}
  */
 export async function loadSentimentLexiconForPrompt(pool, userId) {
-  const uid = String(userId || 'default_user').trim() || 'default_user';
+  const uid = String(userId || '').trim() || 'unknown';
   let rows = [];
   try {
     const res = await pool.query(

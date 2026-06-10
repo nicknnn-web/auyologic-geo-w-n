@@ -59,6 +59,22 @@ const PLATFORM_CONFIG = {
     },
     sessionCookieName: 'sessionid',
   },
+  '百度百家号': {
+    baseUrl: 'https://baijiahao.baidu.com',
+    loginUrl: 'https://baijiahao.baidu.com/builder/theme/bjh/login',
+    loginSuccessCheck: (url) => {
+      try {
+        const u = new URL(url);
+        if (!u.hostname.includes('baijiahao.baidu.com')) return false;
+        const p = u.pathname.toLowerCase();
+        if (p.includes('/login') || p.includes('/bjh/login')) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    sessionCookieName: 'BDUSS',
+  },
 };
 
 // 内存中的活跃浏览器会话（accountId -> session）
@@ -140,7 +156,7 @@ export async function startAuth(accountId, platform, phoneNumber) {
     if (platformKey === '小红书' && phoneNumber) {
       await autoFillXhsPhone(page, phoneNumber, session);
     }
-    if (platformKey === '今日头条') {
+    if (platformKey === '今日头条' || platformKey === '百度百家号') {
       session.status = 'waiting_qr_scan';
     }
 

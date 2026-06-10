@@ -14,9 +14,13 @@ const ALIASES = {
   '头条号': '今日头条',
   '今日头条': '今日头条',
   jinritoutiao: '今日头条',
+  baijiahao: '百度百家号',
+  bjh: '百度百家号',
+  '百家号': '百度百家号',
+  '百度百家号': '百度百家号',
 };
 
-const SUPPORTED = new Set(['小红书', '知乎', '微博', '今日头条']);
+const SUPPORTED = new Set(['小红书', '知乎', '微博', '今日头条', '百度百家号']);
 
 export function normalizePublishPlatform(platform) {
   const raw = String(platform || '').trim();

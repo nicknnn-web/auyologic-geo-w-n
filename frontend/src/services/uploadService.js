@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getToken, clearAuth } from '../utils/auth.js'
 
 /**
  * 统一文件上传服务
@@ -15,13 +16,22 @@ const uploadService = axios.create({
 })
 
 uploadService.interceptors.request.use(config => {
-  config.headers['x-user-id'] = 'default_user'
+  const token = getToken()
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`
+  }
   return config
 })
 
 uploadService.interceptors.response.use(
   response => response.data,
   error => {
+    if (error.response?.status === 401) {
+      clearAuth()
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login'
+      }
+    }
     const msg = error.response?.data?.error || error.message || '上传失败'
     console.error('Upload Error:', msg)
     throw new Error(msg)
@@ -259,7 +269,7 @@ export function validateFileSize(file, maxSizeMB = 10) {
 export async function initializeMinIO() {
   try {
     const response = await axios.get(`${BASE_URL}/api/minio/init`, {
-      headers: { 'x-user-id': 'default_user' },
+      headers: { 'Authorization': `Bearer ${getToken()}` },
       timeout: 30000,
     })
     return response.data

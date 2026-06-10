@@ -21,7 +21,7 @@ export function isWordCloudPersistInFlight(taskId) {
 }
 
 async function loadEnterpriseCtxForUser(pool, userId) {
-  const uid = String(userId || 'default_user').trim() || 'default_user';
+  const uid = String(userId || '').trim() || 'unknown';
   const entRes = await pool.query(
     `SELECT company_name, industry, description, target_audience FROM users WHERE user_id = $1 LIMIT 1`,
     [uid]
@@ -99,7 +99,7 @@ export async function awaitWordCloudPersistIfRunning(taskId) {
  * @returns {Promise<number|null>}
  */
 export async function resolveLatestReportTaskId(pool, userId) {
-  const uid = String(userId || 'default_user').trim() || 'default_user';
+  const uid = String(userId || '').trim() || 'unknown';
   const ent = await pool.query(
     `SELECT company_name FROM users WHERE user_id = $1 LIMIT 1`,
     [uid]
@@ -162,7 +162,7 @@ export async function loadPersistedWordCloudPayload(pool, taskId) {
  */
 export async function persistAiWordCloudForTask(pool, taskId, userId, enterpriseCtx) {
   const tid = Number(taskId);
-  const uid = String(userId || 'default_user').trim() || 'default_user';
+  const uid = String(userId || '').trim() || 'unknown';
   if (!Number.isFinite(tid) || tid <= 0) return { ok: false, error: 'invalid taskId' };
 
   const { rows } = await pool.query(

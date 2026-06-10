@@ -1,19 +1,30 @@
 /**
  * 系统字典：GET /api/sys-dict?dictType=xxx
+ * 全站共享，不按用户隔离
  * 返回 [{ dataKey, dataValue, sortOrder }, ...]
  */
 import { unwrapListPayload, DEFAULT_PAGE_SIZE } from './pagedApi.js'
 import { placeholderKeywordTypeOptions } from '../config/keywordTypeSemantics.js'
+import { getToken } from './auth.js'
 
 export function getApiBase() {
   return window.VITE_API_URL || window.location.origin
+}
+
+function dictAuthHeaders(json = false) {
+  const headers = {}
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  if (json) headers['Content-Type'] = 'application/json'
+  return headers
 }
 
 export async function fetchDictList(dictType) {
   if (!dictType) return []
   try {
     const res = await fetch(
-      `${getApiBase()}/api/sys-dict?dictType=${encodeURIComponent(dictType)}`
+      `${getApiBase()}/api/sys-dict?dictType=${encodeURIComponent(dictType)}`,
+      { headers: dictAuthHeaders() }
     )
     if (!res.ok) return []
     const data = await res.json()
@@ -114,7 +125,7 @@ export function dictTypeCellDisplay(key) {
  */
 export async function fetchDictTypes() {
   try {
-    const res = await fetch(`${getApiBase()}/api/sys-dict/types`)
+    const res = await fetch(`${getApiBase()}/api/sys-dict/types`, { headers: dictAuthHeaders() })
     if (!res.ok) return []
     const data = await res.json()
     const types = data.types
@@ -134,6 +145,22 @@ export async function fetchDictTypes() {
   }
 }
 
+/**
+ * 新增条目时建议的 sort_order：取该类型下当前最大值 + 10（无条目时默认 10）
+ * 走管理端 entries 接口，含已禁用条目，避免排序与已有记录冲突
+ */
+export async function suggestNextDictSortOrder(dictType) {
+  const key = String(dictType || '').trim()
+  if (!key) return 0
+  const { list } = await fetchDictEntries(key, { page: 1, pageSize: 5000 })
+  if (!list.length) return 10
+  const max = Math.max(
+    0,
+    ...list.map((r) => Number(r.sortOrder ?? r.sort_order ?? 0) || 0)
+  )
+  return max + 10
+}
+
 /** 管理端：条目列表（服务端分页），dictType 为空则不按类型筛选 */
 export async function fetchDictEntries(dictType, { page = 1, pageSize = DEFAULT_PAGE_SIZE } = {}) {
   try {
@@ -142,7 +169,7 @@ export async function fetchDictEntries(dictType, { page = 1, pageSize = DEFAULT_
       pageSize: String(pageSize),
     })
     if (dictType != null && dictType !== '') qs.set('dictType', dictType)
-    const res = await fetch(`${getApiBase()}/api/sys-dict/entries?${qs}`)
+    const res = await fetch(`${getApiBase()}/api/sys-dict/entries?${qs}`, { headers: dictAuthHeaders() })
     if (!res.ok) return { list: [], total: 0, page: 1, pageSize }
     const data = await res.json()
     return unwrapListPayload(data)

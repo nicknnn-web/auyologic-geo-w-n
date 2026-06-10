@@ -7,7 +7,7 @@ import pool from '../db.js';
 const router = Router();
 
 function getUserId(req) {
-  return (req.get('x-user-id') || 'default_user').trim() || 'default_user';
+  return req.userId;
 }
 
 function toCamelCase(obj) {

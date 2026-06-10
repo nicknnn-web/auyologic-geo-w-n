@@ -8,7 +8,7 @@ import { buildHealthReportPdfBuffer } from '../services/geoHealthReportPdfMake.j
 const router = Router();
 
 async function fetchReportPayload(req) {
-  const userId = (req.get('x-user-id') || 'default_user').trim() || 'default_user';
+  const userId = req.userId;
   const port = req.socket?.localPort;
   if (!port) {
     throw new Error('无法解析本机服务端口，请设置环境变量 INTERNAL_API_BASE（例如 http://127.0.0.1:3000）');

@@ -18,8 +18,11 @@ function normalizePublishPlatform(platform) {
     '头条': '今日头条',
     '头条号': '今日头条',
     jinritoutiao: '今日头条',
+    baijiahao: '百度百家号',
+    bjh: '百度百家号',
+    '百家号': '百度百家号',
   };
-  if (['小红书', '知乎', '微博', '今日头条'].includes(raw)) return raw;
+  if (['小红书', '知乎', '微博', '今日头条', '百度百家号'].includes(raw)) return raw;
   return aliases[raw] || aliases[raw.toLowerCase()] || raw;
 }
 
@@ -70,6 +73,22 @@ const PLATFORM_CONFIG = {
       }
     },
     sessionCookieName: 'sessionid',
+  },
+  '百度百家号': {
+    baseUrl: 'https://baijiahao.baidu.com',
+    loginUrl: 'https://baijiahao.baidu.com/builder/theme/bjh/login',
+    loginSuccessCheck: (url) => {
+      try {
+        const u = new URL(url);
+        if (!u.hostname.includes('baijiahao.baidu.com')) return false;
+        const p = u.pathname.toLowerCase();
+        if (p.includes('/login') || p.includes('/bjh/login')) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    sessionCookieName: 'BDUSS',
   },
 };
 
@@ -155,7 +174,7 @@ async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
     if (platformKey === '微博' && phoneNumber) {
       await autoFillWeiboPhone(page, phoneNumber, setStatus);
     }
-    if (platformKey === '今日头条') {
+    if (platformKey === '今日头条' || platformKey === '百度百家号') {
       setStatus('waiting_qr_scan');
     }
   } catch (err) {

@@ -452,15 +452,12 @@ export async function createAiClientByConnectionId(pool, connectionId, opts = {}
   if (!isEncryptionConfigured(secret)) {
     throw new Error('服务端未配置 AI_CREDENTIALS_SECRET，无法解密 API Key');
   }
-  const params = [cid];
-  let sql = `SELECT id, user_id, vendor_name, provider_key, base_url_override, api_key_cipher,
-                    default_model, enabled
-             FROM ai_provider_connection WHERE id = $1`;
-  if (opts.userId) {
-    sql += ' AND user_id = $2';
-    params.push(opts.userId);
-  }
-  const { rows } = await pool.query(sql, params);
+  const { rows } = await pool.query(
+    `SELECT id, user_id, vendor_name, provider_key, base_url_override, api_key_cipher,
+            default_model, enabled
+     FROM ai_provider_connection WHERE id = $1`,
+    [cid]
+  );
   const row = rows[0];
   if (!row) throw new Error(`找不到大模型连接（id=${cid}）`);
   if (row.enabled === false) {

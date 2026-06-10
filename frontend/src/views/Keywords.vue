@@ -109,6 +109,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -172,7 +173,7 @@ const loadKeywordTypeDict = async () => {
 
 // 加载数据（服务端分页 + 类型筛选）
 const loadData = async () => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   loading.value = true
   try {
     const qs = new URLSearchParams({
@@ -181,7 +182,7 @@ const loadData = async () => {
     })
     if (filterType.value) qs.set('type', filterType.value)
     const res = await fetch(`${API_BASE_URL}/api/keywords?${qs}`, {
-      headers: { 'x-user-id': userId },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     if (res.ok) {
       const data = await res.json()
@@ -257,11 +258,11 @@ const handleDelete = async (id) => {
     ElMessage.error('无法删除：缺少记录 ID')
     return
   }
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   try {
     const res = await fetch(`${API_BASE_URL}/api/keywords/${encodeURIComponent(id)}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': userId },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     const data = await readJsonSafe(res)
     if (!res.ok) {
@@ -278,7 +279,7 @@ const handleDelete = async (id) => {
 
 const handleBatchDelete = async () => {
   if (selectedKeywords.value.length === 0) return
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const ids = selectedKeywords.value.map((r) => r.id).filter((x) => x != null && x !== '')
   if (ids.length === 0) {
     ElMessage.warning('所选记录无效')
@@ -287,7 +288,7 @@ const handleBatchDelete = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/api/keywords/batch-delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
       body: JSON.stringify({ ids }),
     })
     const data = await readJsonSafe(res)
@@ -314,11 +315,11 @@ const handleClearAll = async () => {
   } catch {
     return
   }
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   try {
     const res = await fetch(`${API_BASE_URL}/api/keywords/delete-all`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
     })
     const data = await readJsonSafe(res)
     if (!res.ok || !data.ok) {
@@ -349,12 +350,12 @@ const handleSubmit = async () => {
     ElMessage.warning('该关键词已存在')
     return
   }
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   if (isEdit.value) {
     try {
       await fetch(`${API_BASE_URL}/api/keywords/${form.value.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
         body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
       })
     } catch { /* silent */ }
@@ -364,7 +365,7 @@ const handleSubmit = async () => {
     try {
       await fetch(`${API_BASE_URL}/api/keywords`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
         body: JSON.stringify({ keyword: form.value.keyword, type: form.value.type })
       })
     } catch { /* silent */ }

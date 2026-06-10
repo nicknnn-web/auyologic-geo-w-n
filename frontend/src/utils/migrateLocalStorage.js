@@ -4,6 +4,17 @@
 // 调用方式：在 App.vue onMounted 里调用一次 migrateLocalStorage()
 // 迁移完成后会设置 localStorage['__migrated'] = 'true'，防止重复执行
 
+import { getToken, getCurrentUserId } from './auth.js'
+import {
+  adminStorageKey,
+  ADMIN_USER_ID,
+  LEGACY_GLOBAL_KEY,
+} from './userStorage.js'
+import {
+  migrateLegacyGlobalStorageToAdmin,
+  syncAdminScopedStorageToBackend,
+} from './migrateLegacyUserStorage.js'
+
 const API_BASE = window.VITE_API_URL || window.location.origin
 
 /** 旧版中文类型 → 英文 key（与后端 sys_dict 一致） */
@@ -38,14 +49,26 @@ function normalizeQuestionStatus(val) {
 }
 
 async function migrateLocalStorage() {
-  if (localStorage.getItem('__migrated') === 'true') {
-    console.log('[迁移] 已完成，跳过')
+  // 全局 localStorage → admin 隔离键（无需登录）
+  migrateLegacyGlobalStorageToAdmin()
+
+  const token = getToken()
+  if (!token) {
     return
   }
 
-  const raw = localStorage.getItem('auyologic_data')
+  if (localStorage.getItem('__migrated') === 'true') {
+    await syncAdminScopedStorageToBackend()
+    return
+  }
+
+  // 仅 admin 可读 admin 隔离键；其他用户不得把 admin 本地缓存写入自己账号
+  const raw =
+    localStorage.getItem(LEGACY_GLOBAL_KEY) ||
+    (getCurrentUserId() === ADMIN_USER_ID ? localStorage.getItem(adminStorageKey()) : null)
   if (!raw) {
     localStorage.setItem('__migrated', 'true')
+    await syncAdminScopedStorageToBackend()
     return
   }
 
@@ -54,11 +77,10 @@ async function migrateLocalStorage() {
     data = JSON.parse(raw)
   } catch {
     localStorage.setItem('__migrated', 'true')
+    await syncAdminScopedStorageToBackend()
     return
   }
-
-  const userId = 'default_user'
-  const headers = { 'Content-Type': 'application/json', 'x-user-id': userId }
+  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
 
   // 迁移关键词
   if (data.keywords && Array.isArray(data.keywords) && data.keywords.length > 0) {
@@ -136,9 +158,35 @@ async function migrateLocalStorage() {
     // 其他 UI 偏好可以继续保留
   }
   localStorage.setItem('auyologic_ui_state', JSON.stringify(uiState))
-  localStorage.removeItem('auyologic_data')
+
+  // 清除已迁移的业务字段，保留 GEO 相关缓存供 admin 隔离键使用
+  const geoKeep = {
+    'website-reports': data['website-reports'],
+    'geo-report': data['geo-report'],
+    'geo-detection-result': data['geo-detection-result'],
+    'geo-detection-details': data['geo-detection-details'],
+    'geo-detection-history': data['geo-detection-history'],
+    'geo-full-report': data['geo-full-report'],
+    'dashboard-site-score': data['dashboard-site-score'],
+    'geo-custom-keywords': data['geo-custom-keywords'],
+    'enterprise-settings': data['enterprise-settings'],
+  }
+  const adminKey = adminStorageKey()
+  let adminData = {}
+  try {
+    adminData = JSON.parse(localStorage.getItem(adminKey) || '{}')
+  } catch {
+    adminData = {}
+  }
+  for (const [k, v] of Object.entries(geoKeep)) {
+    if (v != null && (Array.isArray(v) ? v.length : true)) adminData[k] = v
+  }
+  localStorage.setItem(adminKey, JSON.stringify(adminData))
+  localStorage.removeItem(LEGACY_GLOBAL_KEY)
+
   localStorage.setItem('__migrated', 'true')
-  console.log('[迁移] 完成！旧 localStorage 业务数据已清除')
+  await syncAdminScopedStorageToBackend()
+  console.log('[迁移] 完成！旧 localStorage 业务数据已清除并归属 admin')
 }
 
 export default migrateLocalStorage

@@ -17,12 +17,7 @@ const upload = multer({
   }
 });
 
-// 获取用户ID
-const getUserId = (req) => {
-  const id = req.headers['x-user-id'];
-  if (id && id !== 'undefined' && id !== 'null') return id;
-  return 'default_user';
-};
+const getUserId = (req) => req.userId;
 
 /**
  * 初始化 MinIO Bucket（首次使用）

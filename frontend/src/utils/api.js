@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { unwrapListPayload } from './pagedApi.js'
+import { getToken, clearAuth } from './auth.js'
 
 // API 服务层 - 直接连接后端（Zeabur 环境下）test
 const BASE_URL = window.VITE_API_URL || window.location.origin
@@ -12,17 +13,25 @@ const api = axios.create({
   },
 })
 
-// 请求拦截：附加用户ID
+// 请求拦截：附加登录 token
 api.interceptors.request.use(config => {
-  // 单用户模式：固定使用 default_user
-  config.headers['x-user-id'] = 'default_user'
+  const token = getToken()
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`
+  }
   return config
 })
 
-// 响应拦截：统一错误处理
+// 响应拦截：统一错误处理；401 时清缓存并跳转登录页
 api.interceptors.response.use(
   response => response.data,
   error => {
+    if (error.response?.status === 401) {
+      clearAuth()
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login'
+      }
+    }
     const msg = error.response?.data?.error || error.message || '请求失败'
     console.error('API Error:', msg)
     throw new Error(msg)

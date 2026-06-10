@@ -239,6 +239,7 @@
 </template>
 
 <script setup>
+import { getToken } from '../utils/auth.js'
 import { ref, watch, onMounted, onDeactivated, nextTick, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
@@ -246,7 +247,7 @@ import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval, unwrapListPayload } fro
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const API_BASE = window.VITE_API_URL || window.location.origin
-const headers = { 'Content-Type': 'application/json', 'x-user-id': 'default_user' }
+const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() }
 
 const loading = ref(false)
 const saving = ref(false)

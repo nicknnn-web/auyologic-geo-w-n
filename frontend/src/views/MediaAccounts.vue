@@ -66,10 +66,10 @@
         <!-- 手机号 / 平台说明 -->
         <div class="flex-1 text-sm text-gray-500 min-w-0">
           <div
-            v-if="isToutiaoPlatform(account.platform) && account.auth_status !== 'authorized'"
+            v-if="isQrAppAuthPlatform(account.platform) && account.auth_status !== 'authorized'"
             class="text-xs text-amber-700 leading-relaxed"
           >
-            须用<strong>今日头条 App</strong>扫码登录；发布前请在 App 内<strong>绑定手机号</strong>并完成实名。
+            {{ getPlatformAuthMeta(account.platform)?.authHint || '请使用 App 扫码完成授权。' }}
           </div>
           <template v-else>
             <span v-if="account.phone_number">
@@ -161,17 +161,17 @@
         <el-form-item label="账号名称" prop="account_name">
           <el-input v-model="accountForm.account_name" placeholder="在平台上的昵称（可选）" />
         </el-form-item>
-        <el-form-item v-if="!isToutiaoPlatform(accountForm.platform)" label="手机号">
+        <el-form-item v-if="!isQrAppAuthPlatform(accountForm.platform)" label="手机号">
           <el-input v-model="accountForm.phone_number" placeholder="登录用手机号（可选，授权时自动填入）" maxlength="11" />
         </el-form-item>
         <el-alert
-          v-else
+          v-else-if="getPlatformAuthMeta(accountForm.platform)"
           type="warning"
           :closable="false"
           show-icon
           class="mb-2"
-          title="今日头条说明"
-          description="授权需 App 扫码，无需填写手机号；发布内容前请在今日头条 App 绑定手机号并且完成实名认证！。"
+          :title="`${accountForm.platform} 说明`"
+          :description="getPlatformAuthMeta(accountForm.platform).publishHint"
         />
       </el-form>
       <template #footer>
@@ -205,11 +205,14 @@
           :closable="false"
           class="mb-4"
           show-icon
-          title="今日头条 · App 扫码授权"
+          :title="authPlatformMeta.step1Title || `${authPlatformMeta.label} · App 扫码授权`"
         >
           <template #default>
             <p class="text-sm leading-relaxed mb-2">{{ authPlatformMeta.authHint }}</p>
             <p class="text-sm leading-relaxed text-amber-800">{{ authPlatformMeta.publishHint }}</p>
+            <p v-if="authPlatformMeta.step1Desc" class="text-sm leading-relaxed text-gray-600 mt-2">
+              {{ authPlatformMeta.step1Desc }}
+            </p>
           </template>
         </el-alert>
         <el-alert
@@ -339,6 +342,7 @@ import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
 import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
 import { getPlatformAuthMeta, isQrAppAuthPlatform } from '../utils/platformAuthMeta.js'
+import { downloadLocalAgent } from '../utils/downloadLocalAgent.js'
 
 const API = '/api/platform-accounts'
 
@@ -346,7 +350,6 @@ const platformDictRows = ref([])
 
 const platformSelectOpts = computed(() => toDataValueSelectOptions(platformDictRows.value))
 
-const isToutiaoPlatform = (platform) => isQrAppAuthPlatform(platform)
 
 const authPlatformMeta = computed(() => getPlatformAuthMeta(authAccount.value?.platform || ''))
 
@@ -358,10 +361,7 @@ const loadPlatformDict = async () => {
 const agentOnline = ref(false)
 useAgentHeartbeat(agentOnline)
 
-const handleDownloadAgent = () => {
-  const base = window.VITE_API_URL || window.location.origin
-  window.open(`${base}/api/agent/download`, '_blank')
-}
+const handleDownloadAgent = () => downloadLocalAgent()
 
 // ---- 账号列表（服务端分页）----
 const accounts = ref([])
@@ -491,9 +491,11 @@ const handleAuthStart = async () => {
     authStep.value = 1
     startPolling()
     ElMessage.success(
-      authPlatformMeta.value
-        ? '登录页已打开，请用今日头条 App 扫码'
-        : '浏览器已打开，请完成登录'
+      authPlatformMeta.value?.step1Title
+        ? `登录页已打开，${authPlatformMeta.value.step1Title}`
+        : authPlatformMeta.value
+          ? '登录页已打开，请按说明完成授权'
+          : '浏览器已打开，请完成登录'
     )
   } catch (err) {
     ElMessage.error(err.message || '启动授权失败')
@@ -623,7 +625,7 @@ const getAuthLabel = (status) => {
 
 const getAuthProgressText = (status) => {
   if (authPlatformMeta.value && (status === 'waiting_qr_scan' || status === 'browser_opened')) {
-    return '请打开今日头条 App 扫描浏览器中的二维码…'
+    return authPlatformMeta.value.step1Desc || '请在弹出浏览器中完成 App 扫码登录…'
   }
   const map = {
     waiting_agent: '等待本地代理接收任务…',

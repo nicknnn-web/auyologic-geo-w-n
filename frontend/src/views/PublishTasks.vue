@@ -172,7 +172,7 @@
           :closable="false"
           show-icon
           class="mb-3"
-          title="今日头条发布须知"
+          :title="`${form.platform} 发布须知`"
           :description="selectedPlatformMeta.publishHint"
         />
 
@@ -256,6 +256,7 @@
 </template>
 
 <script setup>
+import { getToken } from '../utils/auth.js'
 import { ref, computed, onMounted, onUnmounted, onDeactivated, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -273,6 +274,7 @@ import {
   getPlatformTitleMaxLength,
   platformSupportsTags,
 } from '../utils/platformAuthMeta.js'
+import { downloadLocalAgent } from '../utils/downloadLocalAgent.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -284,10 +286,7 @@ const ACCOUNTS_API = '/api/platform-accounts'
 
 const agentOnline = ref(false)
 useAgentHeartbeat(agentOnline)
-const handleDownloadAgent = () => {
-  const base = window.VITE_API_URL || window.location.origin
-  window.open(`${base}/api/agent/download`, '_blank')
-}
+const handleDownloadAgent = () => downloadLocalAgent()
 // ---- 数据 ----
 const tasks = ref([])
 const taskTotal = ref(0)
@@ -318,14 +317,15 @@ const formTitleMaxLength = computed(() =>
 const formTitlePlaceholder = computed(() => {
   const p = form.value.platform
   if (p === '小红书') return '小红书标题最多 20 字'
-  if (p === '今日头条') return '文章标题最多 30 字'
+  if (p === '今日头条' || p === '百度百家号') return '文章标题最多 30 字'
   return '请输入标题'
 })
 
 const formTitleHint = computed(() => {
   const p = form.value.platform
+  const meta = getPlatformAuthMeta(p)
   if (p === '小红书') return '小红书超出 20 字将在发布时自动截断'
-  if (p === '今日头条') return '今日头条为图文文章；须已 App 扫码授权并绑定手机号'
+  if (meta?.publishHint) return meta.publishHint
   return '按所选平台限制填写标题'
 })
 
@@ -340,7 +340,7 @@ function sliceTitleForPlatform(platform, title) {
 const executingId = ref(null)
 let pollTimer = null
 
-const listFetchHeaders = { 'x-user-id': 'default_user' }
+const listFetchHeaders = { 'Authorization': 'Bearer ' + getToken() }
 
 // ---- 加载数据 ----
 const loadTasks = async () => {

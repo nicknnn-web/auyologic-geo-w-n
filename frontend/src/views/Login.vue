@@ -1,187 +1,260 @@
 <template>
   <div class="login-page">
-    <!-- 背景 -->
-    <div class="bg-grid"></div>
-    <div class="bg-glow"></div>
-    <div class="shape shape-1"></div>
-    <div class="shape shape-2"></div>
-    <div class="shape shape-3"></div>
-    <div class="shape shape-4"></div>
-
-    <!-- 左侧装饰区 -->
-    <div class="decorative-panel">
-      <div class="brand-mark">
-        <div class="brand-icon">
-          <svg width="28" height="28" viewBox="0 0 48 48" fill="none">
-            <path d="M12 38L24 10L36 38" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M16 30H32" stroke="white" stroke-width="3" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <span class="brand-name">Auyologic GEO</span>
-      </div>
-      <h1 class="panel-title">GEO 内容智能引擎</h1>
-      <p class="panel-desc">生成被 AI 搜索引擎优先收录的高权重内容，让每一次创作都被看见。</p>
-
-      <div class="feature-list">
-        <div class="feature-item">
-          <div class="feature-dot"></div>
-          <span>GEO 优化 · AI 智能生成</span>
-        </div>
-        <div class="feature-item">
-          <div class="feature-dot"></div>
-          <span>多平台一键发布</span>
-        </div>
-        <div class="feature-item">
-          <div class="feature-dot"></div>
-          <span>深度 SEO + GEO 双重优化</span>
-        </div>
-      </div>
-
-      <div class="powered-badge">
-        <span>Powered by DeepSeek AI</span>
+    <!-- 品牌区 -->
+    <div class="brand-area" :class="{ entered: entering }">
+      <div class="brand-logo">G</div>
+      <div class="brand-text">
+        <div class="brand-title">GEO</div>
+        <div class="brand-sub">GROWTH ENGINE OPTIMIZATION</div>
       </div>
     </div>
 
-    <!-- 右侧登录表单 -->
-    <div class="login-panel">
-      <div class="login-card" :class="{ 'card-entering': entering }">
-        <div class="card-header">
-          <h2>管理员登录</h2>
-          <p>登录到 Auyologic GEO 控制台</p>
-        </div>
+    <!-- 登录卡片 -->
+    <div class="login-card" :class="{ entered: entering }">
+      <!-- Tab 切换 -->
+      <div class="tab-row">
+        <span class="tab-item" :class="{ active: mode === 'login' }" @click="switchMode('login')">登录</span>
+        <span class="tab-divider">/</span>
+        <span class="tab-item" :class="{ active: mode === 'register' }" @click="switchMode('register')">注册</span>
+      </div>
 
-        <el-form
-          ref="formRef"
-          :model="form"
-          :rules="rules"
-          @submit.prevent="handleLogin"
-          label-position="top"
+      <!-- 邮箱 -->
+      <div class="field">
+        <label class="field-label">邮箱</label>
+        <input
+          v-model.trim="form.email"
+          type="email"
+          class="field-input"
+          placeholder="name@company.com"
+          autocomplete="email"
+          @keyup.enter="handleSubmit"
+        />
+      </div>
+
+      <!-- 用户名（仅注册，选填） -->
+      <div v-if="mode === 'register'" class="field">
+        <div class="field-label-row">
+          <label class="field-label">用户名</label>
+          <span class="field-hint">选填，不填则使用邮箱</span>
+        </div>
+        <input
+          v-model.trim="form.username"
+          type="text"
+          class="field-input"
+          placeholder="自定义用户名"
+          autocomplete="username"
+          maxlength="200"
+          @keyup.enter="handleSubmit"
+        />
+      </div>
+
+      <!-- 密码 -->
+      <div class="field">
+        <div class="field-label-row">
+          <label class="field-label">密码</label>
+          <span v-if="mode === 'register'" class="field-hint">至少 8 位</span>
+        </div>
+        <input
+          v-model="form.password"
+          type="password"
+          class="field-input"
+          placeholder="········"
+          :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
+          @keyup.enter="handleSubmit"
+        />
+      </div>
+
+      <!-- 滑块验证码 -->
+      <div class="field">
+        <label class="field-label">安全验证</label>
+        <div
+          ref="sliderTrackRef"
+          class="slider-track"
+          :class="{ verified: sliderVerified }"
         >
-          <el-form-item prop="username" label="账号">
-            <el-input
-              v-model="form.username"
-              placeholder="请输入管理员账号"
-              size="large"
-              :prefix-icon="User"
-              clearable
-            />
-          </el-form-item>
-
-          <el-form-item prop="password" label="密码">
-            <el-input
-              v-model="form.password"
-              type="password"
-              placeholder="请输入密码"
-              size="large"
-              :prefix-icon="Lock"
-              show-password
-              @keyup.enter="handleLogin"
-            />
-          </el-form-item>
-
-          <div class="form-options">
-            <el-checkbox v-model="form.remember">记住登录状态</el-checkbox>
-          </div>
-
-          <el-button
-            type="primary"
-            size="large"
-            class="login-btn"
-            :loading="loading"
-            @click="handleLogin"
+          <div class="slider-fill" :style="{ width: sliderX + 40 + 'px' }"></div>
+          <div
+            class="slider-handle"
+            :style="{ left: sliderX + 'px' }"
+            @pointerdown="onSliderDown"
           >
-            {{ loading ? '验证中...' : '登录' }}
-          </el-button>
-
-          <div v-if="errorMsg" class="error-tip">
-            <el-icon><CircleCloseFilled /></el-icon>
-            {{ errorMsg }}
+            <span v-if="sliderVerified" class="handle-icon ok">✓</span>
+            <span v-else class="handle-icon">»</span>
           </div>
-        </el-form>
-
-        <div class="login-footer">
-          <span>安全加密连接 · 仅限授权用户访问</span>
+          <span class="slider-text">{{ sliderVerified ? '验证通过' : '按住滑块，拖动到最右侧' }}</span>
         </div>
       </div>
+
+      <!-- 错误提示 -->
+      <div v-if="errorMsg" class="error-tip">{{ errorMsg }}</div>
+
+      <!-- 提交按钮 -->
+      <button class="submit-btn" :disabled="loading" @click="handleSubmit">
+        {{ loading ? (mode === 'login' ? '登录中...' : '注册中...') : (mode === 'login' ? '登录' : '注册') }}
+        <span class="btn-arrow">→</span>
+      </button>
+
+      <!-- 条款 -->
+      <div class="terms">
+        继续即表示同意 <a href="javascript:void(0)">服务条款</a> 与 <a href="javascript:void(0)">隐私政策</a>
+      </div>
     </div>
+
+    <div class="copyright">© 2026 GEO</div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Lock, CircleCloseFilled } from '@element-plus/icons-vue'
+import { saveAuth, isLoggedIn } from '../utils/auth.js'
+
+defineOptions({ name: 'Login' })
 
 const router = useRouter()
-const formRef = ref(null)
+const route = useRoute()
+
+const mode = ref('login') // 'login' | 'register'
 const loading = ref(false)
 const errorMsg = ref('')
 const entering = ref(false)
 
 const form = reactive({
+  email: '',
   username: '',
   password: '',
-  remember: true,
 })
 
-const rules = {
-  username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+// ===== 滑块验证码 =====
+const sliderTrackRef = ref(null)
+const sliderX = ref(0)
+const sliderVerified = ref(false)
+let dragging = false
+let startClientX = 0
+let startX = 0
+
+const maxSliderX = () => {
+  const track = sliderTrackRef.value
+  if (!track) return 0
+  return track.clientWidth - 40 - 4 // 滑块宽 40 + 边距
+}
+
+const onSliderDown = (e) => {
+  if (sliderVerified.value) return
+  dragging = true
+  startClientX = e.clientX
+  startX = sliderX.value
+  window.addEventListener('pointermove', onSliderMove)
+  window.addEventListener('pointerup', onSliderUp)
+}
+
+const onSliderMove = (e) => {
+  if (!dragging) return
+  const max = maxSliderX()
+  sliderX.value = Math.min(max, Math.max(0, startX + e.clientX - startClientX))
+}
+
+const onSliderUp = () => {
+  if (!dragging) return
+  dragging = false
+  window.removeEventListener('pointermove', onSliderMove)
+  window.removeEventListener('pointerup', onSliderUp)
+  const max = maxSliderX()
+  if (sliderX.value >= max - 2) {
+    sliderX.value = max
+    sliderVerified.value = true
+  } else {
+    // 未拖到底，回弹
+    sliderX.value = 0
+  }
+}
+
+const resetSlider = () => {
+  sliderVerified.value = false
+  sliderX.value = 0
+}
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointermove', onSliderMove)
+  window.removeEventListener('pointerup', onSliderUp)
+})
+
+// ===== 切换登录/注册 =====
+const switchMode = (m) => {
+  if (mode.value === m) return
+  mode.value = m
+  errorMsg.value = ''
+  resetSlider()
 }
 
 onMounted(() => {
-  // 如果本地已登录，直接跳转
-  if (localStorage.getItem('auyologic_token')) {
+  if (isLoggedIn()) {
     router.replace('/')
     return
   }
-  // 自动填入上次账号
-  const savedUser = localStorage.getItem('auyologic_user')
-  if (savedUser) form.username = savedUser
-  // 触发动画
+  const savedEmail = localStorage.getItem('auyologic_last_email')
+  if (savedEmail) form.email = savedEmail
   setTimeout(() => { entering.value = true }, 50)
 })
 
-const handleLogin = async () => {
-  if (!formRef.value) return
-  try {
-    await formRef.value.validate()
-  } catch {
+// ===== 提交 =====
+const API_BASE = window.VITE_API_URL || window.location.origin
+
+const validate = () => {
+  if (!form.email) return '请输入邮箱'
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email) && mode.value === 'register') return '邮箱格式不正确'
+  if (!form.password) return '请输入密码'
+  if (mode.value === 'register' && form.password.length < 8) return '密码至少 8 位'
+  if (!sliderVerified.value) return '请先完成滑块验证'
+  return ''
+}
+
+const handleSubmit = async () => {
+  const err = validate()
+  if (err) {
+    errorMsg.value = err
     return
   }
-
-  loading.value = true
   errorMsg.value = ''
+  loading.value = true
 
   try {
-    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/auth/login`, {
+    const url = `${API_BASE}/api/auth/${mode.value === 'login' ? 'login' : 'register'}`
+    const payload = mode.value === 'login'
+      ? { email: form.email, password: form.password }
+      : {
+          email: form.email,
+          password: form.password,
+          ...(form.username ? { username: form.username } : {}),
+        }
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: form.username,
-        password: form.password,
-      }),
+      body: JSON.stringify(payload),
     })
-
-    const data = await res.json()
+    const data = await res.json().catch(() => ({}))
 
     if (!res.ok || !data.success) {
-      errorMsg.value = data.message || '账号或密码错误'
+      // 注册时邮箱已存在 → 提示并切回登录
+      if (mode.value === 'register' && (res.status === 409 || data.exists)) {
+        ElMessage.info(data.error || '该邮箱已注册，可直接登录')
+        switchMode('login')
+        return
+      }
+      errorMsg.value = data.error || (mode.value === 'login' ? '登录失败' : '注册失败')
+      resetSlider()
       return
     }
 
-    // 登录成功
-    localStorage.setItem('auyologic_token', data.token)
-    localStorage.setItem('auyologic_user', form.username)
-    if (form.remember) {
-      localStorage.setItem('auyologic_remember', 'true')
-    }
-
-    ElMessage.success('登录成功，正在跳转...')
-    setTimeout(() => { router.replace('/') }, 300)
-  } catch (err) {
+    saveAuth({ token: data.token, user: data.user, remember: true })
+    localStorage.setItem('auyologic_last_email', form.email)
+    ElMessage.success(mode.value === 'login' ? '登录成功，正在跳转...' : '注册成功，正在跳转...')
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    setTimeout(() => { router.replace(redirect) }, 300)
+  } catch {
     errorMsg.value = '网络错误，请检查后端服务是否启动'
+    resetSlider()
   } finally {
     loading.value = false
   }
@@ -189,259 +262,219 @@ const handleLogin = async () => {
 </script>
 
 <style scoped>
-/* 页面容器 */
 .login-page {
   position: fixed;
   inset: 0;
   display: flex;
-  background: #0a0e1a;
-  overflow: hidden;
-}
-
-/* 背景动效 */
-.bg-grid {
-  position: fixed;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-}
-.bg-glow {
-  position: fixed;
-  width: 600px;
-  height: 600px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%);
-  top: -200px;
-  right: -100px;
-  pointer-events: none;
-}
-.shape {
-  position: fixed;
-  border: 1px solid rgba(99,102,241,0.12);
-  border-radius: 4px;
-  pointer-events: none;
-}
-.shape-1 { width:60px; height:60px; top:15%; left:8%; animation: float 8s ease-in-out infinite; }
-.shape-2 { width:40px; height:40px; top:70%; left:5%; border-radius:50%; animation: float 6s ease-in-out infinite reverse; }
-.shape-3 { width:80px; height:80px; top:20%; right:6%; transform:rotate(45deg); animation: float 10s ease-in-out infinite; }
-.shape-4 { width:30px; height:30px; bottom:20%; right:12%; border-radius:50%; animation: float 7s ease-in-out infinite reverse; }
-
-@keyframes float {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-12px) rotate(3deg); }
-}
-
-/* 左侧装饰区 */
-.decorative-panel {
-  flex: 1;
-  display: flex;
   flex-direction: column;
+  align-items: center;
   justify-content: center;
-  padding: 60px 80px;
-  position: relative;
-  z-index: 1;
+  background: linear-gradient(160deg, #eef4fa 0%, #e8f0f8 50%, #edf3f9 100%);
+  overflow: auto;
 }
 
-.brand-mark {
+/* 品牌区 */
+.brand-area {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 48px;
+  margin-bottom: 28px;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: all 0.5s ease;
 }
-.brand-icon {
+.brand-area.entered { opacity: 1; transform: translateY(0); }
+.brand-logo {
   width: 44px;
   height: 44px;
-  background: rgba(99,102,241,0.25);
-  border: 1px solid rgba(99,102,241,0.4);
   border-radius: 10px;
+  background: #1677b3;
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.brand-name {
+.brand-title {
   font-size: 18px;
-  font-weight: 600;
-  color: rgba(255,255,255,0.9);
-  letter-spacing: 0.5px;
-}
-
-.panel-title {
-  font-size: 42px;
-  font-weight: 700;
-  color: white;
+  font-weight: 800;
+  color: #1f2937;
+  letter-spacing: 1px;
   line-height: 1.2;
-  margin-bottom: 20px;
-  letter-spacing: -1px;
+}
+.brand-sub {
+  font-size: 11px;
+  color: #94a3b8;
+  letter-spacing: 2px;
 }
 
-.panel-desc {
-  font-size: 16px;
-  color: rgba(255,255,255,0.45);
-  line-height: 1.7;
-  max-width: 400px;
-  margin-bottom: 48px;
-}
-
-.feature-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.feature-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: rgba(255,255,255,0.7);
-  font-size: 15px;
-}
-.feature-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #6366f1;
-  box-shadow: 0 0 8px rgba(99,102,241,0.8);
-  flex-shrink: 0;
-}
-
-.powered-badge {
-  position: absolute;
-  bottom: 40px;
-  left: 80px;
-  font-size: 12px;
-  color: rgba(255,255,255,0.25);
-  letter-spacing: 0.5px;
-}
-
-/* 右侧登录面板 */
-.login-panel {
-  width: 480px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px;
-  position: relative;
-  z-index: 1;
-}
-
+/* 卡片 */
 .login-card {
-  width: 100%;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 20px;
-  padding: 48px 40px;
-  backdrop-filter: blur(20px);
+  width: 320px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(30, 64, 120, 0.08);
+  padding: 32px 36px 28px;
   opacity: 0;
-  transform: translateX(30px);
-  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateY(10px);
+  transition: all 0.5s ease 0.1s;
 }
-.login-card.card-entering {
-  opacity: 1;
-  transform: translateX(0);
-}
+.login-card.entered { opacity: 1; transform: translateY(0); }
 
-.card-header {
-  margin-bottom: 36px;
+/* Tab */
+.tab-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
 }
-.card-header h2 {
-  font-size: 26px;
+.tab-item {
+  font-size: 15px;
+  color: #9ca3af;
+  cursor: pointer;
+  padding-bottom: 4px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.tab-item.active {
+  color: #1f2937;
   font-weight: 700;
-  color: white;
+  border-bottom-color: #1677b3;
+}
+.tab-divider { color: #d1d5db; font-size: 14px; }
+
+/* 表单字段 */
+.field { margin-bottom: 22px; }
+.field-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.field-label {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
   margin-bottom: 8px;
 }
-.card-header p {
-  font-size: 14px;
-  color: rgba(255,255,255,0.4);
-}
-
-/* 表单样式覆盖 */
-:deep(.el-form-item__label) {
-  color: rgba(255,255,255,0.6) !important;
-  font-size: 13px;
-  font-weight: 500;
-  padding-bottom: 6px !important;
-}
-:deep(.el-input__wrapper) {
-  background: rgba(255,255,255,0.06) !important;
-  border: 1px solid rgba(255,255,255,0.1) !important;
-  border-radius: 10px !important;
-  box-shadow: none !important;
-  padding: 4px 12px !important;
-}
-:deep(.el-input__wrapper:hover) {
-  border-color: rgba(99,102,241,0.4) !important;
-}
-:deep(.el-input__wrapper.is-focus) {
-  border-color: #6366f1 !important;
-  box-shadow: 0 0 0 3px rgba(99,102,241,0.15) !important;
-}
-:deep(.el-input__inner) {
-  color: rgba(255,255,255,0.9) !important;
-  font-size: 15px;
-}
-:deep(.el-input__inner::placeholder) {
-  color: rgba(255,255,255,0.25) !important;
-}
-:deep(.el-input__prefix .el-icon) {
-  color: rgba(255,255,255,0.35) !important;
-}
-:deep(.el-checkbox__label) {
-  color: rgba(255,255,255,0.5) !important;
-  font-size: 13px;
-}
-:deep(.el-checkbox__input.is-checked .el-checkbox__inner) {
-  background-color: #6366f1 !important;
-  border-color: #6366f1 !important;
-}
-:deep(.el-form-item) {
-  margin-bottom: 20px;
-}
-
-.form-options {
-  margin-bottom: 24px;
-}
-
-.login-btn {
+.field-hint { font-size: 12px; color: #9ca3af; }
+.field-input {
   width: 100%;
-  height: 48px;
-  border-radius: 10px;
-  font-size: 16px;
-  font-weight: 600;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
-  border: none !important;
-  transition: all 0.3s;
-  box-shadow: 0 4px 20px rgba(99,102,241,0.3);
+  border: none;
+  border-bottom: 1px solid #d8e1ea;
+  padding: 6px 2px 8px;
+  font-size: 14px;
+  color: #1f2937;
+  background: transparent;
+  outline: none;
+  transition: border-color 0.2s;
 }
-.login-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 30px rgba(99,102,241,0.45);
-}
+.field-input::placeholder { color: #c3cdd9; }
+.field-input:focus { border-bottom-color: #1677b3; }
 
-.error-tip {
+/* 滑块验证码 */
+.slider-track {
+  position: relative;
+  height: 38px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  user-select: none;
+}
+.slider-track.verified {
+  border-color: #34c98e;
+  background: #effaf5;
+}
+.slider-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(22, 119, 179, 0.12);
+  pointer-events: none;
+  transition: background 0.2s;
+}
+.slider-track.verified .slider-fill { background: rgba(52, 201, 142, 0.15); }
+.slider-handle {
+  position: absolute;
+  top: 2px;
+  width: 40px;
+  height: 32px;
+  background: #fff;
+  border: 1px solid #d8e1ea;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: #f87171;
-  font-size: 13px;
-  margin-top: 14px;
-  padding: 10px 14px;
-  background: rgba(248,113,113,0.1);
-  border: 1px solid rgba(248,113,113,0.2);
-  border-radius: 8px;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none;
+  z-index: 2;
 }
-
-.login-footer {
-  text-align: center;
-  margin-top: 28px;
+.slider-handle:active { cursor: grabbing; }
+.handle-icon { color: #1677b3; font-size: 16px; font-weight: 700; }
+.handle-icon.ok { color: #34c98e; }
+.slider-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
-  color: rgba(255,255,255,0.2);
+  color: #9ca3af;
+  pointer-events: none;
+}
+.slider-track.verified .slider-text { color: #34c98e; }
+
+/* 错误提示 */
+.error-tip {
+  font-size: 12px;
+  color: #ef4444;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
 }
 
-/* 响应式 */
-@media (max-width: 900px) {
-  .decorative-panel { display: none; }
-  .login-panel { width: 100%; }
+/* 按钮 */
+.submit-btn {
+  width: 100%;
+  height: 42px;
+  background: #1677b3;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+.submit-btn:hover:not(:disabled) { background: #126499; }
+.submit-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+.btn-arrow { font-size: 16px; }
+
+/* 条款 */
+.terms {
+  text-align: center;
+  margin-top: 20px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.terms a { color: #6b7280; text-decoration: underline; }
+
+.copyright {
+  margin-top: 32px;
+  font-size: 12px;
+  color: #b6c2cf;
+}
+
+@media (max-width: 480px) {
+  .login-card { width: calc(100vw - 48px); padding: 28px 24px; }
 }
 </style>

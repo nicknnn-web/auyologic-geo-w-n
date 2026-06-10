@@ -344,6 +344,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -490,7 +491,7 @@ const loadKeywordTypeDict = async () => {
 }
 
 const loadData = async () => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   listLoading.value = true
   try {
     const qs = new URLSearchParams({
@@ -500,7 +501,7 @@ const loadData = async () => {
     if (filterKeywordType.value) qs.set('keywordType', filterKeywordType.value)
     if (filterStatus.value) qs.set('status', filterStatus.value)
     const res = await fetch(`${API_BASE_URL}/api/questions?${qs}`, {
-      headers: { 'x-user-id': userId },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     if (res.ok) {
       const data = await res.json()
@@ -535,11 +536,11 @@ const buildQuestionsListExportUrl = (p, ps) => {
 const handleExportQuestions = async () => {
   exportQuestionsLoading.value = true
   try {
-    const userId = 'default_user'
+    const userId = getCurrentUserId()
     const rows = await fetchAllPages(buildQuestionsListExportUrl, {
       pageSize: 100,
       maxPages: 200,
-      fetchOptions: { headers: { 'x-user-id': userId } },
+      fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } },
     })
     if (!rows.length) {
       ElMessage.warning('当前筛选下没有可导出的数据')
@@ -667,7 +668,9 @@ const extractGeoJson = (text) => {
 
 /** 从数据库 users（default_user）读取企业信息，对应 GET /api/settings */
 const fetchEnterpriseSettingsFromDb = async () => {
-  const res = await fetch(`${API_BASE_URL}/api/settings`)
+  const res = await fetch(`${API_BASE_URL}/api/settings`, {
+    headers: { Authorization: 'Bearer ' + getToken() },
+  })
   if (!res.ok) return null
   return res.json()
 }
@@ -778,12 +781,12 @@ const generateKeywordBatchFromGeoPrompt = async (keywords, searchKeywords = []) 
   const n = keywordEntries.length
   const questionsPerKeyword = n > 14 ? Math.max(3, Math.floor(70 / n)) : 5
 
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   let dedupeBlock = ''
   try {
     const allForDedupe = await fetchAllPages(
       (p, ps) => `${API_BASE_URL}/api/questions?page=${p}&pageSize=${ps}`,
-      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+      { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
     )
     const chunks = []
     for (const { keyword } of keywordEntries) {
@@ -948,7 +951,7 @@ const handleAIExpand = async () => {
         try {
           const res = await fetch(`${API_BASE_URL}/api/questions`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
             body: JSON.stringify(newItem)
           })
           if (res.ok) {
@@ -983,7 +986,7 @@ const handleAIExpand = async () => {
     try {
       const allKeywords = await fetchAllPages(
         (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
-        { pageSize: 100, fetchOptions: { headers: { 'x-user-id': 'default_user' } } }
+        { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
       )
       keywords = allKeywords.filter((k) => ids.includes(k.id))
     } catch (e) {
@@ -1000,7 +1003,7 @@ const handleAIExpand = async () => {
     try {
       keywords = await fetchAllPages(
         (p, ps) => `${API_BASE_URL}/api/keywords?page=${p}&pageSize=${ps}`,
-        { pageSize: 100, fetchOptions: { headers: { 'x-user-id': 'default_user' } } }
+        { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
       )
     } catch {
       keywords = []
@@ -1090,14 +1093,14 @@ const handleAIExpand = async () => {
       return
     }
 
-    const userId = 'default_user'
+    const userId = getCurrentUserId()
     for (const item of batchItems) {
       try {
         const res = await fetch(`${API_BASE_URL}/api/questions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-user-id': userId,
+            'Authorization': 'Bearer ' + getToken(),
           },
           body: JSON.stringify({
             question: item.question,
@@ -1140,14 +1143,14 @@ const cycleStatus = async (row) => {
   if (idx < 0) idx = 0
   const newStatus = order[(idx + 1) % order.length]
 
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   // 同步到后端
   try {
     await fetch(`${API_BASE_URL}/api/questions/${row.id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': userId
+        'Authorization': 'Bearer ' + getToken()
       },
       body: JSON.stringify({ status: newStatus })
     })
@@ -1176,7 +1179,7 @@ const handleBatchUpdateStatus = async () => {
     questionStatusOptions.value.find((d) => (d.dataKey || d.data_key) === status)?.data_value ||
     status
   const ids = selectedRows.value.map((r) => r.id)
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
 
   mutationKind.value = 'review'
   try {
@@ -1184,7 +1187,7 @@ const handleBatchUpdateStatus = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': userId,
+        'Authorization': 'Bearer ' + getToken(),
       },
       body: JSON.stringify({ ids, status }),
     })
@@ -1212,7 +1215,7 @@ const handleBatchUpdateStatus = async () => {
 
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const idsToDelete = selectedRows.value.map((r) => r.id)
 
   mutationKind.value = 'delete'
@@ -1221,7 +1224,7 @@ const handleBatchDelete = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': userId,
+        'Authorization': 'Bearer ' + getToken(),
       },
       body: JSON.stringify({ ids: idsToDelete }),
     })
@@ -1266,7 +1269,7 @@ const handleClearAll = async () => {
     return
   }
 
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const body = {}
   if (filterKeywordType.value) body.keywordType = filterKeywordType.value
   if (filterStatus.value) body.status = filterStatus.value
@@ -1277,7 +1280,7 @@ const handleClearAll = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': userId,
+        'Authorization': 'Bearer ' + getToken(),
       },
       body: JSON.stringify(body),
     })
@@ -1319,7 +1322,7 @@ const handleSubmit = async () => {
     return
   }
 
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const newItem = {
     question: form.value.question,
     keywordType: form.value.keywordType,
@@ -1333,7 +1336,7 @@ const handleSubmit = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': userId
+        'Authorization': 'Bearer ' + getToken()
       },
       body: JSON.stringify(newItem)
     })
@@ -1354,12 +1357,12 @@ const handleSubmit = async () => {
 }
 
 const handleDelete = async (id) => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   mutationKind.value = 'row-delete'
   try {
     const res = await fetch(`${API_BASE_URL}/api/questions/${id}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': userId },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     let data = {}
     try {
@@ -1595,7 +1598,7 @@ const saveGeoSelected = async () => {
   const list = geoSelectedGenerated.value
   if (!list.length) return
   geoSaving.value = true
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const sourceKeyword = (geoForm.value.brand || '').trim() || 'GEO生成'
   let ok = 0
   let fail = 0
@@ -1610,7 +1613,7 @@ const saveGeoSelected = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/questions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
           body: JSON.stringify(payload),
         })
         if (res.ok) ok++

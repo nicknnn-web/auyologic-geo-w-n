@@ -277,6 +277,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
@@ -311,7 +312,7 @@ const kwGroups = ref([])
 /** 与关键词管理、拓展问题一致：来自 sys_dict keyword_type */
 const keywordTypeRows = ref([...KEYWORD_TYPE_DEFAULT_OPTIONS])
 
-const getUserId = () => 'default_user'
+const getUserId = () => getCurrentUserId()
 
 const loadKeywordTypeDict = async () => {
   try {
@@ -330,7 +331,7 @@ const loadKeywordTypeDict = async () => {
 const loadData = async () => {
   try {
     const res = await fetch(`${API_BASE_URL}/api/settings`, {
-      headers: { 'x-user-id': getUserId() }
+      headers: { 'Authorization': 'Bearer ' + getToken() }
     })
     if (res.ok) {
       const data = await res.json()
@@ -358,7 +359,7 @@ const triggerAutoSave = () => {
     try {
       await fetch(`${API_BASE_URL}/api/settings`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': getUserId() },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
         body: JSON.stringify({
           company_name: form.value.name,
           website: form.value.website,
@@ -377,7 +378,7 @@ const handleSave = async () => {
   try {
     await fetch(`${API_BASE_URL}/api/settings`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': getUserId() },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
       body: JSON.stringify({
         company_name: form.value.name,
         website: form.value.website,
@@ -1007,7 +1008,7 @@ const confirmKeywords = async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/keywords`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
         body: JSON.stringify({ keyword: kw.text, type: keywordType })
       })
       if (res.ok) {

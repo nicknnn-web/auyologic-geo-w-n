@@ -175,12 +175,18 @@
 import { ref, onMounted, onDeactivated, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import { fetchDictTypes, fetchDictEntries, getApiBase } from '../utils/sysDict.js'
+import { fetchDictTypes, fetchDictEntries, suggestNextDictSortOrder, getApiBase } from '../utils/sysDict.js'
+import { getToken } from '../utils/auth.js'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 
 const API_BASE = getApiBase()
+const authHeaders = (json = false) => {
+  const h = { Authorization: `Bearer ${getToken()}` }
+  if (json) h['Content-Type'] = 'application/json'
+  return h
+}
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -275,17 +281,28 @@ const loadTypes = async () => {
   dictTypeDefs.value = await fetchDictTypes()
 }
 
+/** 新增时：根据类型带出中文名，并自动计算排序 */
+const applyCreateDictTypeDefaults = async (dictTypeKey) => {
+  if (isEdit.value) return
+  const key = (dictTypeKey || '').trim()
+  if (!key) {
+    form.value.dictTypeValue = ''
+    form.value.sortOrder = 0
+    return
+  }
+  const d = dictTypeDefs.value.find((x) => x.dictTypeKey === key)
+  if (d?.dictTypeValue) {
+    form.value.dictTypeValue = d.dictTypeValue
+  } else if (!form.value.dictTypeValue) {
+    form.value.dictTypeValue = ''
+  }
+  form.value.sortOrder = await suggestNextDictSortOrder(key)
+}
+
 watch(
   () => form.value.dictType,
   (k) => {
-    if (isEdit.value) return
-    const key = (k || '').trim()
-    if (!key) {
-      form.value.dictTypeValue = ''
-      return
-    }
-    const d = dictTypeDefs.value.find((x) => x.dictTypeKey === key)
-    form.value.dictTypeValue = d?.dictTypeValue ?? ''
+    applyCreateDictTypeDefaults(k)
   }
 )
 
@@ -343,14 +360,13 @@ const resetForm = () => {
   formRef.value?.clearValidate?.()
 }
 
-const openCreate = () => {
+const openCreate = async () => {
   isEdit.value = false
   resetForm()
-  form.value.dictType = filterDictType.value || ''
-  const fk = filterDictType.value?.trim()
+  const fk = (filterDictType.value || '').trim()
+  form.value.dictType = fk
   if (fk) {
-    const d = dictTypeDefs.value.find((x) => x.dictTypeKey === fk)
-    if (d?.dictTypeValue) form.value.dictTypeValue = d.dictTypeValue
+    await applyCreateDictTypeDefaults(fk)
   }
   dialogVisible.value = true
 }
@@ -379,7 +395,7 @@ const handleSubmit = async () => {
     if (isEdit.value) {
       const res = await fetch(`${API_BASE}/api/sys-dict/entries/${form.value.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(true),
         body: JSON.stringify({
           dictType: form.value.dictType,
           dictTypeValue: form.value.dictTypeValue?.trim(),
@@ -399,7 +415,7 @@ const handleSubmit = async () => {
     } else {
       const res = await fetch(`${API_BASE}/api/sys-dict/entries`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(true),
         body: JSON.stringify({
           dictType: form.value.dictType,
           dictTypeValue: form.value.dictTypeValue?.trim(),
@@ -434,7 +450,10 @@ const handleSubmit = async () => {
 
 const handleDelete = async (id) => {
   try {
-    const res = await fetch(`${API_BASE}/api/sys-dict/entries/${id}`, { method: 'DELETE' })
+    const res = await fetch(`${API_BASE}/api/sys-dict/entries/${id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
     const errData = await res.json().catch(() => ({}))
     if (!res.ok) {
       ElMessage.error(errData.error || '删除失败')
@@ -469,7 +488,7 @@ const handleBatchDelete = async () => {
   try {
     const res = await fetch(`${API_BASE}/api/sys-dict/entries/batch-delete`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({ ids }),
     })
     const data = await res.json().catch(() => ({}))

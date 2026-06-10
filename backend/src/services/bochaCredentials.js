@@ -25,7 +25,7 @@ export function getBochaBaseUrlFromEnv() {
 /**
  * @returns {Promise<{ apiKey: string, baseUrl: string, source: 'db'|'env'|'none' }>}
  */
-export async function resolveBochaCredentials(userId = 'default_user') {
+export async function resolveBochaCredentials(userId) {
   const envKey = getBochaApiKeyFromEnv();
   const envBase = getBochaBaseUrlFromEnv();
 
@@ -39,13 +39,11 @@ export async function resolveBochaCredentials(userId = 'default_user') {
   }
 
   try {
-    const uid = String(userId || 'default_user').trim() || 'default_user';
     const { rows } = await pool.query(
       `SELECT api_key_cipher, base_url_override, enabled
        FROM ai_provider_connection
-       WHERE user_id = $1 AND provider_key = 'bocha'
-       LIMIT 1`,
-      [uid]
+       WHERE provider_key = 'bocha' AND enabled = true
+       LIMIT 1`
     );
     const row = rows[0];
     if (row && row.enabled !== false && row.api_key_cipher) {
@@ -66,7 +64,7 @@ export async function resolveBochaCredentials(userId = 'default_user') {
   };
 }
 
-export async function isBochaConfiguredForUser(userId = 'default_user') {
+export async function isBochaConfiguredForUser(userId) {
   const { apiKey } = await resolveBochaCredentials(userId);
   return !!apiKey;
 }

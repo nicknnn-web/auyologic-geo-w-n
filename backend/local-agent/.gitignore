@@ -1,0 +1,7 @@
+node_modules/
+_node_portable/
+_node_tmp/
+node
+npm
+*.tar.gz
+*.zip

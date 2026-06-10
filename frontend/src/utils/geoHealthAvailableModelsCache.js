@@ -3,15 +3,17 @@
  * 在「大模型接入」增删改 / 测连 / Logo 变更后须调用 invalidate，避免列表过期。
  */
 
+/** 大模型接入全站共享，缓存不按用户区分 */
+const GLOBAL_MODELS_CACHE_SCOPE = 'global'
+
 export const GEO_HEALTH_MODELS_CACHE_TTL_MS = 3 * 60 * 1000
 
-export function geoHealthAvailableModelsCacheKey(userId = 'default_user') {
-  const uid = String(userId || 'default_user').trim() || 'default_user'
-  return `geo_health_available_models_v1_${uid}`
+export function geoHealthAvailableModelsCacheKey(_userId = null) {
+  return `geo_health_available_models_v1_${GLOBAL_MODELS_CACHE_SCOPE}`
 }
 
 export function readGeoHealthAvailableModelsCache(
-  userId = 'default_user',
+  userId = null,
   ttlMs = GEO_HEALTH_MODELS_CACHE_TTL_MS
 ) {
   try {
@@ -27,7 +29,7 @@ export function readGeoHealthAvailableModelsCache(
   }
 }
 
-export function writeGeoHealthAvailableModelsCache(list, userId = 'default_user') {
+export function writeGeoHealthAvailableModelsCache(list, userId = null) {
   try {
     sessionStorage.setItem(
       geoHealthAvailableModelsCacheKey(userId),
@@ -38,7 +40,7 @@ export function writeGeoHealthAvailableModelsCache(list, userId = 'default_user'
   }
 }
 
-export function invalidateGeoHealthAvailableModelsCache(userId = 'default_user') {
+export function invalidateGeoHealthAvailableModelsCache(userId = null) {
   try {
     sessionStorage.removeItem(geoHealthAvailableModelsCacheKey(userId))
   } catch {

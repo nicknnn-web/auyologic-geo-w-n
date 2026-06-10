@@ -253,6 +253,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 defineOptions({ name: 'Dashboard' })
 
 import { ref, computed, onMounted } from 'vue'
@@ -425,15 +426,15 @@ const formatHistoryDate = (dateStr) => (!dateStr ? '' : formatZhCnMdHm(dateStr))
 // 未启用 keep-alive：每次进入控制台都会重新挂载并拉取最新统计
 // ===== 初始化 =====
 onMounted(async () => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
 
   // 网站健康度：企业官网 + 匹配 host 的检测记录（不按时间取任意 URL）
   siteScore.value = '--'
   siteUrl.value = ''
   try {
     const [settingsRes, reportsRes] = await Promise.all([
-      fetch(`${API_BASE_URL}/api/settings`, { headers: { 'x-user-id': userId } }),
-      fetch(`${API_BASE_URL}/api/website-reports`, { headers: { 'x-user-id': userId } }),
+      fetch(`${API_BASE_URL}/api/settings`, { headers: { 'Authorization': 'Bearer ' + getToken() } }),
+      fetch(`${API_BASE_URL}/api/website-reports`, { headers: { 'Authorization': 'Bearer ' + getToken() } }),
     ])
     let website = ''
     if (settingsRes.ok) {
@@ -464,7 +465,7 @@ onMounted(async () => {
   // 关键词 / 问题 / 草稿 / 已发布 — 聚合统计（与列表分页无关）
   try {
     const res = await fetch(`${API_BASE_URL}/api/dashboard-stats`, {
-      headers: { 'x-user-id': userId }
+      headers: { 'Authorization': 'Bearer ' + getToken() }
     })
     if (res.ok) {
       const s = await res.json()
@@ -485,7 +486,7 @@ onMounted(async () => {
   // GEO检测历史 - 从后端 API
   try {
     const res = await fetch(`${API_BASE_URL}/api/geo-tasks`, {
-      headers: { 'x-user-id': userId }
+      headers: { 'Authorization': 'Bearer ' + getToken() }
     })
     if (res.ok) {
       const data = await res.json()

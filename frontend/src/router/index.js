@@ -1,4 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { isLoggedIn } from '../utils/auth.js'
+import Login from '../views/Login.vue'
 import Dashboard from '../views/Dashboard.vue'
 import Keywords from '../views/Keywords.vue'
 import Questions from '../views/Questions.vue'
@@ -25,6 +27,9 @@ import AiProviderConnections from '../views/AiProviderConnections.vue'
 const KEEP_ALIVE = { keepAlive: true }
 
 const routes = [
+  // 登录页（唯一公开页面）
+  { path: '/login', name: 'login', component: Login, meta: { public: true, keepAlive: false } },
+
   // 每次回首页重新挂载，onMounted 拉最新统计
   { path: '/', name: 'dashboard', component: Dashboard, meta: { keepAlive: false } },
 
@@ -62,6 +67,19 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+// 全局登录守卫：未登录访问受保护页面 → 跳登录页（记住目标地址）
+router.beforeEach((to) => {
+  if (to.meta?.public) {
+    // 已登录访问登录页 → 回首页
+    if (to.name === 'login' && isLoggedIn()) return { path: '/' }
+    return true
+  }
+  if (!isLoggedIn()) {
+    return { path: '/login', query: to.fullPath !== '/' ? { redirect: to.fullPath } : {} }
+  }
+  return true
 })
 
 export default router

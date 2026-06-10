@@ -1643,6 +1643,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, computed, onMounted, onUnmounted, onActivated, watch, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import 'echarts-wordcloud'
@@ -1754,11 +1755,11 @@ const hasData = ref(false)
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
 /** 与请求头一致；可用模型缓存按该用户隔离 */
-const HEALTH_REPORT_USER_ID = 'default_user'
+const HEALTH_REPORT_USER_ID = getCurrentUserId()
 
 async function fetchAvailableModelsFromApi() {
   const res = await fetch(`${API_BASE_URL}/api/geo-brand/available-models`, {
-    headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+    headers: { 'Authorization': 'Bearer ' + getToken() },
   })
   const data = await res.json().catch(() => ({}))
   if (!data.success) throw new Error(data.error || '加载失败')
@@ -1860,7 +1861,9 @@ const enterpriseSettings = ref({
 
 const loadEnterpriseSettings = async () => {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/settings`)
+    const res = await fetch(`${API_BASE_URL}/api/settings`, {
+      headers: { Authorization: 'Bearer ' + getToken() },
+    })
     if (!res.ok) return
     const data = await res.json()
     enterpriseSettings.value = {
@@ -1888,7 +1891,7 @@ const loadWebsiteScan = async () => {
   websiteScanLoading.value = true
   try {
     const res = await fetch(`${API_BASE_URL}/api/website-reports`, {
-      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const list = await res.json()
@@ -2629,7 +2632,7 @@ async function loadTaskQaData() {
   try {
     const res = await fetch(
       `${API_BASE_URL}/api/geo-health-report/task-qa?taskId=${encodeURIComponent(String(tid))}`,
-      { headers: { 'x-user-id': 'default_user' } }
+      { headers: { 'Authorization': 'Bearer ' + getToken() } }
     )
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
@@ -3001,7 +3004,7 @@ async function loadSentimentSources() {
     if (q) params.set('q', q)
     const res = await fetch(
       `${API_BASE_URL}/api/geo-health-report/sentiment-sources?${params.toString()}`,
-      { headers: { 'x-user-id': 'default_user' } }
+      { headers: { 'Authorization': 'Bearer ' + getToken() } }
     )
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
@@ -3086,7 +3089,7 @@ async function loadSourceStats() {
   try {
     const res = await fetch(
       `${API_BASE_URL}/api/geo-health-report/source-stats?taskId=${tid}`,
-      { headers: { 'x-user-id': 'default_user' } }
+      { headers: { 'Authorization': 'Bearer ' + getToken() } }
     )
     const data = await res.json().catch(() => ({}))
     if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
@@ -3122,7 +3125,7 @@ async function loadSourceArticles() {
     if (q) params.set('q', q)
     const res = await fetch(
       `${API_BASE_URL}/api/geo-health-report/source-articles?${params.toString()}`,
-      { headers: { 'x-user-id': 'default_user' } }
+      { headers: { 'Authorization': 'Bearer ' + getToken() } }
     )
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
@@ -3248,7 +3251,7 @@ async function fetchCompetitorDetailByIndex(dataIndex) {
   try {
     const res = await fetch(
       `${API_BASE_URL}/api/geo-health-report/competitor?taskId=${encodeURIComponent(String(tid))}&name=${encodeURIComponent(row.name)}`,
-      { headers: { 'x-user-id': 'default_user' }, signal }
+      { headers: { 'Authorization': 'Bearer ' + getToken() }, signal }
     )
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
@@ -3364,7 +3367,7 @@ const persistDiagnosticSuggestions = async ({ silent = false } = {}) => {
   try {
     const res = await fetch(`${API_BASE_URL}/api/geo-health-report/diagnostic-suggestions`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': HEALTH_REPORT_USER_ID },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
       body: JSON.stringify({
         taskId: tid,
         suggestionsByItem: buildSuggestionsByItemPayload(),
@@ -3460,7 +3463,7 @@ const generateAiSummary = async () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-user-id': HEALTH_REPORT_USER_ID,
+        'Authorization': 'Bearer ' + getToken(),
       },
       body: JSON.stringify({ taskId: Number(taskId) }),
     })
@@ -3945,7 +3948,7 @@ const fetchHistoryList = async () => {
       params.set('dateTo', historyDateRange.value[1])
     }
     const res = await fetch(`${API_BASE_URL}/api/geo-health-report/history?${params.toString()}`, {
-      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     const data = await res.json()
     if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
@@ -4000,7 +4003,7 @@ const deleteHistoryReport = async (row) => {
     )
     const res = await fetch(`${API_BASE_URL}/api/geo-health-report/history/${row.taskId}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     const data = await res.json()
     if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`)
@@ -4121,7 +4124,7 @@ const loadHealthReport = async (opts = {}) => {
       url.searchParams.set('taskId', String(taskId))
     }
     const res = await fetch(url.toString(), {
-      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     const data = await res.json()
     if (!res.ok) {
@@ -4181,7 +4184,7 @@ const pollTaskProgress = async (taskId) => {
       try {
         const pr = await fetch(
           `${API_BASE_URL}/api/geo-brand/tasks/${taskId}/progress`,
-          { headers: { 'x-user-id': 'default_user' } }
+          { headers: { 'Authorization': 'Bearer ' + getToken() } }
         )
         if (pr.status === 404) {
           taskGone404 = true
@@ -4298,7 +4301,7 @@ const abortGeneratingTask = async () => {
   try {
     const r = await fetch(`${API_BASE_URL}/api/geo-brand/tasks/${tid}`, {
       method: 'DELETE',
-      headers: { 'x-user-id': 'default_user' },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     const data = await r.json().catch(() => ({}))
     if (!r.ok || !data?.success) {
@@ -4362,7 +4365,7 @@ const submitHealthReportTask = async ({ connectionIds, analysisConnectionId }) =
   try {
     const createRes = await fetch(`${API_BASE_URL}/api/geo-brand/tasks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': 'default_user' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
       body: JSON.stringify({ connectionIds, analysisConnectionId }),
     })
     const createData = await createRes.json().catch(() => ({}))
@@ -4415,7 +4418,7 @@ const resumeActiveTaskIfAny = async () => {
   try {
     const pr = await fetch(
       `${API_BASE_URL}/api/geo-brand/tasks/${taskId}/progress`,
-      { headers: { 'x-user-id': 'default_user' } }
+      { headers: { 'Authorization': 'Bearer ' + getToken() } }
     )
     if (pr.status === 404) {
       localStorage.removeItem(ACTIVE_TASK_KEY)
@@ -4715,7 +4718,7 @@ const exportReportTemplatePdf = async () => {
     }
     const res = await fetch(u.toString(), {
       method: 'GET',
-      headers: { 'x-user-id': HEALTH_REPORT_USER_ID },
+      headers: { 'Authorization': 'Bearer ' + getToken() },
     })
     const ct = res.headers.get('content-type') || ''
     if (!res.ok) {

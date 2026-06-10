@@ -22,6 +22,7 @@ import {
   removeAiLogoStored,
   saveAiLogoFromBuffer,
 } from '../utils/aiProviderLogoStorage.js';
+import { AI_PROVIDER_SCOPE } from '../constants/aiProviderScope.js';
 
 const router = Router();
 
@@ -73,10 +74,6 @@ const logoUpload = multer({
   },
 });
 
-function userId(req) {
-  return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
-}
-
 function keyLast4(plain) {
   const s = String(plain || '');
   if (s.length >= 4) return s.slice(-4);
@@ -120,18 +117,18 @@ function toDto(row) {
   };
 }
 
-/** 同一 user 下每种 provider_key 仅允许一条 */
-async function existsOtherByProviderKey(uid, providerKey, excludeId) {
+/** 全站每种 provider_key 仅允许一条 */
+async function existsOtherByProviderKey(providerKey, excludeId) {
   if (excludeId == null) {
     const { rows } = await pool.query(
-      `SELECT 1 FROM ai_provider_connection WHERE user_id = $1 AND provider_key = $2 LIMIT 1`,
-      [uid, providerKey]
+      `SELECT 1 FROM ai_provider_connection WHERE provider_key = $1 LIMIT 1`,
+      [providerKey]
     );
     return rows.length > 0;
   }
   const { rows } = await pool.query(
-    `SELECT 1 FROM ai_provider_connection WHERE user_id = $1 AND provider_key = $2 AND id != $3 LIMIT 1`,
-    [uid, providerKey, excludeId]
+    `SELECT 1 FROM ai_provider_connection WHERE provider_key = $1 AND id != $2 LIMIT 1`,
+    [providerKey, excludeId]
   );
   return rows.length > 0;
 }
@@ -161,15 +158,12 @@ router.get('/ai-provider-connections/presets', (req, res) => {
 
 router.get('/ai-provider-connections', async (req, res) => {
   try {
-    const uid = userId(req);
     const { rows } = await pool.query(
       `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
               key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
               logo_relpath, logo_bg_color
        FROM ai_provider_connection
-       WHERE user_id = $1
-       ORDER BY id DESC`,
-      [uid]
+       ORDER BY id DESC`
     );
     res.json({ success: true, list: rows.map(toDto) });
   } catch (e) {
@@ -180,7 +174,6 @@ router.get('/ai-provider-connections', async (req, res) => {
 
 router.get('/ai-provider-connections/:id', async (req, res) => {
   try {
-    const uid = userId(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
       return res.status(400).json({ success: false, error: '无效 id' });
@@ -189,8 +182,8 @@ router.get('/ai-provider-connections/:id', async (req, res) => {
       `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
               key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
               logo_relpath, logo_bg_color
-       FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+       FROM ai_provider_connection WHERE id = $1`,
+      [id]
     );
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: '未找到' });
@@ -211,7 +204,6 @@ router.post('/ai-provider-connections', async (req, res) => {
         error: '服务端未配置 AI_CREDENTIALS_SECRET（至少 16 字符），无法安全保存密钥',
       });
     }
-    const uid = userId(req);
     const {
       vendorName,
       providerKey,
@@ -240,7 +232,7 @@ router.post('/ai-provider-connections', async (req, res) => {
     if (pk !== 'bocha' && !String(defaultModel || '').trim()) {
       return res.status(400).json({ success: false, error: '请填写模型名（须与厂商控制台一致）' });
     }
-    if (await existsOtherByProviderKey(uid, pk, null)) {
+    if (await existsOtherByProviderKey(pk, null)) {
       return res.status(400).json({
         success: false,
         error: '该厂商类型已有一条接入，同类型仅允许保留一条。请编辑已有记录或先删除再新增。',
@@ -262,7 +254,7 @@ router.post('/ai-provider-connections', async (req, res) => {
       RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
                 key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
                 logo_relpath, logo_bg_color`,
-      [uid, vname, pk, override || null, cipher, kl4, dm || null, !!enabled, lbgN ?? null]
+      [AI_PROVIDER_SCOPE, vname, pk, override || null, cipher, kl4, dm || null, !!enabled, lbgN ?? null]
     );
     res.json({ success: true, data: toDto(rows[0]) });
   } catch (e) {
@@ -280,7 +272,6 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
         error: '服务端未配置 AI_CREDENTIALS_SECRET',
       });
     }
-    const uid = userId(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
       return res.status(400).json({ success: false, error: '无效 id' });
@@ -296,8 +287,8 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
     } = req.body || {};
 
     const { rows: exist } = await pool.query(
-      `SELECT * FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+      `SELECT * FROM ai_provider_connection WHERE id = $1`,
+      [id]
     );
     if (!exist[0]) {
       return res.status(404).json({ success: false, error: '未找到' });
@@ -318,7 +309,7 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
     if (pk === 'custom' && !override) {
       return res.status(400).json({ success: false, error: '自定义接入须填写 Base URL' });
     }
-    if (await existsOtherByProviderKey(uid, pk, id)) {
+    if (await existsOtherByProviderKey(pk, id)) {
       return res.status(400).json({
         success: false,
         error: '已存在同厂商类型的其他接入，同类型仅允许保留一条。请选择其它类型或编辑已有记录。',
@@ -361,11 +352,11 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
         enabled = $7,
         logo_bg_color = $8,
         updated_at = NOW()
-      WHERE id = $9 AND user_id = $10
+      WHERE id = $9
       RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
                 key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
                 logo_relpath, logo_bg_color`,
-      [vname, pk, override || null, cipher, kl4, dm || null, en, nextLogoBg, id, uid]
+      [vname, pk, override || null, cipher, kl4, dm || null, en, nextLogoBg, id]
     );
     res.json({ success: true, data: toDto(rows[0]) });
   } catch (e) {
@@ -376,14 +367,13 @@ router.put('/ai-provider-connections/:id', async (req, res) => {
 
 router.delete('/ai-provider-connections/:id', async (req, res) => {
   try {
-    const uid = userId(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
       return res.status(400).json({ success: false, error: '无效 id' });
     }
     const del = await pool.query(
-      `DELETE FROM ai_provider_connection WHERE id = $1 AND user_id = $2 RETURNING id, logo_relpath`,
-      [id, uid]
+      `DELETE FROM ai_provider_connection WHERE id = $1 RETURNING id, logo_relpath`,
+      [id]
     );
     if (!del.rowCount) {
       return res.status(404).json({ success: false, error: '未找到' });
@@ -403,14 +393,13 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
     if (!isEncryptionConfigured(secret)) {
       return res.status(503).json({ success: false, error: '服务端未配置 AI_CREDENTIALS_SECRET' });
     }
-    const uid = userId(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
       return res.status(400).json({ success: false, error: '无效 id' });
     }
     const { rows } = await pool.query(
-      `SELECT * FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+      `SELECT * FROM ai_provider_connection WHERE id = $1`,
+      [id]
     );
     const row = rows[0];
     if (!row) {
@@ -503,7 +492,6 @@ router.post('/ai-provider-connections/:id/try-prompt', async (req, res) => {
         error: '服务端未配置 AI_CREDENTIALS_SECRET（至少 16 字符）',
       });
     }
-    const uid = userId(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
       return res.status(400).json({ success: false, error: '无效 id' });
@@ -517,8 +505,8 @@ router.post('/ai-provider-connections/:id/try-prompt', async (req, res) => {
     maxTokens = Math.min(maxTokens, 8192);
 
     const { rows } = await pool.query(
-      `SELECT * FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+      `SELECT * FROM ai_provider_connection WHERE id = $1`,
+      [id]
     );
     const row = rows[0];
     if (!row) {
@@ -634,7 +622,6 @@ router.post(
   },
   async (req, res) => {
     try {
-      const uid = userId(req);
       const id = parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) {
         return res.status(400).json({ success: false, error: '无效 id' });
@@ -643,8 +630,8 @@ router.post(
         return res.status(400).json({ success: false, error: '请选择图片文件' });
       }
       const { rows: exist } = await pool.query(
-        `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-        [id, uid]
+        `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1`,
+        [id]
       );
       if (!exist[0]) {
         return res.status(404).json({ success: false, error: '未找到' });
@@ -653,7 +640,7 @@ router.post(
       let stored;
       try {
         stored = await saveAiLogoFromBuffer({
-          userId: uid,
+          userId: AI_PROVIDER_SCOPE,
           connectionId: id,
           originalName: req.file.originalname,
           buffer: req.file.buffer,
@@ -667,11 +654,11 @@ router.post(
       try {
         const upd = await pool.query(
           `UPDATE ai_provider_connection SET logo_relpath = $1, updated_at = NOW()
-           WHERE id = $2 AND user_id = $3
+           WHERE id = $2
            RETURNING id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
                      key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
                      logo_relpath, logo_bg_color`,
-          [stored, id, uid]
+          [stored, id]
         );
         rows = upd.rows;
       } catch (dbErr) {
@@ -689,30 +676,29 @@ router.post(
 
 router.delete('/ai-provider-connections/:id/logo', async (req, res) => {
   try {
-    const uid = userId(req);
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) {
       return res.status(400).json({ success: false, error: '无效 id' });
     }
     const sel = await pool.query(
-      `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+      `SELECT id, logo_relpath FROM ai_provider_connection WHERE id = $1`,
+      [id]
     );
     if (!sel.rows[0]) {
       return res.status(404).json({ success: false, error: '未找到' });
     }
     const oldRel = sel.rows[0].logo_relpath;
     await pool.query(
-      `UPDATE ai_provider_connection SET logo_relpath = NULL, updated_at = NOW() WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+      `UPDATE ai_provider_connection SET logo_relpath = NULL, updated_at = NOW() WHERE id = $1`,
+      [id]
     );
     if (oldRel) removeAiLogoStored(oldRel);
     const { rows: again } = await pool.query(
       `SELECT id, user_id, vendor_name, provider_key, base_url_override, default_model, enabled,
               key_last4, last_test_status, last_test_at, last_test_message, created_at, updated_at,
               logo_relpath, logo_bg_color
-       FROM ai_provider_connection WHERE id = $1 AND user_id = $2`,
-      [id, uid]
+       FROM ai_provider_connection WHERE id = $1`,
+      [id]
     );
     res.json({ success: true, data: toDto(again[0]) });
   } catch (e) {

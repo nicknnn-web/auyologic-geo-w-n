@@ -30,7 +30,7 @@ import { isBochaConfiguredForUser } from '../services/bochaCredentials.js';
 const router = Router();
 
 function getUserId(req) {
-  return req.headers['x-user-id'] || 'default_user';
+  return req.userId;
 }
 
 function taskRow(r) {
@@ -64,14 +64,12 @@ router.get('/geo-brand/config', async (req, res) => {
  */
 router.get('/geo-brand/available-models', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const { rows } = await pool.query(
       `SELECT id, vendor_name, provider_key, default_model, base_url_override,
               key_last4, last_test_status, last_test_at, last_test_message
        FROM ai_provider_connection
-       WHERE user_id = $1 AND enabled = true AND provider_key <> 'bocha'
-       ORDER BY id ASC`,
-      [userId]
+       WHERE enabled = true AND provider_key <> 'bocha'
+       ORDER BY id ASC`
     );
     res.json({
       success: true,

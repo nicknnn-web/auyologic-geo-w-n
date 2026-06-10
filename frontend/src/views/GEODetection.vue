@@ -277,6 +277,8 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
+import { getUserLocalData, patchUserLocalData, getUserLocalBucket, setUserLocalBucket } from '../utils/userStorage.js'
 import { ref, computed, onMounted, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -925,11 +927,21 @@ const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '�
 // ===== 历史检测记录 =====
 const geoDetectionHistory = ref([])
 
+const GEO_DETAILS_BUCKET = 'geo-detection-details'
+
+const apiOrigin = () => window.VITE_API_URL || window.location.origin
+const authHeaders = (json = false) => {
+  const h = { Authorization: `Bearer ${getToken()}` }
+  if (json) h['Content-Type'] = 'application/json'
+  return h
+}
+
 const loadHistory = async () => {
   try {
-    const res = await fetch(`${window.VITE_API_URL || window.location.origin}/api/geo-reports`)
+    const res = await fetch(`${apiOrigin()}/api/geo-reports`, { headers: authHeaders() })
     if (res.ok) {
       const data = await res.json()
+      const detailsMap = getUserLocalBucket(GEO_DETAILS_BUCKET)
       geoDetectionHistory.value = Array.isArray(data) ? data.map(r => ({
         id: r.id,
         checkedAt: r.checkedAt,
@@ -937,9 +949,9 @@ const loadHistory = async () => {
         overallGrade: r.overallGrade,
         visibleCount: r.visibleCount,
         missingCount: r.missingCount,
-        platformCount: r.platformCount,
-        platformNames: r.platformNames || [],
-        results: r.results || []  // 本地保留 results，前端展示用
+        platformCount: r.platformData?.platformCount ?? r.platformCount ?? 0,
+        platformNames: r.platformData?.platformNames || r.platformNames || [],
+        results: detailsMap[String(r.id)]?.results || []
       })) : []
     }
   } catch (e) {
@@ -949,47 +961,41 @@ const loadHistory = async () => {
 }
 
 const saveHistory = async (record) => {
-  // 保存完整结果到 localStorage（供前端详情展示）
-  const allData = {}
+  let backendId = record.id
   try {
-    const raw = localStorage.getItem('auyologic_data')
-    if (raw) Object.assign(allData, JSON.parse(raw))
-  } catch {}
-  const history = allData['geo-detection-history'] || []
-  history.unshift(record)
-  if (history.length > 10) history.splice(10)
-  allData['geo-detection-history'] = history
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
-  geoDetectionHistory.value = history
-
-  // 同步到后端（仅存汇总字段，results 太大存本地）
-  try {
-    await fetch(`${window.VITE_API_URL || window.location.origin}/api/geo-reports`, {
+    const res = await fetch(`${apiOrigin()}/api/geo-reports`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(true),
       body: JSON.stringify({
         keyword: record.platformNames?.join(',') || '',
         overallScore: record.overallScore,
         overallGrade: record.overallGrade,
         visibleCount: record.visibleCount,
         missingCount: record.missingCount,
-        platformData: { platformCount: record.platformCount, questionCount: record.questionCount }
+        platformData: {
+          platformCount: record.platformCount,
+          questionCount: record.questionCount,
+          platformNames: record.platformNames || [],
+        }
       })
     })
+    if (res.ok) {
+      const row = await res.json()
+      backendId = row.id ?? backendId
+    }
   } catch (e) {
     console.warn('同步历史到后端失败:', e)
   }
+
+  const detailsMap = getUserLocalBucket(GEO_DETAILS_BUCKET)
+  detailsMap[String(backendId)] = { ...record, id: backendId }
+  setUserLocalBucket(GEO_DETAILS_BUCKET, detailsMap)
+  await loadHistory()
 }
 
 const loadHistoryRecord = async (id) => {
-  // 优先从本地 history 读取（包含完整 results）
-  const allData = {}
-  try {
-    const raw = localStorage.getItem('auyologic_data')
-    if (raw) Object.assign(allData, JSON.parse(raw))
-  } catch {}
-  const history = allData['geo-detection-history'] || []
-  return history.find(h => h.id === Number(id)) || null
+  const detailsMap = getUserLocalBucket(GEO_DETAILS_BUCKET)
+  return detailsMap[String(id)] || null
 }
 
 const getHistoryGradeClass = (grade) => {
@@ -1175,22 +1181,16 @@ const removeCustomKeyword = (kw) => {
 }
 
 const saveCustomKeywords = async () => {
-  // 保存到本地
-  try {
-    const raw = localStorage.getItem('auyologic_data')
-    const allData = raw ? JSON.parse(raw) : {}
-    allData['geo-custom-keywords'] = customKeywords.value
-    localStorage.setItem('auyologic_data', JSON.stringify(allData))
-  } catch {}
+  patchUserLocalData({ 'geo-custom-keywords': customKeywords.value })
 
   // 同时保存到后端数据库
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const lastKw = customKeywords.value[customKeywords.value.length - 1]
   if (lastKw) {
     try {
       await fetch(`${window.VITE_API_URL || window.location.origin}/api/keywords`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
         body: JSON.stringify({ keyword: lastKw, type: '01', source: 'geo手动添加' })
       })
     } catch (e) {
@@ -1503,21 +1503,16 @@ const buildResultsFromAPI = (apiResults) => {
     results: results
   })
 
-  // 同步到 storage 供 Dashboard 读取（本地保留）
-  const allData = {}
-  try {
-    const raw = localStorage.getItem('auyologic_data')
-    if (raw) Object.assign(allData, JSON.parse(raw))
-  } catch {}
-  allData['geo-detection-result'] = {
-    overallScore: overallScore.value,
-    overallGrade: overallGrade.value,
-    visibleCount: visibleQuestions.value.length,
-    missingCount: missingQuestions.value.length,
-    platformCount: selectedPlatforms.value.length,
-    checkedAt: new Date().toISOString()
-  }
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
+  patchUserLocalData({
+    'geo-detection-result': {
+      overallScore: overallScore.value,
+      overallGrade: overallGrade.value,
+      visibleCount: visibleQuestions.value.length,
+      missingCount: missingQuestions.value.length,
+      platformCount: selectedPlatforms.value.length,
+      checkedAt: new Date().toISOString()
+    }
+  })
 }
 
 
@@ -1536,19 +1531,19 @@ const openRawAnswer = (rawAnswer) => {
  */
 const handleGenerateReport = () => {
   // 保存完整报告数据到storage
-  const allData = JSON.parse(localStorage.getItem('auyologic_data') || '{}')
-  allData['geo-full-report'] = {
-    overallScore: overallScore.value,
-    overallGrade: overallGrade.value,
-    visibleCount: visibleQuestions.value.length,
-    missingCount: missingQuestions.value.length,
-    platformCount: selectedPlatforms.value.length,
-    categoryCounts: categoryCounts.value,
-    radarData: radarChartData.value,
-    results: detectionResults.value,
-    checkedAt: new Date().toISOString()
-  }
-  localStorage.setItem('auyologic_data', JSON.stringify(allData))
+  patchUserLocalData({
+    'geo-full-report': {
+      overallScore: overallScore.value,
+      overallGrade: overallGrade.value,
+      visibleCount: visibleQuestions.value.length,
+      missingCount: missingQuestions.value.length,
+      platformCount: selectedPlatforms.value.length,
+      categoryCounts: categoryCounts.value,
+      radarData: radarChartData.value,
+      results: detectionResults.value,
+      checkedAt: new Date().toISOString()
+    }
+  })
 
   // 跳转到Dashboard
   router.push('/dashboard')
@@ -1607,11 +1602,9 @@ onMounted(async () => {
   // 从后端 API 加载已审核的问题
   await loadQuestionsFromAPI()
 
-  // 补充本地自定义关键词
+  // 补充当前用户本地自定义关键词
   try {
-    const raw = localStorage.getItem('auyologic_data')
-    const stored = raw ? JSON.parse(raw) : {}
-    const storedCustomKws = stored['geo-custom-keywords'] || []
+    const storedCustomKws = getUserLocalData()['geo-custom-keywords'] || []
     const managedKws = keywords.value
     const validCustomKws = storedCustomKws.filter(kw => !managedKws.includes(kw))
     customKeywords.value = validCustomKws
@@ -1621,12 +1614,12 @@ onMounted(async () => {
 
 // 从后端 API 加载关键词
 const loadKeywordsFromAPI = async () => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const origin = window.VITE_API_URL || window.location.origin
   try {
     const list = await fetchAllPages(
       (p, ps) => `${origin}/api/keywords?page=${p}&pageSize=${ps}`,
-      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+      { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
     )
     keywords.value = list.map((k) => k.keyword || '').filter(Boolean)
   } catch (e) {
@@ -1637,12 +1630,12 @@ const loadKeywordsFromAPI = async () => {
 
 // 从后端 API 加载问题
 const loadQuestionsFromAPI = async () => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const origin = window.VITE_API_URL || window.location.origin
   try {
     const allQ = await fetchAllPages(
       (p, ps) => `${origin}/api/questions?page=${p}&pageSize=${ps}`,
-      { pageSize: 100, fetchOptions: { headers: { 'x-user-id': userId } } }
+      { pageSize: 100, fetchOptions: { headers: { 'Authorization': 'Bearer ' + getToken() } } }
     )
     const approvedQuestions = allQ.filter((q) => q.status === 'approved')
     questions.value = approvedQuestions.map((q, i) => ({

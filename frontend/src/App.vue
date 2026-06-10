@@ -1,5 +1,7 @@
 <template>
-  <div class="common-layout">
+  <!-- 公开页（登录页）不渲染主布局 -->
+  <router-view v-if="$route.meta?.public" />
+  <div class="common-layout" v-else>
     <el-container>
       <!-- Header -->
       <el-header class="bg-white z-10 pl-4 pr-0 flex items-center justify-between" style="height: 50px;">
@@ -20,10 +22,24 @@
         </div>
         <div class="flex items-center">
           <el-link class="mr-4 hidden sm:inline" underline="never">帮助文档</el-link>
-          <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2">
-            <el-avatar :size="28" class="mr-2">U</el-avatar>
-            <span class="text-sm hidden sm:inline">用户</span>
-          </div>
+          <el-dropdown trigger="click" @command="handleUserCommand">
+            <div class="flex items-center cursor-pointer hover:bg-gray-100 px-3 py-2 h-full">
+              <el-avatar :size="28" class="mr-2">{{ userInitial }}</el-avatar>
+              <span class="text-sm hidden sm:inline">{{ displayName }}</span>
+              <el-icon class="ml-1 text-gray-400"><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled>
+                  <div class="text-xs text-gray-400">{{ userEmail || displayName }}</div>
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" divided>
+                  <el-icon><SwitchButton /></el-icon>
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -268,7 +284,7 @@
               <component
                 v-if="Component"
                 :is="Component"
-                :key="routeComponentKey(route)"
+                :key="`${routeComponentKey(route)}_${authTick}`"
               />
             </keep-alive>
           </router-view>
@@ -279,17 +295,59 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Histogram, Menu, Close, TrendCharts, Management, Comment, Connection } from '@element-plus/icons-vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessageBox, ElMessage } from 'element-plus'
+import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Histogram, Menu, Close, TrendCharts, Management, Comment, Connection, ArrowDown, SwitchButton } from '@element-plus/icons-vue'
+import { getCurrentUser, getCurrentUserId, clearAuth, AUTH_CHANGE_EVENT } from './utils/auth.js'
 
 /** 与各页 defineOptions({ name }) 一致；不缓存则每次进控制台拉最新统计 */
 const keepAliveExclude = ['Dashboard', 'DraftEdit']
 
-const routeComponentKey = (route) =>
-  route.meta?.keepAlive ? String(route.name) : route.fullPath
+/** 全站共享模块：不按用户 remount keep-alive（与大模型接入、字典管理一致） */
+const GLOBAL_KEEP_ALIVE_NAMES = new Set(['sys-dict', 'ai-provider-connections'])
+
+const routeComponentKey = (route) => {
+  if (!route.meta?.keepAlive) return route.fullPath
+  const name = String(route.name)
+  if (GLOBAL_KEEP_ALIVE_NAMES.has(name)) return name
+  const uid = getCurrentUserId() || 'guest'
+  return `${name}_${uid}`
+}
 
 const isCollapse = ref(false)
 const mobileMenuOpen = ref(false)
+
+// ===== 当前用户信息与退出登录 =====
+const router = useRouter()
+const route = useRoute()
+const authTick = ref(0)
+const bumpAuth = () => { authTick.value++ }
+
+const currentUser = computed(() => {
+  authTick.value // 登录/退出时主动刷新
+  route.fullPath // 路由切换时同步刷新
+  return getCurrentUser()
+})
+const displayName = computed(() => currentUser.value?.username || '用户')
+const userEmail = computed(() => currentUser.value?.email || '')
+const userInitial = computed(() => (displayName.value[0] || 'U').toUpperCase())
+
+const handleUserCommand = async (command) => {
+  if (command !== 'logout') return
+  try {
+    await ElMessageBox.confirm('确定退出登录吗？', '退出登录', {
+      confirmButtonText: '退出',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  clearAuth()
+  ElMessage.success('已退出登录')
+  router.replace('/login')
+}
 
 // 检测是否为移动端
 const isMobile = computed(() => {
@@ -299,14 +357,28 @@ const isMobile = computed(() => {
   return false
 })
 
-onMounted(async () => {
-  // 迁移旧 localStorage 数据到后端 API（仅执行一次）
-  try {
-    const { default: migrateLocalStorage } = await import('./utils/migrateLocalStorage.js')
-    await migrateLocalStorage()
-  } catch (e) {
-    console.warn('[App] 迁移脚本加载失败:', e)
-  }
+const runStorageMigration = () => {
+  import('./utils/migrateLocalStorage.js')
+    .then((m) => m.default())
+    .catch((e) => console.warn('[App] 迁移脚本加载失败:', e))
+}
+
+onMounted(() => {
+  window.addEventListener(AUTH_CHANGE_EVENT, bumpAuth)
+  window.addEventListener(AUTH_CHANGE_EVENT, runStorageMigration)
+  // 全局 localStorage → admin；登录后同步后端
+  import('./utils/migrateLegacyUserStorage.js')
+    .then((m) => {
+      m.migrateLegacyGlobalStorageToAdmin()
+      return m.syncAdminScopedStorageToBackend()
+    })
+    .catch((e) => console.warn('[App] 用户缓存迁移失败:', e))
+  runStorageMigration()
+})
+
+onUnmounted(() => {
+  window.removeEventListener(AUTH_CHANGE_EVENT, bumpAuth)
+  window.removeEventListener(AUTH_CHANGE_EVENT, runStorageMigration)
 })
 </script>
 

@@ -6,16 +6,15 @@ import { createAiClientByConnectionId } from '../services/aiClientFactory.js';
 const router = express.Router();
 
 function getUserId(req) {
-  return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+  return req.userId;
 }
 
 async function resolveConnectionId(userId, connectionId) {
   if (connectionId) return Number(connectionId);
   const { rows } = await pool.query(
     `SELECT id FROM ai_provider_connection
-     WHERE user_id = $1 AND enabled = true
-     ORDER BY id ASC LIMIT 1`,
-    [userId]
+     WHERE enabled = true
+     ORDER BY id ASC LIMIT 1`
   );
   return rows[0]?.id || null;
 }

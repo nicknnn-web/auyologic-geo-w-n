@@ -21,16 +21,15 @@ import { createAiClientByConnectionId } from '../services/aiClientFactory.js';
 const router = Router();
 
 function getUserId(req) {
-  return String(req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+  return req.userId;
 }
 
 async function resolveConnectionId(userId, connectionId) {
   if (connectionId) return Number(connectionId);
   const { rows } = await pool.query(
     `SELECT id FROM ai_provider_connection
-     WHERE user_id = $1 AND enabled = true
-     ORDER BY id ASC LIMIT 1`,
-    [userId]
+     WHERE enabled = true
+     ORDER BY id ASC LIMIT 1`
   );
   return rows[0]?.id || null;
 }
@@ -86,14 +85,11 @@ router.post('/generate', async (req, res) => {
  */
 router.get('/providers', async (req, res) => {
   try {
-    const userId = getUserId(req);
     const { rows } = await pool.query(
       `SELECT id, vendor_name, provider_key, default_model, enabled,
               key_last4, last_test_status
        FROM ai_provider_connection
-       WHERE user_id = $1
-       ORDER BY id ASC`,
-      [userId]
+       ORDER BY id ASC`
     );
     res.json({
       success: true,

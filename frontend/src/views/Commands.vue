@@ -110,6 +110,7 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { commandsAPI } from '../utils/api'
@@ -219,7 +220,7 @@ const handleSelectionChange = (selection) => {
 const handleBatchDelete = async () => {
   if (selectedRows.value.length === 0) return
   
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const ids = selectedRows.value.map(row => row.id)
   
   // 逐个删除
@@ -227,7 +228,7 @@ const handleBatchDelete = async () => {
     try {
       await fetch(`${API_BASE_URL}/api/instruction-templates/${id}`, {
         method: 'DELETE',
-        headers: { 'x-user-id': userId }
+        headers: { 'Authorization': 'Bearer ' + getToken() }
       })
     } catch { /* silent */ }
   }
@@ -248,7 +249,7 @@ const initDefaultCommands = async () => {
     return
   }
 
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   const defaultCommands = [
     {
       name: '产品软文模板',
@@ -358,7 +359,7 @@ const initDefaultCommands = async () => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-id': userId
+          'Authorization': 'Bearer ' + getToken()
         },
         body: JSON.stringify({ name: cmd.name, content: cmd.prompt, contentType })
       })
@@ -390,11 +391,11 @@ const handleEdit = (row) => {
 }
 
 const handleDelete = async (id) => {
-  const userId = 'default_user'
+  const userId = getCurrentUserId()
   try {
     await fetch(`${API_BASE_URL}/api/instruction-templates/${id}`, { 
       method: 'DELETE',
-      headers: { 'x-user-id': userId }
+      headers: { 'Authorization': 'Bearer ' + getToken() }
     })
   } catch { /* silent */ }
   await reloadPagedListAfterRemoval({ page, list: tableData, loadData })
@@ -405,14 +406,14 @@ const handleSubmit = async () => {
   try {
     const valid = await formRef.value.validate().catch(() => false)
     if (!valid) return
-    const userId = 'default_user'
+    const userId = getCurrentUserId()
     if (isEdit.value) {
       try {
         await fetch(`${API_BASE_URL}/api/instruction-templates/${form.value.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
-            'x-user-id': userId
+            'Authorization': 'Bearer ' + getToken()
           },
           body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })
@@ -425,7 +426,7 @@ const handleSubmit = async () => {
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'x-user-id': userId
+            'Authorization': 'Bearer ' + getToken()
           },
           body: JSON.stringify({ name: form.value.name, content: form.value.prompt || form.value.content, contentType: form.value.type })
         })

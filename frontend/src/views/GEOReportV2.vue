@@ -197,11 +197,12 @@
 </template>
 
 <script setup>
+import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, computed } from 'vue'
 import { Refresh, Monitor, TrendCharts, DataLine } from '@element-plus/icons-vue'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
-const USER_ID = 'default_user'
+const USER_ID = getCurrentUserId()
 
 const loading = ref(false)
 const fatalError = ref('')
@@ -295,7 +296,9 @@ function pickOfficialWebsiteReport(reports, officialWebsite) {
 async function loadEnterprise() {
   stepErr.value[0] = false
   try {
-    const res = await fetch(`${API_BASE_URL}/api/settings`)
+    const res = await fetch(`${API_BASE_URL}/api/settings`, {
+      headers: { Authorization: 'Bearer ' + getToken() },
+    })
     if (!res.ok) throw new Error(`企业信息 HTTP ${res.status}`)
     const data = await res.json()
     enterprise.value = {
@@ -317,7 +320,7 @@ async function loadEnterprise() {
 async function loadHealth() {
   stepErr.value[1] = false
   const res = await fetch(`${API_BASE_URL}/api/geo-health-report`, {
-    headers: { 'x-user-id': USER_ID },
+    headers: { 'Authorization': 'Bearer ' + getToken() },
   })
   if (!res.ok) throw new Error(`品牌体检报告 HTTP ${res.status}`)
   const data = await res.json()
@@ -355,7 +358,7 @@ async function loadHealth() {
 
 async function loadWebsiteList() {
   const res = await fetch(`${API_BASE_URL}/api/website-reports`, {
-    headers: { 'x-user-id': USER_ID },
+    headers: { 'Authorization': 'Bearer ' + getToken() },
   })
   if (!res.ok) throw new Error(`网站检测列表 HTTP ${res.status}`)
   const list = await res.json()

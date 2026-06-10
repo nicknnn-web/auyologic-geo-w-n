@@ -8,6 +8,8 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 import { normalizeImagePathForApi, downloadKnowledgeFileBuffer } from './services/minioClient.js';
 import { extractKnowledgeTextFromBuffer } from './services/knowledgeDocumentExtract.js';
+import { authMiddleware } from './middleware/auth.js';
+import authRouter from './routes/auth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -195,6 +197,16 @@ async function ensureSysDictAndMigrate() {
          enabled = EXCLUDED.enabled`
     )
     .catch((e) => console.warn('publish_platform 今日头条 seed:', e.message))
+  await pool
+    .query(
+      `INSERT INTO sys_dict (dict_type, data_key, data_value, sort_order, enabled)
+       VALUES ('publish_platform', 'baijiahao', '百度百家号', 55, true)
+       ON CONFLICT (dict_type, data_key) DO UPDATE SET
+         data_value = EXCLUDED.data_value,
+         sort_order = EXCLUDED.sort_order,
+         enabled = EXCLUDED.enabled`
+    )
+    .catch((e) => console.warn('publish_platform 百度百家号 seed:', e.message))
 }
 
 /** 写入或更新字典类型中文名 */
@@ -361,12 +373,17 @@ app.use(cors());
 }
 app.use(express.json({ limit: '50mb' }));
 
-// 获取用户ID
-const getUserId = (req) => {
-  const id = req.headers['x-user-id'];
-  if (id && id !== 'undefined' && id !== 'null') return id;
-  return 'default_user';
-};
+// 将 pool 共享给路由模块（auth.js 等通过 req.app.locals.pool 访问）
+app.locals.pool = pool;
+
+// 注册/登录路由（不需要鉴权）
+app.use('/api/auth', authRouter);
+
+// 全局鉴权中间件：所有 /api/* 路由（login/register 已在上面提前注册，不会走到这里）
+app.use('/api', authMiddleware);
+
+// 获取用户ID（从鉴权中间件注入的 req.userId 读取）
+const getUserId = (req) => req.userId;
 
 // 数据库表结构test
 const tableSchemas = {
@@ -453,7 +470,8 @@ const ensureTable = async (table) => {
 };
 
 // CRUD 路由
-const tables = ['keywords', 'questions', 'knowledge', 'history', 'documents', 'images', 'instruction_templates', 'drafts', 'accounts', 'delivery_tasks', 'publish_records', 'geo_tasks', 'website_tasks', 'website_reports'];
+// website_reports 由下方专用 /api/website-reports 路由处理，勿加入通用 CRUD（否则会无 user_id 过滤返回全表）
+const tables = ['keywords', 'questions', 'knowledge', 'history', 'documents', 'images', 'instruction_templates', 'drafts', 'accounts', 'delivery_tasks', 'publish_records', 'geo_tasks', 'website_tasks'];
 
 // snake_case 转 camelCase
 const toCamelCase = (obj) => {
@@ -481,9 +499,23 @@ const PAGED_CRUD_TABLES = new Set([
   'publish_records',
 ])
 
+/** 需要按 user_id 隔离的表集合（含有 user_id 列） */
+const USER_OWNED_TABLES = new Set([
+  'keywords', 'questions', 'knowledge', 'history', 'documents', 'images',
+  'instruction_templates', 'drafts', 'accounts', 'delivery_tasks',
+  'publish_records', 'geo_tasks', 'website_tasks', 'website_reports',
+])
+
 function buildCrudTableFilter(table, req) {
   const parts = []
   const params = []
+
+  // 用户隔离
+  if (USER_OWNED_TABLES.has(table) && req.userId) {
+    params.push(req.userId)
+    parts.push(`user_id = $${params.length}`)
+  }
+
   if (table === 'keywords' && req.query.type) {
     parts.push(`type = $${params.length + 1}`)
     params.push(String(req.query.type))
@@ -510,6 +542,11 @@ async function fetchPagedCrudList(table, req) {
     await ensureQuestionStatusDictAndMigrate()
     const parts = []
     const params = []
+    // 用户隔离
+    if (req.userId) {
+      params.push(req.userId)
+      parts.push(`q.user_id = $${params.length}`)
+    }
     if (req.query.keywordType) {
       parts.push(`q.keyword_type = $${params.length + 1}`)
       params.push(String(req.query.keywordType))
@@ -542,9 +579,12 @@ async function fetchPagedCrudList(table, req) {
       [...params, pageSize, offset]
     )
     const out = pagedResponse(toCamelCase(dataR.rows), total, page, pageSize)
-    const appR = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM questions WHERE status = 'approved'`
-    )
+    const appR = req.userId
+      ? await pool.query(
+          `SELECT COUNT(*)::int AS c FROM questions WHERE user_id = $1 AND status = 'approved'`,
+          [req.userId]
+        )
+      : await pool.query(`SELECT COUNT(*)::int AS c FROM questions WHERE status = 'approved'`)
     out.approvedTotal = appR.rows[0]?.c ?? 0
     return out
   }
@@ -598,7 +638,11 @@ async function handleCrudTableGet(req, res, table) {
       return res.json(body)
     }
     await ensureTable(table)
-    const result = await pool.query(`SELECT * FROM ${table} ORDER BY id DESC`)
+    const { where, params } = buildCrudTableFilter(table, req)
+    const result = await pool.query(
+      `SELECT * FROM ${table} ${where} ORDER BY id DESC`,
+      params
+    )
     const rows =
       table === 'images'
         ? result.rows.map((r) => ({
@@ -698,6 +742,7 @@ function prepareGenericCrudWriteBody(table, data) {
   }
 }
 
+/** 系统字典（全站共享，无 user_id，不按用户隔离） */
 /** 字典下拉：?dictType=keyword_type → [{ dataKey, dataValue, sortOrder }]（关键词类型 data_key 为 01–05） */
 app.get('/api/sys-dict', async (req, res) => {
   try {
@@ -978,8 +1023,8 @@ app.post('/api/questions/batch-update-status', async (req, res) => {
       return res.status(400).json({ error: `单次最多更新 ${QUESTIONS_BATCH_UPDATE_STATUS_MAX} 条` })
     }
     const r = await pool.query(
-      `UPDATE questions SET status = $1 WHERE id = ANY($2::int[]) RETURNING id`,
-      [status, ids]
+      `UPDATE questions SET status = $1 WHERE id = ANY($2::int[]) AND user_id = $3 RETURNING id`,
+      [status, ids, req.userId]
     )
     res.json({ ok: true, updatedCount: r.rowCount })
   } catch (err) {
@@ -1006,7 +1051,10 @@ app.post('/api/questions/batch-delete', async (req, res) => {
     if (ids.length > QUESTIONS_BATCH_DELETE_MAX) {
       return res.status(400).json({ error: `单次最多删除 ${QUESTIONS_BATCH_DELETE_MAX} 条` })
     }
-    const r = await pool.query(`DELETE FROM questions WHERE id = ANY($1::int[]) RETURNING id`, [ids])
+    const r = await pool.query(
+      `DELETE FROM questions WHERE id = ANY($1::int[]) AND user_id = $2 RETURNING id`,
+      [ids, req.userId]
+    )
     res.json({ ok: true, deletedCount: r.rowCount })
   } catch (err) {
     console.error('questions batch-delete:', err)
@@ -1019,7 +1067,7 @@ app.post('/api/questions/delete-matching', async (req, res) => {
   try {
     await ensureTable('questions')
     const merged = { ...req.query, ...(req.body && typeof req.body === 'object' ? req.body : {}) }
-    const fakeReq = { query: merged }
+    const fakeReq = { query: merged, userId: req.userId }
     const { where, params } = buildCrudTableFilter('questions', fakeReq)
     const r = await pool.query(`DELETE FROM questions ${where} RETURNING id`, params)
     res.json({ ok: true, deletedCount: r.rowCount })
@@ -1049,7 +1097,10 @@ app.post('/api/keywords/batch-delete', async (req, res) => {
     if (ids.length > KEYWORDS_BATCH_DELETE_MAX) {
       return res.status(400).json({ error: `单次最多删除 ${KEYWORDS_BATCH_DELETE_MAX} 条` })
     }
-    const r = await pool.query(`DELETE FROM keywords WHERE id = ANY($1::int[]) RETURNING id`, [ids])
+    const r = await pool.query(
+      `DELETE FROM keywords WHERE id = ANY($1::int[]) AND user_id = $2 RETURNING id`,
+      [ids, req.userId]
+    )
     res.json({ ok: true, deletedCount: r.rowCount })
   } catch (err) {
     console.error('keywords batch-delete:', err)
@@ -1061,7 +1112,7 @@ app.post('/api/keywords/batch-delete', async (req, res) => {
 app.post('/api/keywords/delete-all', async (req, res) => {
   try {
     await ensureTable('keywords')
-    const r = await pool.query(`DELETE FROM keywords RETURNING id`)
+    const r = await pool.query(`DELETE FROM keywords WHERE user_id = $1 RETURNING id`, [req.userId])
     res.json({ ok: true, deletedCount: r.rowCount })
   } catch (err) {
     console.error('keywords delete-all:', err)
@@ -1077,9 +1128,12 @@ app.post('/api/knowledge/:id/extract-text', async (req, res) => {
     if (!Number.isFinite(id) || id <= 0) {
       return res.status(400).json({ success: false, error: '无效的文档 id' });
     }
-    const r = await pool.query(`SELECT * FROM knowledge WHERE id = $1`, [id]);
+    const r = await pool.query(
+      `SELECT * FROM knowledge WHERE id = $1 AND user_id = $2`,
+      [id, req.userId]
+    );
     if (!r.rows.length) {
-      return res.status(404).json({ success: false, error: '记录不存在' });
+      return res.status(404).json({ success: false, error: '记录不存在或无权操作' });
     }
     const row = r.rows[0];
     const filePath = row.file_path != null ? String(row.file_path).trim() : '';
@@ -1127,8 +1181,8 @@ tables.forEach(table => {
           if (snakeKey !== key) { data[snakeKey] = value; delete data[key]; }
         }
         prepareGenericCrudWriteBody(table, data);
-        if ((table === 'knowledge' || table === 'drafts') && !data.user_id) {
-          data.user_id = (req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+        if (USER_OWNED_TABLES.has(table)) {
+          data.user_id = req.userId;
         }
         const cols = Object.keys(data);
         const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
@@ -1147,16 +1201,22 @@ tables.forEach(table => {
         prepareGenericCrudWriteBody(table, data);
         const keys = Object.keys(data);
         const setClause = keys.map((k, i) => `${k} = ${crudParamPlaceholder(table, k, i + 1)}`).join(', ');
-        const result = await pool.query(`UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`, [...Object.values(data), req.params.id]);
-        if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+        const userFilter = USER_OWNED_TABLES.has(table) ? ` AND user_id = $${keys.length + 2}` : '';
+        const qParams = USER_OWNED_TABLES.has(table)
+          ? [...Object.values(data), req.params.id, req.userId]
+          : [...Object.values(data), req.params.id];
+        const result = await pool.query(`UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1}${userFilter} RETURNING *`, qParams);
+        if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
         res.json(toCamelCase(result.rows[0]));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.delete(`${hyphenPath}/:id`, async (req, res) => {
       try {
         await ensureTable(table);
-        const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 RETURNING *`, [req.params.id]);
-        if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+        const userFilter = USER_OWNED_TABLES.has(table) ? ` AND user_id = $2` : '';
+        const qParams = USER_OWNED_TABLES.has(table) ? [req.params.id, req.userId] : [req.params.id];
+        const result = await pool.query(`DELETE FROM ${table} WHERE id = $1${userFilter} RETURNING *`, qParams);
+        if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
         res.json(result.rows[0]);
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
@@ -1178,8 +1238,8 @@ tables.forEach(table => {
         }
       }
       prepareGenericCrudWriteBody(table, data);
-      if ((table === 'knowledge' || table === 'drafts') && !data.user_id) {
-        data.user_id = (req.headers['x-user-id'] || 'default_user').trim() || 'default_user';
+      if (USER_OWNED_TABLES.has(table)) {
+        data.user_id = req.userId;
       }
       const cols = Object.keys(data);
       const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
@@ -1202,11 +1262,15 @@ tables.forEach(table => {
       prepareGenericCrudWriteBody(table, data);
       const keys = Object.keys(data);
       const setClause = keys.map((k, i) => `${k} = ${crudParamPlaceholder(table, k, i + 1)}`).join(', ');
+      const userFilter = USER_OWNED_TABLES.has(table) ? ` AND user_id = $${keys.length + 2}` : '';
+      const qParams = USER_OWNED_TABLES.has(table)
+        ? [...Object.values(data), req.params.id, req.userId]
+        : [...Object.values(data), req.params.id];
       const result = await pool.query(
-        `UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
-        [...Object.values(data), req.params.id]
+        `UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1}${userFilter} RETURNING *`,
+        qParams
       );
-      if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+      if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
       res.json(toCamelCase(result.rows[0]));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -1214,8 +1278,10 @@ tables.forEach(table => {
   app.delete(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
-      const result = await pool.query(`DELETE FROM ${table} WHERE id = $1 RETURNING *`, [req.params.id]);
-      if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+      const userFilter = USER_OWNED_TABLES.has(table) ? ` AND user_id = $2` : '';
+      const qParams = USER_OWNED_TABLES.has(table) ? [req.params.id, req.userId] : [req.params.id];
+      const result = await pool.query(`DELETE FROM ${table} WHERE id = $1${userFilter} RETURNING *`, qParams);
+      if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
       res.json(result.rows[0]);
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -1223,7 +1289,9 @@ tables.forEach(table => {
   app.get(`${routePath}/:id`, async (req, res) => {
     try {
       await ensureTable(table);
-      const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1`, [req.params.id]);
+      const userFilter = USER_OWNED_TABLES.has(table) ? ` AND user_id = $2` : '';
+      const qParams = USER_OWNED_TABLES.has(table) ? [req.params.id, req.userId] : [req.params.id];
+      const result = await pool.query(`SELECT * FROM ${table} WHERE id = $1${userFilter}`, qParams);
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
       let row = result.rows[0];
       if (table === 'images' && row) {
@@ -1240,6 +1308,7 @@ app.get('/api/dashboard-stats', async (req, res) => {
     for (const t of ['keywords', 'questions', 'drafts', 'publish_records']) {
       await ensureTable(t)
     }
+    const uid = req.userId
     const [
       kwTotal,
       kwBrand,
@@ -1250,18 +1319,14 @@ app.get('/api/dashboard-stats', async (req, res) => {
       dTotal,
       prPublished,
     ] = await Promise.all([
-      pool.query('SELECT COUNT(*)::int AS c FROM keywords'),
-      pool.query(
-        `SELECT COUNT(*)::int AS c FROM keywords WHERE type IN ('01','brand','品牌')`
-      ),
-      pool.query(
-        `SELECT COUNT(*)::int AS c FROM keywords WHERE type IN ('02','product','产品')`
-      ),
-      pool.query(`SELECT COUNT(*)::int AS c FROM keywords WHERE type = '行业'`),
-      pool.query('SELECT COUNT(*)::int AS c FROM questions'),
-      pool.query(`SELECT COUNT(*)::int AS c FROM questions WHERE status = 'approved'`),
-      pool.query('SELECT COUNT(*)::int AS c FROM drafts'),
-      pool.query(`SELECT COUNT(*)::int AS c FROM publish_records WHERE status = '已发布'`),
+      pool.query('SELECT COUNT(*)::int AS c FROM keywords WHERE user_id = $1', [uid]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM keywords WHERE user_id = $1 AND type IN ('01','brand','品牌')`, [uid]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM keywords WHERE user_id = $1 AND type IN ('02','product','产品')`, [uid]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM keywords WHERE user_id = $1 AND type = '行业'`, [uid]),
+      pool.query('SELECT COUNT(*)::int AS c FROM questions WHERE user_id = $1', [uid]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM questions WHERE user_id = $1 AND status = 'approved'`, [uid]),
+      pool.query('SELECT COUNT(*)::int AS c FROM drafts WHERE user_id = $1', [uid]),
+      pool.query(`SELECT COUNT(*)::int AS c FROM publish_records WHERE user_id = $1 AND status = '已发布'`, [uid]),
     ])
     res.json({
       keywordsTotal: kwTotal.rows[0]?.c ?? 0,
@@ -1289,34 +1354,14 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// 简化登录（无需密码，返回默认用户）
-app.post('/api/auth/login', async (req, res) => {
-  const userId = 'default_user';
-  try {
-    const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
-    if (result.rows.length === 0) {
-      const newUser = await pool.query(`
-        INSERT INTO users (user_id, username, deepseek_api_key, default_ai_model)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *
-      `, [userId, '管理员', process.env.DEEPSEEK_API_KEY || '', 'deepseek-v4-flash']);
-      res.json({ success: true, user_id: userId, username: '管理员' });
-    } else {
-      const user = result.rows[0];
-      res.json({ success: true, user_id: user.user_id, username: user.username });
-    }
-  } catch (err) {
-    res.json({ success: true, user_id: userId, username: '管理员' });
-  }
-});
+// /api/auth/login 已由 routes/auth.js 处理（在全局 authMiddleware 之前注册），此处无需重复
 
-// 企业设置 API（全局共享，不区分用户）
+// 企业设置 API（按当前登录用户隔离）
 app.get('/api/settings', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT * FROM users WHERE user_id = 'default_user'`);
+    const result = await pool.query(`SELECT * FROM users WHERE user_id = $1`, [req.userId]);
     if (result.rows.length > 0) {
       const user = result.rows[0];
-      // 返回与前端一致的字段名，Date 对象转 ISO 字符串
       res.json({
         company_name: user.company_name || '',
         website: user.website || '',
@@ -1334,7 +1379,6 @@ app.get('/api/settings', async (req, res) => {
       res.json({ company_name: '', website: '', industry: '', description: '', target_audience: '' });
     }
   } catch (err) {
-    // 表可能不存在，返回空数据
     res.json({ company_name: '', website: '', industry: '', description: '', target_audience: '' });
   }
 });
@@ -1344,21 +1388,20 @@ app.put('/api/settings', async (req, res) => {
     const { company_name, website, industry, description, target_audience, deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model } = req.body;
 
     const result = await pool.query(`
-      INSERT INTO users (user_id, company_name, website, industry, description, target_audience, deepseek_api_key, doubao_api_key, kimi_api_key, default_ai_model, updated_at)
-      VALUES ('default_user', $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-      ON CONFLICT (user_id) DO UPDATE SET
-        company_name = EXCLUDED.company_name,
-        website = EXCLUDED.website,
-        industry = EXCLUDED.industry,
-        description = EXCLUDED.description,
-        target_audience = EXCLUDED.target_audience,
-        deepseek_api_key = EXCLUDED.deepseek_api_key,
-        doubao_api_key = EXCLUDED.doubao_api_key,
-        kimi_api_key = EXCLUDED.kimi_api_key,
-        default_ai_model = EXCLUDED.default_ai_model,
+      UPDATE users SET
+        company_name = $1,
+        website = $2,
+        industry = $3,
+        description = $4,
+        target_audience = $5,
+        deepseek_api_key = $6,
+        doubao_api_key = $7,
+        kimi_api_key = $8,
+        default_ai_model = $9,
         updated_at = NOW()
+      WHERE user_id = $10
       RETURNING *
-    `, [company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-v4-flash']);
+    `, [company_name || '', website || '', industry || '', description || '', target_audience || '', deepseek_api_key || '', doubao_api_key || '', kimi_api_key || '', default_ai_model || 'deepseek-v4-flash', req.userId]);
 
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -1372,17 +1415,14 @@ app.put('/api/settings', async (req, res) => {
 app.get('/api/platform-accounts', async (req, res) => {
   try {
     const { page, pageSize, offset } = parsePagination(req)
-    const parts = []
-    const params = []
+    const params = [req.userId]
+    const parts = [`user_id = $1`]
     if (req.query.authStatus) {
       params.push(String(req.query.authStatus))
       parts.push(`auth_status = $${params.length}`)
     }
-    const where = parts.length ? `WHERE ${parts.join(' AND ')}` : ''
-    const countR = await pool.query(
-      `SELECT COUNT(*)::int AS c FROM media_accounts ${where}`,
-      params
-    )
+    const where = `WHERE ${parts.join(' AND ')}`
+    const countR = await pool.query(`SELECT COUNT(*)::int AS c FROM media_accounts ${where}`, params)
     const total = countR.rows[0]?.c ?? 0
     const lim = params.length + 1
     const off = params.length + 2
@@ -1402,10 +1442,10 @@ app.post('/api/platform-accounts', async (req, res) => {
     if (!platform) return res.status(400).json({ error: '平台不能为空' });
     const platformNorm = normalizePublishPlatform(platform);
     const result = await pool.query(
-      `INSERT INTO media_accounts (platform, account_name, phone_number, auth_status, status)
-       VALUES ($1, $2, $3, 'pending', 'active') RETURNING
+      `INSERT INTO media_accounts (user_id, platform, account_name, phone_number, auth_status, status)
+       VALUES ($1, $2, $3, $4, 'pending', 'active') RETURNING
        id, platform, account_name, phone_number, auth_status, auth_time, last_verified_at, status, created_at`,
-      [platformNorm, account_name || '', phone_number || null]
+      [req.userId, platformNorm, account_name || '', phone_number || null]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1420,17 +1460,19 @@ app.put('/api/platform-accounts/:id', async (req, res) => {
          phone_number = COALESCE($2, phone_number),
          status       = COALESCE($3, status),
          updated_at   = NOW()
-       WHERE id = $4
+       WHERE id = $4 AND user_id = $5
        RETURNING id, platform, account_name, phone_number, auth_status, auth_time, status`,
-      [account_name || null, phone_number || null, status || null, req.params.id]
+      [account_name || null, phone_number || null, status || null, req.params.id, req.userId]
     );
-    if (result.rows.length === 0) return res.status(404).json({ error: '账号不存在' });
+    if (result.rows.length === 0) return res.status(404).json({ error: '账号不存在或无权操作' });
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/platform-accounts/:id', async (req, res) => {
   try {
+    const chk = await pool.query(`SELECT id FROM media_accounts WHERE id = $1 AND user_id = $2`, [req.params.id, req.userId]);
+    if (chk.rows.length === 0) return res.status(404).json({ error: '账号不存在或无权操作' });
     await closeSession(req.params.id);
     await pool.query('DELETE FROM media_accounts WHERE id = $1', [req.params.id]);
     res.json({ success: true });
@@ -1642,9 +1684,9 @@ app.post('/api/agent/complete-publish', async (req, res) => {
       );
       await pool.query(
         `INSERT INTO publish_records
-           (task_id, draft_title, platform, account_id, account_name, published_url, status)
-         VALUES ($1,$2,$3,$4,$5,$6,'已发布')`,
-        [tid, task.draft_title || '', task.platform, task.account_id, accountName, publishedUrl || '']
+           (user_id, task_id, draft_title, platform, account_id, account_name, published_url, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'已发布')`,
+        [task.user_id || 'default_user', tid, task.draft_title || '', task.platform, task.account_id, accountName, publishedUrl || '']
       );
     } else {
       await pool.query(
@@ -1813,13 +1855,14 @@ app.get('/api/publish-tasks', async (req, res) => {
     const { page, pageSize, offset } = parsePagination(req)
     const baseFrom = `FROM publish_tasks pt
        LEFT JOIN media_accounts ma ON pt.account_id = ma.id`
-    const countR = await pool.query(`SELECT COUNT(*)::int AS c ${baseFrom}`)
+    const countR = await pool.query(`SELECT COUNT(*)::int AS c ${baseFrom} WHERE pt.user_id = $1`, [req.userId])
     const total = countR.rows[0]?.c ?? 0
     const result = await pool.query(
       `SELECT pt.*, ma.account_name ${baseFrom}
+       WHERE pt.user_id = $1
        ORDER BY pt.created_at DESC NULLS LAST, pt.id DESC
-       LIMIT $1 OFFSET $2`,
-      [pageSize, offset]
+       LIMIT $2 OFFSET $3`,
+      [req.userId, pageSize, offset]
     )
     res.json(pagedResponse(result.rows, total, page, pageSize))
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1832,10 +1875,10 @@ app.post('/api/publish-tasks', async (req, res) => {
     const platformNorm = normalizePublishPlatform(platform);
     const result = await pool.query(
       `INSERT INTO publish_tasks
-         (task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending')
+         (user_id, task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
        RETURNING *`,
-      [task_name || '', draft_id || null, draft_title || '', platformNorm, account_id, content || '', title || '', tags || '']
+      [req.userId, task_name || '', draft_id || null, draft_title || '', platformNorm, account_id, content || '', title || '', tags || '']
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1843,7 +1886,8 @@ app.post('/api/publish-tasks', async (req, res) => {
 
 app.delete('/api/publish-tasks/:id', async (req, res) => {
   try {
-    await pool.query('DELETE FROM publish_tasks WHERE id = $1', [req.params.id]);
+    const r = await pool.query('DELETE FROM publish_tasks WHERE id = $1 AND user_id = $2 RETURNING id', [req.params.id, req.userId]);
+    if (r.rowCount === 0) return res.status(404).json({ error: '任务不存在或无权操作' });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1896,9 +1940,9 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
               );
               await pool.query(
                 `INSERT INTO publish_records
-                   (task_id, draft_title, platform, account_id, account_name, published_url, status)
-                 VALUES ($1,$2,$3,$4,$5,$6,'已发布')`,
-                [taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
+                   (user_id, task_id, draft_title, platform, account_id, account_name, published_url, status)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,'已发布')`,
+                [task.user_id || 'default_user', taskId, task.draft_title || '', task.platform, task.account_id, account.account_name || '', publishedUrl || '']
               );
             }
             cleanupTask(taskId);
@@ -1993,7 +2037,8 @@ app.use('/api', draftsLibraryRouter);
 app.get('/api/geo-reports', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM geo_reports ORDER BY checked_at DESC LIMIT 50`
+      `SELECT * FROM geo_reports WHERE user_id = $1 ORDER BY checked_at DESC LIMIT 50`,
+      [req.userId]
     );
     res.json(toCamelCase(result.rows));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2004,9 +2049,9 @@ app.post('/api/geo-reports', async (req, res) => {
     const { keyword, overallScore, overallGrade, visibleCount, missingCount, platformData } = req.body;
     const result = await pool.query(
       `INSERT INTO geo_reports (user_id, keyword, overall_score, overall_grade, visible_count, missing_count, platform_data)
-       VALUES ('default_user', $1, $2, $3, $4, $5, $6)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [keyword || '', overallScore || 0, overallGrade || 'D', visibleCount || 0, missingCount || 0, JSON.stringify(platformData || {})]
+      [req.userId, keyword || '', overallScore || 0, overallGrade || 'D', visibleCount || 0, missingCount || 0, JSON.stringify(platformData || {})]
     );
     res.json(toCamelCase(result.rows[0]));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2014,8 +2059,8 @@ app.post('/api/geo-reports', async (req, res) => {
 
 app.delete('/api/geo-reports/:id', async (req, res) => {
   try {
-    const result = await pool.query(`DELETE FROM geo_reports WHERE id = $1 RETURNING *`, [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在' });
+    const result = await pool.query(`DELETE FROM geo_reports WHERE id = $1 AND user_id = $2 RETURNING *`, [req.params.id, req.userId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在或无权操作' });
     res.json(toCamelCase(result.rows[0]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2024,7 +2069,8 @@ app.delete('/api/geo-reports/:id', async (req, res) => {
 app.get('/api/geo-detection', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM geo_detection ORDER BY checked_at DESC LIMIT 200`
+      `SELECT * FROM geo_detection WHERE user_id = $1 ORDER BY checked_at DESC LIMIT 200`,
+      [req.userId]
     );
     res.json(toCamelCase(result.rows));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2035,9 +2081,9 @@ app.post('/api/geo-detection', async (req, res) => {
     const { keyword, platform, visible, summary, score } = req.body;
     const result = await pool.query(
       `INSERT INTO geo_detection (user_id, keyword, platform, visible, summary, score)
-       VALUES ('default_user', $1, $2, $3, $4, $5)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [keyword || '', platform || '', visible || false, summary || '', score || 0]
+      [req.userId, keyword || '', platform || '', visible || false, summary || '', score || 0]
     );
     res.json(toCamelCase(result.rows[0]));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -2045,40 +2091,222 @@ app.post('/api/geo-detection', async (req, res) => {
 
 app.delete('/api/geo-detection/:id', async (req, res) => {
   try {
-    const result = await pool.query(`DELETE FROM geo_detection WHERE id = $1 RETURNING *`, [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在' });
+    const result = await pool.query(`DELETE FROM geo_detection WHERE id = $1 AND user_id = $2 RETURNING *`, [req.params.id, req.userId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
     res.json(toCamelCase(result.rows[0]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// 网站检测报告 CRUD
+function parseWebsiteReportJsonField(val, fallback) {
+  if (val == null) return fallback;
+  if (typeof val === 'object') return val;
+  try { return JSON.parse(val); } catch { return fallback; }
+}
+
+/** 将 website_reports / website_optimization 行转为前端网站优化页使用的结构 */
+function formatWebsiteReportRow(row) {
+  const camel = toCamelCase(row);
+  if (camel.items != null || camel.issues != null || camel.details != null || camel.score != null) {
+    const score = Number(camel.score ?? 0) || 0;
+    return {
+      id: camel.id,
+      url: camel.url,
+      score,
+      overallScore: score,
+      items: parseWebsiteReportJsonField(camel.items, {}),
+      issues: parseWebsiteReportJsonField(camel.issues, { warn: [], pass: [] }),
+      details: parseWebsiteReportJsonField(camel.details, []),
+      checkedAt: camel.checkedAt,
+    };
+  }
+  let payload = camel.report;
+  if (typeof payload === 'string') {
+    try { payload = JSON.parse(payload); } catch { payload = {}; }
+  }
+  if (!payload || typeof payload !== 'object') payload = {};
+  const score = Number(payload.score ?? camel.overallScore ?? 0) || 0;
+  return {
+    id: camel.id,
+    url: camel.url,
+    score,
+    overallScore: score,
+    items: payload.items ?? {},
+    issues: payload.issues ?? { warn: [], pass: [] },
+    details: payload.details ?? [],
+    checkedAt: payload.checkedAt ?? camel.checkedAt,
+    seoScore: camel.seoScore ?? 0,
+    aiScore: camel.aiScore ?? 0,
+    techScore: camel.techScore ?? 0,
+    contentScore: camel.contentScore ?? 0,
+  };
+}
+
+/** 解析前端提交的网站检测报告 body → website_reports 表字段 */
+function parseWebsiteReportBody(body) {
+  const b = body || {};
+  const score = Number(b.score ?? b.overallScore ?? 0) || 0;
+  const items = b.items ?? {};
+  const issues = b.issues ?? { warn: [], pass: [] };
+  const details = b.details ?? [];
+  const checkedAt = b.checkedAt || new Date().toISOString();
+  return {
+    url: String(b.url || '').trim(),
+    score,
+    items: typeof items === 'string' ? items : JSON.stringify(items),
+    issues: typeof issues === 'string' ? issues : JSON.stringify(issues),
+    details: typeof details === 'string' ? details : JSON.stringify(details),
+    checkedAt,
+  };
+}
+
+async function ensureWebsiteReportsSchema() {
+  await ensureTable('website_reports');
+  await pool.query(`
+    UPDATE website_reports
+    SET user_id = 'default_user'
+    WHERE user_id IS NULL OR trim(coalesce(user_id::text, '')) = ''
+  `);
+}
+
+// 网站检测报告 CRUD（website_reports 表，严格按 user_id 隔离）
 app.get('/api/website-reports', async (req, res) => {
   try {
+    await ensureWebsiteReportsSchema();
     const result = await pool.query(
-      `SELECT * FROM website_optimization ORDER BY checked_at DESC LIMIT 50`
+      `SELECT * FROM website_reports WHERE user_id = $1 ORDER BY checked_at DESC NULLS LAST, id DESC LIMIT 50`,
+      [req.userId]
     );
-    res.json(toCamelCase(result.rows));
+    res.json(result.rows.map(formatWebsiteReportRow));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/website-reports/:id', async (req, res) => {
+  try {
+    await ensureWebsiteReportsSchema();
+    const result = await pool.query(
+      `SELECT * FROM website_reports WHERE id = $1 AND user_id = $2`,
+      [req.params.id, req.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在或无权查看' });
+    res.json(formatWebsiteReportRow(result.rows[0]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/website-reports', async (req, res) => {
   try {
-    const { url, seoScore, aiScore, techScore, contentScore, overallScore, report } = req.body;
+    await ensureWebsiteReportsSchema();
+    const parsed = parseWebsiteReportBody(req.body);
     const result = await pool.query(
-      `INSERT INTO website_optimization (user_id, url, seo_score, ai_score, tech_score, content_score, overall_score, report)
-       VALUES ('default_user', $1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO website_reports (user_id, url, score, items, issues, details, checked_at)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamptz, NOW()))
        RETURNING *`,
-      [url || '', seoScore || 0, aiScore || 0, techScore || 0, contentScore || 0, overallScore || 0, JSON.stringify(report || {})]
+      [req.userId, parsed.url, parsed.score, parsed.items, parsed.issues, parsed.details, parsed.checkedAt]
     );
-    res.json(toCamelCase(result.rows[0]));
+    res.json(formatWebsiteReportRow(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/website-reports/:id', async (req, res) => {
+  try {
+    await ensureWebsiteReportsSchema();
+    const parsed = parseWebsiteReportBody(req.body);
+    const result = await pool.query(
+      `UPDATE website_reports
+       SET url = $1, score = $2, items = $3, issues = $4, details = $5,
+           checked_at = COALESCE($6::timestamptz, checked_at)
+       WHERE id = $7 AND user_id = $8
+       RETURNING *`,
+      [parsed.url, parsed.score, parsed.items, parsed.issues, parsed.details, parsed.checkedAt, req.params.id, req.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在或无权操作' });
+    res.json(formatWebsiteReportRow(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/website-reports', async (req, res) => {
+  try {
+    await ensureWebsiteReportsSchema();
+    await pool.query(`DELETE FROM website_reports WHERE user_id = $1`, [req.userId]);
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/website-reports/:id', async (req, res) => {
   try {
-    const result = await pool.query(`DELETE FROM website_optimization WHERE id = $1 RETURNING *`, [req.params.id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在' });
-    res.json(toCamelCase(result.rows[0]));
+    await ensureWebsiteReportsSchema();
+    const result = await pool.query(
+      `DELETE FROM website_reports WHERE id = $1 AND user_id = $2 RETURNING *`,
+      [req.params.id, req.userId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: '报告不存在或无权操作' });
+    res.json(formatWebsiteReportRow(result.rows[0]));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GEO 改进方案报告（每用户一份，按 user_id 隔离）
+app.get('/api/geo-improvement-report', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT user_id, website_report_ids, visibility_score, tech_score, combined_score, report_data, generated_at
+       FROM geo_improvement_report WHERE user_id = $1`,
+      [req.userId]
+    );
+    if (result.rows.length === 0) return res.json(null);
+    const row = toCamelCase(result.rows[0]);
+    let reportData = row.reportData;
+    if (typeof reportData === 'string') {
+      try { reportData = JSON.parse(reportData); } catch { reportData = {}; }
+    }
+    res.json({
+      ...reportData,
+      websiteReportIds: row.websiteReportIds || [],
+      scores: {
+        visibility: row.visibilityScore ?? 0,
+        tech: row.techScore ?? 0,
+        combined: row.combinedScore ?? 0,
+      },
+      generatedAt: row.generatedAt,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/geo-improvement-report', async (req, res) => {
+  try {
+    const {
+      websiteReportIds,
+      visibilityScore,
+      techScore,
+      combinedScore,
+      reportData,
+      generatedAt,
+    } = req.body || {};
+    const ids = Array.isArray(websiteReportIds)
+      ? websiteReportIds.map((n) => Number(n)).filter((n) => Number.isFinite(n))
+      : [];
+    const payload = reportData && typeof reportData === 'object' ? reportData : req.body;
+    const result = await pool.query(
+      `INSERT INTO geo_improvement_report
+         (user_id, website_report_ids, visibility_score, tech_score, combined_score, report_data, generated_at)
+       VALUES ($1, $2::int[], $3, $4, $5, $6::jsonb, COALESCE($7::timestamptz, NOW()))
+       ON CONFLICT (user_id) DO UPDATE SET
+         website_report_ids = EXCLUDED.website_report_ids,
+         visibility_score = EXCLUDED.visibility_score,
+         tech_score = EXCLUDED.tech_score,
+         combined_score = EXCLUDED.combined_score,
+         report_data = EXCLUDED.report_data,
+         generated_at = EXCLUDED.generated_at
+       RETURNING user_id, generated_at`,
+      [
+        req.userId,
+        ids,
+        Number(visibilityScore ?? 0) || 0,
+        Number(techScore ?? 0) || 0,
+        Number(combinedScore ?? 0) || 0,
+        JSON.stringify(payload),
+        generatedAt || null,
+      ]
+    );
+    res.json({ success: true, generatedAt: result.rows[0]?.generated_at });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

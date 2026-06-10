@@ -31,12 +31,10 @@ async function resolveWordCloudConnectionId(pool, userId, ctx = {}) {
   const fromCtx = Number(ctx.analysisConnectionId ?? ctx.connectionId);
   if (Number.isFinite(fromCtx) && fromCtx > 0) return fromCtx;
 
-  const uid = String(userId || 'default_user').trim() || 'default_user';
   const { rows } = await pool.query(
     `SELECT id FROM ai_provider_connection
-     WHERE user_id = $1 AND enabled = true AND provider_key <> 'bocha'
-     ORDER BY id ASC LIMIT 1`,
-    [uid]
+     WHERE enabled = true AND provider_key <> 'bocha'
+     ORDER BY id ASC LIMIT 1`
   );
   const id = rows[0]?.id;
   return Number.isFinite(Number(id)) && Number(id) > 0 ? Number(id) : null;

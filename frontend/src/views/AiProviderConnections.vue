@@ -282,15 +282,14 @@
 </template>
 
 <script setup>
+import { getToken } from '../utils/auth.js'
 import { ref, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import { invalidateGeoHealthAvailableModelsCache } from '../utils/geoHealthAvailableModelsCache.js'
 
 const API_BASE = window.VITE_API_URL || window.location.origin
-const headers = { 'Content-Type': 'application/json', 'x-user-id': 'default_user' }
-const APC_USER_ID = String(headers['x-user-id'] || 'default_user').trim() || 'default_user'
-
+const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() }
 const loading = ref(false)
 const saving = ref(false)
 const testingId = ref(null)
@@ -395,7 +394,7 @@ const form = ref({
   logoUrl: null,
 })
 
-const uploadHeaders = { 'x-user-id': 'default_user' }
+const uploadHeaders = { 'Authorization': 'Bearer ' + getToken() }
 const logoRemoving = ref(false)
 
 const logoUploadAction = computed(() =>
@@ -417,7 +416,7 @@ const onLogoUploadOk = (res) => {
     if (res.data.logoBgColor !== undefined) {
       form.value.logoBgColor = res.data.logoBgColor
     }
-    invalidateGeoHealthAvailableModelsCache(APC_USER_ID)
+    invalidateGeoHealthAvailableModelsCache()
     ElMessage.success('Logo 已更新')
   } else {
     ElMessage.error(res?.error || '上传失败')
@@ -446,7 +445,7 @@ const removeLogo = async () => {
     if (!data.success) throw new Error(data.error || '移除失败')
     form.value.logoUrl = data.data?.logoUrl ?? null
     await loadData()
-    invalidateGeoHealthAvailableModelsCache(APC_USER_ID)
+    invalidateGeoHealthAvailableModelsCache()
     ElMessage.success('已移除 Logo 图')
   } catch (e) {
     ElMessage.error(e.message || '移除失败')
@@ -641,7 +640,7 @@ const submitForm = async () => {
       throw new Error(data.error || '请先配置 AI_CREDENTIALS_SECRET')
     }
     if (!data.success) throw new Error(data.error || '保存失败')
-    invalidateGeoHealthAvailableModelsCache(APC_USER_ID)
+    invalidateGeoHealthAvailableModelsCache()
     ElMessage.success('已保存')
     dialogVisible.value = false
     await loadData()
@@ -673,7 +672,7 @@ const testOne = async (row) => {
     ElMessage.error(e.message || '测试失败')
   } finally {
     testingId.value = null
-    invalidateGeoHealthAvailableModelsCache(APC_USER_ID)
+    invalidateGeoHealthAvailableModelsCache()
   }
 }
 
@@ -685,7 +684,7 @@ const handleDelete = async (id) => {
     })
     const data = await res.json()
     if (!data.success) throw new Error(data.error || '删除失败')
-    invalidateGeoHealthAvailableModelsCache(APC_USER_ID)
+    invalidateGeoHealthAvailableModelsCache()
     ElMessage.success('已删除')
     await loadData()
   } catch (e) {
