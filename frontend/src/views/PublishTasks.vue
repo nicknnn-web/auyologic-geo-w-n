@@ -330,7 +330,7 @@ const TASKS_API = '/api/publish-tasks'
 const ACCOUNTS_API = '/api/platform-accounts'
 
 const agentOnline = ref(false)
-useAgentHeartbeat(agentOnline)
+const { checkAgentStatus } = useAgentHeartbeat(agentOnline)
 const handleDownloadAgent = () => downloadLocalAgent()
 // ---- 数据 ----
 const tasks = ref([])
@@ -599,6 +599,7 @@ const handleCreate = async () => {
 
 // ---- 执行任务 ----
 const handleExecute = async (row) => {
+  await checkAgentStatus()
   if (!agentOnline.value) {
     ElMessage.warning('请先启动本地代理后再执行发布')
     return

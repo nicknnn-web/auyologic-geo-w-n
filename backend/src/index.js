@@ -1611,7 +1611,8 @@ app.post('/api/platform-accounts/:id/auth-verify', async (req, res) => {
 
 // ========== 本地代理专用接口 ==========
 
-// 代理心跳（用于前端检测代理是否在线）
+// 代理心跳（用于前端检测代理是否在线；须与 local-agent 心跳间隔协调）
+const AGENT_HEARTBEAT_TTL_MS = 12_000;
 let agentLastSeen = null;
 
 app.post('/api/agent/heartbeat', (req, res) => {
@@ -1620,14 +1621,14 @@ app.post('/api/agent/heartbeat', (req, res) => {
 });
 
 app.get('/api/agent/status', (req, res) => {
-  const online = agentLastSeen !== null && (Date.now() - agentLastSeen < 30000);
+  const online = agentLastSeen !== null && (Date.now() - agentLastSeen < AGENT_HEARTBEAT_TTL_MS);
   res.json({ online, lastSeen: agentLastSeen });
 });
 
 /** 投放走本地代理时：须有心跳。ALLOW_PUBLISH_WITHOUT_AGENT=true 时跳过（服务器内 Playwright） */
 function isLocalAgentOnline() {
   if (process.env.ALLOW_PUBLISH_WITHOUT_AGENT === 'true') return true;
-  return agentLastSeen !== null && (Date.now() - agentLastSeen < 30000);
+  return agentLastSeen !== null && (Date.now() - agentLastSeen < AGENT_HEARTBEAT_TTL_MS);
 }
 
 // 代理轮询：领取一条待发布的投放任务（原子更新为 running）

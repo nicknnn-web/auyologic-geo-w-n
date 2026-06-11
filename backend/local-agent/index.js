@@ -405,12 +405,13 @@ async function main() {
     process.exit(1);
   }
 
-  // 发送心跳（每 10 秒一次）
+  // 发送心跳（每 5 秒一次，与后端 AGENT_HEARTBEAT_TTL_MS 配合）
+  const HEARTBEAT_INTERVAL_MS = 5000;
   const heartbeat = async () => {
     try { await apiFetch(BASE_URL, '/api/agent/heartbeat', { method: 'POST' }); } catch {}
   };
   await heartbeat();
-  const heartbeatTimer = setInterval(heartbeat, 10000);
+  const heartbeatTimer = setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
 
   console.log('\n🚀 代理已启动（授权 + 本地投放）');
   console.log('（按 Ctrl+C 退出）\n');

@@ -359,7 +359,7 @@ const loadPlatformDict = async () => {
 
 // ---- 代理在线状态 + 下载 ----
 const agentOnline = ref(false)
-useAgentHeartbeat(agentOnline)
+const { checkAgentStatus } = useAgentHeartbeat(agentOnline)
 
 const handleDownloadAgent = () => downloadLocalAgent()
 
@@ -483,6 +483,11 @@ const openAuthDialog = (account) => {
 }
 
 const handleAuthStart = async () => {
+  await checkAgentStatus()
+  if (!agentOnline.value) {
+    ElMessage.warning('本地代理未运行，请先启动本地代理')
+    return
+  }
   authStarting.value = true
   try {
     await api.post(`${API}/${authAccount.value.id}/auth-start`, {
