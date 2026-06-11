@@ -181,7 +181,7 @@ async function handleAuthTask(BASE_URL, task) {
 
 // ---- 投放发布（子进程跑 ESM + 服务端 playwrightPublisher） ----
 
-function runPublishSubprocess(task) {
+function runPublishSubprocess(task, onLogChunk, hooks = {}) {
   return new Promise((resolve) => {
     const scriptPath = path.join(__dirname, 'run-publish.mjs');
     const payload = JSON.stringify({
@@ -191,25 +191,63 @@ function runPublishSubprocess(task) {
       content: task.content,
       title: task.title,
       tags: task.tags,
+      coverImageUrl: task.coverImageUrl || '',
     });
     const child = spawn(process.execPath, [scriptPath], {
       cwd: __dirname,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, NODE_ENV: process.env.NODE_ENV || 'development' },
     });
+    if (hooks.onSpawn) hooks.onSpawn(child);
     child.stdin.write(payload);
     child.stdin.end();
     let out = '';
     let errOut = '';
-    child.stdout.on('data', (d) => { out += d.toString(); });
-    child.stderr.on('data', (d) => { errOut += d.toString(); });
+    let resolved = false;
+    const finishWithResult = (parsed, fallback) => {
+      if (resolved) return;
+      resolved = true;
+      if (parsed && typeof parsed === 'object' && 'success' in parsed) {
+        resolve(parsed);
+      } else {
+        resolve(fallback);
+      }
+    };
+    const tryResolveFromStdout = () => {
+      const lines = out.split(/\r?\n/).filter(Boolean);
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const parsed = JSON.parse(lines[i]);
+          if (parsed && typeof parsed === 'object' && 'success' in parsed) {
+            finishWithResult(parsed);
+            return;
+          }
+        } catch { /* continue */ }
+      }
+    };
+    child.stdout.on('data', (d) => {
+      out += d.toString();
+      tryResolveFromStdout();
+    });
+    child.stderr.on('data', (d) => {
+      const text = d.toString();
+      errOut += text;
+      if (!onLogChunk) return;
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.startsWith('@@PUBLISH_LOG@@')) continue;
+        try {
+          const { chunk } = JSON.parse(line.slice('@@PUBLISH_LOG@@'.length));
+          if (chunk) onLogChunk(chunk);
+        } catch { /* ignore */ }
+      }
+    });
     child.on('close', () => {
+      if (resolved) return;
       const trimmed = (out || '').trim();
       let parsed;
       try {
         parsed = JSON.parse(trimmed || '{}');
       } catch {
-        // stdout 若曾被污染，尝试取最后一行 JSON
         const lines = trimmed.split(/\r?\n/).filter(Boolean);
         for (let i = lines.length - 1; i >= 0; i--) {
           try {
@@ -218,16 +256,19 @@ function runPublishSubprocess(task) {
           } catch { /* continue */ }
         }
       }
-      if (parsed && typeof parsed === 'object' && 'success' in parsed) {
-        resolve(parsed);
-      } else {
-        resolve({
-          success: false,
-          error: errOut.trim() || trimmed.slice(0, 200) || '子进程输出无法解析',
-          log: '',
-        });
-      }
+      finishWithResult(parsed, {
+        success: false,
+        error: errOut.trim() || trimmed.slice(0, 200) || '子进程输出无法解析',
+        log: '',
+      });
     });
+  });
+}
+
+async function reportPublishComplete(BASE_URL, id, payload) {
+  await apiFetch(BASE_URL, '/api/agent/complete-publish', {
+    method: 'POST',
+    body: JSON.stringify({ taskId: id, ...payload }),
   });
 }
 
@@ -235,18 +276,75 @@ async function handlePublishTask(BASE_URL, task) {
   const id = task.taskId;
   console.log(`\n📤 [投放任务] #${id} 平台: ${task.platform}`);
 
+  let accumulatedLog = '';
+  let lastLogPushAt = 0;
+  let childRef = null;
+  let abandoned = false;
+  let cancelPollTimer = null;
+
+  const pushLogToServer = async (force) => {
+    const now = Date.now();
+    if (!force && now - lastLogPushAt < 1200) return;
+    lastLogPushAt = now;
+    try {
+      await apiFetch(BASE_URL, '/api/agent/publish-log', {
+        method: 'POST',
+        body: JSON.stringify({ taskId: id, log: accumulatedLog }),
+      });
+    } catch (e) {
+      console.warn('  日志上报失败:', e.message);
+    }
+  };
+
+  const finishAbandoned = async () => {
+    if (abandoned) return;
+    abandoned = true;
+    if (cancelPollTimer) clearInterval(cancelPollTimer);
+    await pushLogToServer(true);
+    try {
+      await reportPublishComplete(BASE_URL, id, {
+        success: false,
+        publishedUrl: '',
+        errorMessage: '用户已放弃投放',
+        taskLog: accumulatedLog,
+      });
+    } catch (e) {
+      console.warn('  放弃结果上报失败:', e.message);
+    }
+    console.log('  ⏹ 用户已放弃投放，任务已终止');
+  };
+
+  cancelPollTimer = setInterval(async () => {
+    if (abandoned) return;
+    try {
+      const data = await apiFetch(BASE_URL, `/api/agent/publish-cancel-check/${id}`);
+      if (data.cancelRequested) {
+        if (childRef && !childRef.killed) childRef.kill('SIGTERM');
+        await finishAbandoned();
+      }
+    } catch { /* ignore */ }
+  }, 1500);
+
   try {
-    const result = await runPublishSubprocess(task);
+    const result = await runPublishSubprocess(
+      task,
+      (chunk) => {
+        accumulatedLog += chunk;
+        pushLogToServer(false);
+      },
+      { onSpawn: (child) => { childRef = child; } }
+    );
+    if (cancelPollTimer) clearInterval(cancelPollTimer);
+    await pushLogToServer(true);
+
+    if (abandoned || result.aborted) return;
+
     const success = result.success === true;
-    await apiFetch(BASE_URL, '/api/agent/complete-publish', {
-      method: 'POST',
-      body: JSON.stringify({
-        taskId: id,
-        success,
-        publishedUrl: result.publishedUrl || '',
-        errorMessage: result.error || '',
-        taskLog: result.log || '',
-      }),
+    await reportPublishComplete(BASE_URL, id, {
+      success,
+      publishedUrl: result.publishedUrl || '',
+      errorMessage: result.error || '',
+      taskLog: result.log || accumulatedLog,
     });
     if (success) {
       console.log(`  ✅ 投放完成: ${result.publishedUrl || '(无链接)'}`);
@@ -254,17 +352,15 @@ async function handlePublishTask(BASE_URL, task) {
       console.log(`  ❌ 投放失败: ${result.error || '未知错误'}`);
     }
   } catch (err) {
+    if (cancelPollTimer) clearInterval(cancelPollTimer);
+    if (abandoned) return;
     console.error('  ❌ 投放异常:', err.message);
     try {
-      await apiFetch(BASE_URL, '/api/agent/complete-publish', {
-        method: 'POST',
-        body: JSON.stringify({
-          taskId: id,
-          success: false,
-          publishedUrl: '',
-          errorMessage: err.message,
-          taskLog: '',
-        }),
+      await reportPublishComplete(BASE_URL, id, {
+        success: false,
+        publishedUrl: '',
+        errorMessage: err.message,
+        taskLog: accumulatedLog,
       });
     } catch {}
   }

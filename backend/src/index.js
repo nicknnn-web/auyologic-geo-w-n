@@ -22,11 +22,13 @@ import {
   executePublishTask,
   getTaskStatus,
   cleanupTask,
+  requestPublishCancel,
 } from './services/playwrightPublisher.js';
 import { parsePagination, pagedResponse } from './pagination.js';
 import { KEYWORD_TYPE_BOOTSTRAP_ROWS } from './config/keywordTypeSemantics.js';
 import { isBochaConfigured } from './services/bochaWebSearch.js';
 import { normalizePublishPlatform } from './utils/publishPlatformNormalize.js';
+import { normalizeDraftJsonTextColumns, formatDraftRow } from './routes/draftsLibrary.js';
 
 const { existsSync, mkdirSync } = fs;
 const { Pool } = pg;
@@ -608,7 +610,8 @@ async function fetchPagedCrudList(table, req) {
        LIMIT $${lim} OFFSET $${off}`,
       [...params, pageSize, offset]
     )
-    return pagedResponse(toCamelCase(dataR.rows), total, page, pageSize)
+    const list = toCamelCase(dataR.rows).map((r) => formatDraftRow(r))
+    return pagedResponse(list, total, page, pageSize)
   }
 
   const { where, params } = buildCrudTableFilter(table, req)
@@ -740,6 +743,15 @@ function prepareGenericCrudWriteBody(table, data) {
   if (table === 'knowledge') {
     normalizeKnowledgeJsonbColumns(data)
   }
+  if (table === 'drafts') {
+    normalizeDraftJsonTextColumns(data)
+  }
+}
+
+function formatCrudReadRow(table, row) {
+  if (!row) return row
+  if (table === 'drafts') return formatDraftRow(row)
+  return row
 }
 
 /** 系统字典（全站共享，无 user_id，不按用户隔离） */
@@ -1187,7 +1199,7 @@ tables.forEach(table => {
         const cols = Object.keys(data);
         const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
         const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
-        res.json(toCamelCase(result.rows[0]));
+        res.json(toCamelCase(formatCrudReadRow(table, result.rows[0])));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.put(`${hyphenPath}/:id`, async (req, res) => {
@@ -1207,7 +1219,7 @@ tables.forEach(table => {
           : [...Object.values(data), req.params.id];
         const result = await pool.query(`UPDATE ${table} SET ${setClause} WHERE id = $${keys.length + 1}${userFilter} RETURNING *`, qParams);
         if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
-        res.json(toCamelCase(result.rows[0]));
+        res.json(toCamelCase(formatCrudReadRow(table, result.rows[0])));
       } catch (err) { res.status(500).json({ error: err.message }); }
     });
     app.delete(`${hyphenPath}/:id`, async (req, res) => {
@@ -1244,7 +1256,7 @@ tables.forEach(table => {
       const cols = Object.keys(data);
       const vals = cols.map((c, i) => crudParamPlaceholder(table, c, i + 1)).join(', ');
       const result = await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${vals}) RETURNING *`, Object.values(data));
-      res.json(toCamelCase(result.rows[0]));
+      res.json(toCamelCase(formatCrudReadRow(table, result.rows[0])));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1271,7 +1283,7 @@ tables.forEach(table => {
         qParams
       );
       if (result.rows.length === 0) return res.status(404).json({ error: '记录不存在或无权操作' });
-      res.json(toCamelCase(result.rows[0]));
+      res.json(toCamelCase(formatCrudReadRow(table, result.rows[0])));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
@@ -1297,7 +1309,7 @@ tables.forEach(table => {
       if (table === 'images' && row) {
         row = { ...row, image_path: normalizeImagePathForApi(row.image_path) };
       }
-      res.json(toCamelCase(row));
+      res.json(toCamelCase(formatCrudReadRow(table, row)));
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 });
@@ -1627,6 +1639,7 @@ app.get('/api/agent/pending-publish', async (req, res) => {
        FROM (
          SELECT id FROM publish_tasks
          WHERE status = 'queued_local'
+           AND COALESCE(cancel_requested, false) = false
          ORDER BY id ASC
          LIMIT 1
        ) AS sub
@@ -1659,9 +1672,40 @@ app.get('/api/agent/pending-publish', async (req, res) => {
         title: task.title,
         tags: task.tags,
         draftTitle: task.draft_title,
+        coverImageUrl: task.cover_image_url || '',
         sessionState: session_state,
       },
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理轮询：投放任务是否被用户放弃
+app.get('/api/agent/publish-cancel-check/:taskId', async (req, res) => {
+  try {
+    const tid = Number(req.params.taskId);
+    if (!tid) return res.status(400).json({ error: 'taskId 无效' });
+    const result = await pool.query(
+      'SELECT cancel_requested, status FROM publish_tasks WHERE id = $1',
+      [tid]
+    );
+    if (result.rows.length === 0) return res.json({ cancelRequested: false });
+    const row = result.rows[0];
+    res.json({ cancelRequested: !!row.cancel_requested });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// 代理上报投放进度日志（执行中实时更新 task_log）
+app.post('/api/agent/publish-log', async (req, res) => {
+  try {
+    const { taskId, log } = req.body;
+    const tid = Number(taskId);
+    if (!tid) return res.status(400).json({ error: 'taskId 无效' });
+    await pool.query(
+      `UPDATE publish_tasks SET task_log = $1, updated_at = NOW()
+       WHERE id = $2 AND status IN ('running', 'queued_local')`,
+      [log || '', tid]
+    );
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1675,6 +1719,17 @@ app.post('/api/agent/complete-publish', async (req, res) => {
     const taskRow = await pool.query('SELECT * FROM publish_tasks WHERE id = $1', [tid]);
     if (taskRow.rows.length === 0) return res.status(404).json({ error: '任务不存在' });
     const task = taskRow.rows[0];
+
+    if (task.cancel_requested && task.status === 'failed') {
+      if (taskLog) {
+        await pool.query(
+          `UPDATE publish_tasks SET task_log = $1, updated_at = NOW() WHERE id = $2`,
+          [taskLog, tid]
+        );
+      }
+      cleanupTask(tid);
+      return res.json({ ok: true, skipped: true });
+    }
 
     const accRow = await pool.query('SELECT account_name FROM media_accounts WHERE id = $1', [task.account_id]);
     const accountName = accRow.rows[0]?.account_name || '';
@@ -1885,15 +1940,16 @@ app.get('/api/publish-tasks', async (req, res) => {
 
 app.post('/api/publish-tasks', async (req, res) => {
   try {
-    const { task_name, draft_id, draft_title, platform, account_id, content, title, tags } = req.body;
+    const { task_name, draft_id, draft_title, platform, account_id, content, title, tags, cover_image_url, coverImageUrl } = req.body;
     if (!platform || !account_id) return res.status(400).json({ error: '平台和账号不能为空' });
     const platformNorm = normalizePublishPlatform(platform);
+    const coverUrl = String(cover_image_url ?? coverImageUrl ?? '').trim() || null;
     const result = await pool.query(
       `INSERT INTO publish_tasks
-         (user_id, task_name, draft_id, draft_title, platform, account_id, content, title, tags, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+         (user_id, task_name, draft_id, draft_title, platform, account_id, content, title, tags, cover_image_url, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')
        RETURNING *`,
-      [req.userId, task_name || '', draft_id || null, draft_title || '', platformNorm, account_id, content || '', title || '', tags || '']
+      [req.userId, task_name || '', draft_id || null, draft_title || '', platformNorm, account_id, content || '', title || '', tags || '', coverUrl]
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1928,7 +1984,7 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
     // 服务器内 Playwright（仅 ALLOW_PUBLISH_WITHOUT_AGENT=true）
     if (process.env.ALLOW_PUBLISH_WITHOUT_AGENT === 'true') {
       await pool.query(
-        `UPDATE publish_tasks SET status = 'running', updated_at = NOW() WHERE id = $1`,
+        `UPDATE publish_tasks SET status = 'running', cancel_requested = false, updated_at = NOW() WHERE id = $1`,
         [taskId]
       );
       executePublishTask(
@@ -1939,6 +1995,7 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
           content: task.content || '',
           title: task.title || '',
           tags: task.tags || '',
+          coverImageUrl: task.cover_image_url || '',
         },
         async (err, publishedUrl) => {
           try {
@@ -1977,27 +2034,76 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
     }
 
     await pool.query(
-      `UPDATE publish_tasks SET status = 'queued_local', task_log = '', error_message = NULL, updated_at = NOW() WHERE id = $1`,
+      `UPDATE publish_tasks SET status = 'queued_local', task_log = '', error_message = NULL,
+       cancel_requested = false, updated_at = NOW() WHERE id = $1`,
       [taskId]
     );
     res.json({ success: true, message: '已加入本地发布队列，请保持代理运行' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.post('/api/publish-tasks/:id/cancel', async (req, res) => {
+  try {
+    const taskId = Number(req.params.id);
+    if (!taskId) return res.status(400).json({ error: '任务 ID 无效' });
+
+    const taskRow = await pool.query(
+      'SELECT * FROM publish_tasks WHERE id = $1 AND user_id = $2',
+      [taskId, req.userId]
+    );
+    if (taskRow.rows.length === 0) return res.status(404).json({ error: '任务不存在或无权操作' });
+    const task = taskRow.rows[0];
+
+    if (!['queued_local', 'running'].includes(task.status)) {
+      return res.status(400).json({ error: '当前任务不在执行中，无法放弃' });
+    }
+
+    requestPublishCancel(taskId);
+    const timeStr = new Date().toLocaleTimeString('zh-CN');
+    const logAppend = `${task.task_log || ''}[${timeStr}] 用户已放弃投放\n`;
+
+    if (task.status === 'queued_local') {
+      await pool.query(
+        `UPDATE publish_tasks SET status = 'failed', cancel_requested = true,
+         error_message = '用户已放弃投放', task_log = $1, updated_at = NOW() WHERE id = $2`,
+        [logAppend, taskId]
+      );
+      cleanupTask(taskId);
+    } else {
+      await pool.query(
+        `UPDATE publish_tasks SET status = 'failed', cancel_requested = true,
+         error_message = '用户已放弃投放', task_log = $1, updated_at = NOW() WHERE id = $2`,
+        [logAppend, taskId]
+      );
+      cleanupTask(taskId);
+    }
+
+    res.json({ ok: true, message: '已放弃投放' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/publish-tasks/:id/status', async (req, res) => {
   try {
     const taskId = req.params.id;
-    const memStatus = getTaskStatus(taskId);
-    if (memStatus) return res.json(memStatus);
     const result = await pool.query(
-      'SELECT status, task_log, published_url, error_message FROM publish_tasks WHERE id = $1',
+      'SELECT status, task_log, published_url, error_message, cancel_requested FROM publish_tasks WHERE id = $1',
       [taskId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: '任务不存在' });
     const row = result.rows[0];
+    const memStatus = getTaskStatus(taskId);
+    const dbTerminal = row.status === 'done' || row.status === 'failed' || row.cancel_requested;
+    if (memStatus && !dbTerminal) {
+      return res.json({
+        status: memStatus.status || row.status,
+        log: memStatus.log || row.task_log || '',
+        publishedUrl: memStatus.publishedUrl || row.published_url || '',
+        errorMessage: memStatus.errorMessage || row.error_message || '',
+      });
+    }
     res.json({
       status: row.status,
-      log: row.task_log || '',
+      log: row.task_log || memStatus?.log || '',
       publishedUrl: row.published_url || '',
       errorMessage: row.error_message || '',
     });

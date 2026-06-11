@@ -369,6 +369,7 @@ import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
 import { Folder, FolderAdd, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
+import { fetchGalleryImageOptions } from '../utils/draftMedia.js'
 
 // ========== API 配置 ==========
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
@@ -883,8 +884,8 @@ onMounted(async () => {
   // Step 2: 加载知识库文档
   await loadKnowledgeDocs()
 
-  // Step 3: 加载图库
-  loadImages()
+  // Step 3: 加载企业图库（与 Images.vue / 草稿编辑一致）
+  await loadImages()
 
   // 加载生成历史
   await loadHistory()
@@ -1031,36 +1032,9 @@ const buildContentPrompt = () => {
   return `\n\n## 参考知识素材\n${materials}`
 }
 
-// Step 3: 加载图库 (从 localStorage 读取，兼容两种数据格式)
-const loadImages = () => {
-  // 优先读取 Images.vue 存储的 key
-  let imgs = localStorage.getItem('auyologic-images')
-  if (!imgs) {
-    // 兼容旧测试数据 key
-    imgs = localStorage.getItem('images')
-  }
-  if (!imgs) {
-    // 创建测试数据
-    const testImages = [
-      { id: 'img1', name: '产品正面图', url: 'https://picsum.photos/400/300?random=1' },
-      { id: 'img2', name: '使用场景图', url: 'https://picsum.photos/400/300?random=2' },
-      { id: 'img3', name: '细节展示图', url: 'https://picsum.photos/400/300?random=3' },
-      { id: 'img4', name: '对比图', url: 'https://picsum.photos/400/300?random=4' },
-      { id: 'img5', name: '用户评价截图', url: 'https://picsum.photos/400/300?random=5' }
-    ]
-    localStorage.setItem('images', JSON.stringify(testImages))
-    imgs = testImages
-  } else {
-    const parsedImgs = JSON.parse(imgs)
-    // 转换 Images.vue 存储的数据结构为 ContentCreate.vue 需要的格式
-    // Images.vue 存的是 preview (base64)，ContentCreate.vue 需要 url
-    imgs = parsedImgs.map((img, index) => ({
-      id: img.id || `img${index + 1}`,
-      name: img.name || `图片 ${index + 1}`,
-      url: img.preview || img.url || ''
-    }))
-  }
-  images.value = imgs
+// Step 3: 企业图库（API 优先，与 Images.vue 一致）
+const loadImages = async () => {
+  images.value = await fetchGalleryImageOptions()
 }
 
 // ========== 迁移旧的 commands 数据 =====

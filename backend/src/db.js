@@ -213,6 +213,8 @@ export async function initDB() {
     await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS error_message TEXT`).catch(() => {});
     await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS task_log TEXT`).catch(() => {});
     await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS cancel_requested BOOLEAN DEFAULT false`).catch(() => {});
+    await client.query(`ALTER TABLE publish_tasks ADD COLUMN IF NOT EXISTS cover_image_url TEXT`).catch(() => {});
     await client.query(`ALTER TABLE publish_tasks ALTER COLUMN user_id TYPE VARCHAR(255) USING user_id::TEXT`).catch(() => {});
 
     // 发布记录

@@ -20,14 +20,42 @@ async function loadPublisher() {
   return import(pathToFileURL(pubPath).href);
 }
 
+let aborting = false;
+let activeTaskId = null;
+let publisherModule = null;
+
+async function handleAbortSignal(reason = '用户已放弃投放') {
+  if (aborting) return;
+  aborting = true;
+  try {
+    const pub = publisherModule || (await loadPublisher());
+    if (pub.abortPublishTask && activeTaskId != null) {
+      await pub.abortPublishTask(activeTaskId, reason);
+    }
+  } catch {
+    /* abortPublishTask 会 throw，此处吞掉 */
+  }
+  const log = publisherModule?.getTaskStatus?.(activeTaskId)?.log || '';
+  process.stdout.write(JSON.stringify({ success: false, error: reason, log, aborted: true }));
+  process.exit(1);
+}
+
+process.on('SIGTERM', () => { handleAbortSignal('用户已放弃投放'); });
+process.on('SIGINT', () => { handleAbortSignal('用户已放弃投放'); });
+
 async function main() {
   // playwrightPublisher 里 appendLog 用 console.log，会混进 stdout，父进程无法解析 JSON
   console.log = (...args) => console.error('[publish]', ...args);
 
-  const pub = await loadPublisher();
-  const { runPublishAndCollectLog, PUBLISHER_BUILD_ID } = pub;
+  publisherModule = await loadPublisher();
+  const { runPublishAndCollectLog, setPublishLogSink, PUBLISHER_BUILD_ID } = publisherModule;
   if (PUBLISHER_BUILD_ID) {
     console.error('[publish] publisher build:', PUBLISHER_BUILD_ID);
+  }
+  if (setPublishLogSink) {
+    setPublishLogSink((_taskId, chunk) => {
+      process.stderr.write(`@@PUBLISH_LOG@@${JSON.stringify({ chunk })}\n`);
+    });
   }
 
   const chunks = [];
@@ -45,7 +73,7 @@ async function main() {
     return;
   }
 
-  let normalizePublishPlatform = pub.normalizePublishPlatform;
+  let normalizePublishPlatform = publisherModule.normalizePublishPlatform;
   if (!normalizePublishPlatform) {
     try {
       const normPath = join(__dirname, 'src', 'utils', 'publishPlatformNormalize.js');
@@ -65,12 +93,23 @@ async function main() {
     title: payload.title || '',
     tags: payload.tags || '',
     imagePaths: payload.imagePaths || undefined,
+    coverImageUrl: payload.coverImageUrl || '',
   };
 
+  activeTaskId = taskInfo.taskId;
+  const { waitForUserToCloseBrowser } = publisherModule;
   const result = await runPublishAndCollectLog(taskInfo);
-  process.stdout.write(JSON.stringify(result));
+  if (!aborting) {
+    // 先输出结果让父进程上报；成功后子进程继续存活，避免 Windows 随进程退出关闭 Chrome
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    if (result.success === true && waitForUserToCloseBrowser) {
+      await waitForUserToCloseBrowser(taskInfo.taskId);
+    }
+  }
 }
 
 main().catch((err) => {
-  process.stdout.write(JSON.stringify({ success: false, error: err.message, log: '' }));
+  if (!aborting) {
+    process.stdout.write(JSON.stringify({ success: false, error: err.message, log: '' }));
+  }
 });

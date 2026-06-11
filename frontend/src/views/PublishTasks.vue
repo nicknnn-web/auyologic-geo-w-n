@@ -53,8 +53,8 @@
       </el-table-column>
       <el-table-column label="状态" width="120">
         <template #default="{ row }">
-          <el-tag :type="getStatusType(row.status)" size="small">{{ getStatusLabel(row.status) }}</el-tag>
-          <div v-if="row.status === 'running'" class="mt-1">
+          <el-tag :type="getStatusType(resolveTaskStatus(row))" size="small">{{ getStatusLabel(resolveTaskStatus(row)) }}</el-tag>
+          <div v-if="resolveTaskStatus(row) === 'running'" class="mt-1">
             <el-progress :percentage="100" :stroke-width="3" :show-text="false" status="striped" striped-flow />
           </div>
         </template>
@@ -75,31 +75,31 @@
       <el-table-column label="操作" width="180" align="center">
         <template #default="{ row }">
           <el-button
-            v-if="row.status === 'pending' || row.status === 'failed'"
+            v-if="resolveTaskStatus(row) === 'pending' || resolveTaskStatus(row) === 'failed'"
             link type="primary" size="small"
             :loading="executingId === row.id"
             :disabled="!agentOnline"
             @click="handleExecute(row)"
           >
-            {{ row.status === 'failed' ? '重试' : '执行' }}
+            {{ resolveTaskStatus(row) === 'failed' ? '重试' : '执行' }}
           </el-button>
           <el-button
-            v-if="row.status === 'queued_local'"
+            v-if="resolveTaskStatus(row) === 'queued_local'"
             link type="warning" size="small"
             @click="openLogAndPoll(row)"
           >
             查看队列
           </el-button>
           <el-button
-            v-if="row.status === 'running'"
+            v-if="resolveTaskStatus(row) === 'running'"
             link type="info" size="small"
             @click="openLogDialog(row)"
           >
             查看进度
           </el-button>
           <el-button
-            v-if="row.status === 'done'"
-            link type="success" size="small"
+            v-if="resolveTaskStatus(row) === 'done' || resolveTaskStatus(row) === 'failed'"
+            link :type="resolveTaskStatus(row) === 'done' ? 'success' : 'info'" size="small"
             @click="openLogDialog(row)"
           >
             查看日志
@@ -203,6 +203,35 @@
           <el-input v-model="form.tags" placeholder="如：好物推荐,生活方式（逗号分隔，最多5个）" />
           <div class="text-xs text-gray-400 mt-1">发布时自动添加为帖子话题，不填则跳过</div>
         </el-form-item>
+
+        <el-form-item v-if="isBaijiahaoPlatform" label="封面图（可选）">
+          <el-select
+            v-model="form.cover_image_url"
+            clearable
+            placeholder="不设置封面"
+            style="width: 100%;"
+            :disabled="coverImageOptions.length === 0"
+          >
+            <el-option
+              v-for="img in coverImageOptions"
+              :key="img.url"
+              :label="img.name"
+              :value="img.url"
+            >
+              <div class="flex items-center gap-2">
+                <img :src="img.url" class="w-10 h-10 object-cover rounded flex-shrink-0" alt="" />
+                <span class="truncate">{{ img.name }}</span>
+              </div>
+            </el-option>
+          </el-select>
+          <div v-if="coverImageOptions.length === 0" class="text-xs text-amber-600 mt-1">
+            企业图库暂无图片，请先在「企业图库」上传或在草稿编辑页添加配图
+          </div>
+          <div v-else class="text-xs text-gray-400 mt-1 space-y-0.5">
+            <div>可选企业图库全部图片；草稿已选配图会一并列出</div>
+            <div>将自动上传至百家号；若失败，可在发布打开的浏览器中手动选择封面</div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
@@ -215,18 +244,19 @@
                @close="stopStatusPoll">
       <div class="bg-gray-900 rounded-lg p-4 font-mono text-sm text-green-400"
            style="min-height: 220px; max-height: 380px; overflow-y: auto;" ref="logBoxRef">
-        <!-- 本地代理队列 / 执行中：不展示逐行日志，仅提示 -->
-        <div v-if="currentStatus === 'queued_local' || currentStatus === 'running'"
-             class="text-amber-300 flex items-center gap-2 text-sm">
+        <div v-if="isPublishInProgress"
+             class="text-amber-300 flex items-center gap-2 text-sm mb-3 pb-2 border-b border-gray-700">
           <el-icon class="is-loading"><Loading /></el-icon>
-          <span>正在发布中，请稍候…</span>
+          <span>{{ currentStatus === 'queued_local' ? '已加入队列，等待本地代理执行…' : '正在发布中…' }}</span>
+          <span v-if="currentPlatform" class="text-gray-500 text-xs">（{{ currentPlatform }}）</span>
         </div>
-        <template v-else-if="currentLog">
+        <template v-if="currentLog">
           <div v-for="(line, i) in currentLog.split('\n').filter(Boolean)" :key="i" class="mb-1">
             {{ line }}
           </div>
         </template>
-        <div v-else class="text-gray-500">暂无详细日志</div>
+        <div v-else-if="!isPublishInProgress" class="text-gray-500">暂无详细日志</div>
+        <div v-else class="text-gray-500 text-xs">等待代理开始执行，日志将在此实时更新…</div>
       </div>
 
       <div v-if="currentStatus === 'done'" class="mt-3 p-3 bg-green-50 rounded-lg flex items-center gap-2">
@@ -246,7 +276,16 @@
       </div>
 
       <template #footer>
-        <el-button v-if="currentStatus === 'running' || currentStatus === 'queued_local'" type="warning" plain @click="logDialogVisible = false">
+        <el-button
+          v-if="isPublishInProgress"
+          type="danger"
+          plain
+          :loading="cancelling"
+          @click="handleAbandonPublish"
+        >
+          放弃投放
+        </el-button>
+        <el-button v-if="isPublishInProgress" type="warning" plain @click="logDialogVisible = false">
           后台运行（不中断）
         </el-button>
         <el-button v-else @click="logDialogVisible = false">关闭</el-button>
@@ -259,7 +298,7 @@
 import { getToken } from '../utils/auth.js'
 import { ref, computed, onMounted, onActivated, onUnmounted, onDeactivated, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {Plus, CircleCheck, Loading, Download, Warning} from '@element-plus/icons-vue'
 import api, { publishTasksAPI } from '../utils/api'
 import { fetchAllPages, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
@@ -276,6 +315,11 @@ import {
   platformSupportsTags,
 } from '../utils/platformAuthMeta.js'
 import { downloadLocalAgent } from '../utils/downloadLocalAgent.js'
+import {
+  parseDraftImageUrls,
+  fetchGalleryImageOptions,
+  mergeGalleryOptions,
+} from '../utils/draftMedia.js'
 
 const router = useRouter()
 const route = useRoute()
@@ -340,6 +384,22 @@ const formTitleHint = computed(() => {
 })
 
 const formTagsVisible = computed(() => platformSupportsTags(form.value.platform))
+
+const isBaijiahaoPlatform = computed(
+  () => canonicalPlatform(form.value.platform) === '百度百家号'
+)
+
+const galleryCoverOptions = ref([])
+
+const loadCoverGalleryOptions = async () => {
+  galleryCoverOptions.value = await fetchGalleryImageOptions()
+}
+
+const coverImageOptions = computed(() => {
+  const draft = drafts.value.find((d) => d.id === form.value.draft_id)
+  const draftUrls = parseDraftImageUrls(draft?.selectedImages)
+  return mergeGalleryOptions(galleryCoverOptions.value, draftUrls)
+})
 
 function sliceTitleForPlatform(platform, title) {
   const max = getPlatformTitleMaxLength(platform)
@@ -413,6 +473,7 @@ onMounted(async () => {
       form.value.draft_id = id
       form.value.title = (draft.title || '').slice(0, 100)
       form.value.task_name = `${draft.title || ''}投放`
+      loadCoverGalleryOptions()
     }
   }
 })
@@ -436,6 +497,7 @@ const formRef = ref(null)
 const form = ref({
   task_name: '', draft_id: null, title: '',
   platform: '', account_id: null, tags: '',
+  cover_image_url: '',
 })
 const formRules = {
   task_name: [{ required: true, message: '请填写任务名称', trigger: 'blur' }],
@@ -458,9 +520,13 @@ const filteredAccounts = computed(() =>
 )
 
 const openCreateDialog = async () => {
-  form.value = { task_name: '', draft_id: null, title: '', platform: '', account_id: null, tags: '' }
+  form.value = {
+    task_name: '', draft_id: null, title: '',
+    platform: '', account_id: null, tags: '',
+    cover_image_url: '',
+  }
   createDialogVisible.value = true
-  await loadAccounts()
+  await Promise.all([loadAccounts(), loadCoverGalleryOptions()])
 }
 
 const resetForm = () => {
@@ -474,6 +540,10 @@ const handleDraftChange = (id) => {
     if (!form.value.title) form.value.title = (draft.title || '').slice(0, max)
     if (!form.value.task_name) form.value.task_name = `${draft.title || ''}投放`
   }
+  const urls = new Set(coverImageOptions.value.map((x) => x.url))
+  if (form.value.cover_image_url && !urls.has(form.value.cover_image_url)) {
+    form.value.cover_image_url = ''
+  }
 }
 
 const handlePlatformChange = () => {
@@ -483,6 +553,11 @@ const handlePlatformChange = () => {
   }
   if (!platformSupportsTags(form.value.platform)) {
     form.value.tags = ''
+  }
+  if (!isBaijiahaoPlatform.value) {
+    form.value.cover_image_url = ''
+  } else {
+    loadCoverGalleryOptions()
   }
 }
 
@@ -505,6 +580,10 @@ const handleCreate = async () => {
         content: draft?.content || '',
         title: sliceTitleForPlatform(form.value.platform, form.value.title),
         tags: platformSupportsTags(form.value.platform) ? form.value.tags : '',
+        cover_image_url:
+          isBaijiahaoPlatform.value && form.value.cover_image_url
+            ? form.value.cover_image_url
+            : '',
       })
       ElMessage.success('任务创建成功')
       createDialogVisible.value = false
@@ -556,24 +635,49 @@ const handleDelete = async (id) => {
   }
 }
 
+/** 已放弃但库内仍为 running 时，按失败处理 */
+const resolveTaskStatus = (row) => {
+  if (!row) return ''
+  if (row.cancel_requested && (row.status === 'running' || row.status === 'queued_local')) {
+    return 'failed'
+  }
+  return row.status
+}
+
 // ---- 进度弹窗 ----
 const logDialogVisible = ref(false)
-const logDialogTitle = ref('发布进度')
+const logDialogTitle = ref('发布日志')
+const currentTaskName = ref('')
 const currentLog = ref('')
 const currentStatus = ref('')
 const currentPublishedUrl = ref('')
+const currentPlatform = ref('')
 const currentErrorMessage = ref('')
 const logBoxRef = ref(null)
+const cancelling = ref(false)
 let pollingTaskId = null
 
+const isPublishInProgress = computed(
+  () => currentStatus.value === 'running' || currentStatus.value === 'queued_local'
+)
+
+const syncLogDialogTitle = (status) => {
+  const prefix = status === 'running' || status === 'queued_local' ? '发布进度' : '发布日志'
+  logDialogTitle.value = `${prefix} - ${currentTaskName.value}`
+}
+
 const openLogDialog = (row) => {
-  logDialogTitle.value = `发布进度 - ${row.task_name || ''}`
+  stopStatusPoll()
+  const status = resolveTaskStatus(row)
+  currentTaskName.value = row.task_name || ''
+  syncLogDialogTitle(status)
   currentLog.value = row.task_log || ''
-  currentStatus.value = row.status
-  currentPublishedUrl.value = 'https://mp.toutiao.com/profile_v4/graphic/articles'
+  currentStatus.value = status
+  currentPlatform.value = row.platform || ''
+  currentPublishedUrl.value = row.published_url || ''
   currentErrorMessage.value = row.error_message || ''
   logDialogVisible.value = true
-  if (row.status === 'running' || row.status === 'queued_local') {
+  if (status === 'running' || status === 'queued_local') {
     startStatusPoll(row.id)
   }
 }
@@ -585,19 +689,53 @@ const startStatusPoll = (taskId) => {
     try {
       const data = await api.get(`${TASKS_API}/${taskId}/status`)
       currentLog.value = data.log || ''
-      currentStatus.value = data.status
-      currentPublishedUrl.value = 'https://mp.toutiao.com/profile_v4/graphic/articles'
       currentErrorMessage.value = data.errorMessage || ''
-      // 自动滚动日志到底部
-      await nextTick()
-      if (logBoxRef.value) logBoxRef.value.scrollTop = logBoxRef.value.scrollHeight
+      if (data.publishedUrl) currentPublishedUrl.value = data.publishedUrl
 
-      if (data.status === 'done' || data.status === 'failed') {
+      const logFailed = /❌|用户已放弃投放/.test(data.log || '')
+      const terminal = data.status === 'done' || data.status === 'failed' || logFailed
+      if (terminal) {
+        currentStatus.value = data.status === 'done' ? 'done' : 'failed'
+        if (!currentErrorMessage.value && currentStatus.value === 'failed') {
+          currentErrorMessage.value = logFailed ? '发布失败，任务已终止' : '任务已结束'
+        }
+        syncLogDialogTitle(currentStatus.value)
         stopStatusPoll()
         await loadTasks()
+        return
       }
+
+      currentStatus.value = data.status
+      await nextTick()
+      if (logBoxRef.value) logBoxRef.value.scrollTop = logBoxRef.value.scrollHeight
     } catch {}
   }, 2000)
+}
+
+const handleAbandonPublish = async () => {
+  if (!pollingTaskId) return
+  try {
+    await ElMessageBox.confirm(
+      '确定放弃本次投放？将关闭浏览器窗口并立即停止任务。',
+      '放弃投放',
+      { type: 'warning', confirmButtonText: '放弃', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  cancelling.value = true
+  try {
+    await api.post(`${TASKS_API}/${pollingTaskId}/cancel`)
+    ElMessage.success('已放弃投放，正在关闭浏览器…')
+    currentStatus.value = 'failed'
+    currentErrorMessage.value = '用户已放弃投放'
+    stopStatusPoll()
+    await loadTasks()
+  } catch (err) {
+    ElMessage.error(err.message || '放弃失败')
+  } finally {
+    cancelling.value = false
+  }
 }
 
 const stopStatusPoll = () => {

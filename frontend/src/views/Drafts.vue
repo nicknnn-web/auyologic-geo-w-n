@@ -102,6 +102,11 @@
           </el-table-column>
           <el-table-column prop="title" label="文章标题" min-width="180" show-overflow-tooltip />
           <el-table-column prop="brand" label="品牌" width="120" show-overflow-tooltip />
+          <el-table-column label="配图" width="72" align="center">
+            <template #default="{ row }">
+              {{ draftImageCount(row) || '-' }}
+            </template>
+          </el-table-column>
           <el-table-column label="文件夹" width="110" show-overflow-tooltip>
             <template #default="{ row }">
               {{ row.folderName || '未分类' }}
@@ -144,6 +149,20 @@
     <el-dialog v-model="previewVisible" title="文章预览" width="70%" top="5vh">
       <div v-if="currentDraft" class="p-4 preview-content">
         <div class="text-xl font-bold text-purple-600 mb-4">{{ currentDraft.title }}</div>
+        <div v-if="previewImages.length" class="preview-images mb-4">
+          <div class="text-sm text-gray-500 mb-2">配图（{{ previewImages.length }} 张）</div>
+          <div class="preview-image-grid">
+            <a
+              v-for="(url, idx) in previewImages"
+              :key="url + idx"
+              :href="url"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img :src="url" :alt="`配图 ${idx + 1}`" />
+            </a>
+          </div>
+        </div>
         <div class="markdown-body" v-html="renderedContent" />
       </div>
       <template #footer>
@@ -189,6 +208,7 @@ import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { parseDraftImageUrls } from '../utils/draftMedia.js'
 
 marked.setOptions({ breaks: true, gfm: true })
 
@@ -240,6 +260,13 @@ const renderedContent = computed(() => {
   const html = marked(currentDraft.value.content)
   return DOMPurify.sanitize(html)
 })
+
+const previewImages = computed(() => {
+  if (!currentDraft.value) return []
+  return parseDraftImageUrls(currentDraft.value.selectedImages)
+})
+
+const draftImageCount = (row) => parseDraftImageUrls(row?.selectedImages).length
 
 const formatCreatedAt = (v) => (v ? formatZhCnDateTime(v) : '-')
 
@@ -501,6 +528,25 @@ const handleDelete = async (id) => {
 .preview-content {
   max-height: 70vh;
   overflow-y: auto;
+}
+
+.preview-image-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.preview-image-grid img {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  display: block;
+}
+
+.preview-image-grid a:hover img {
+  border-color: #8b5cf6;
 }
 
 .markdown-body {

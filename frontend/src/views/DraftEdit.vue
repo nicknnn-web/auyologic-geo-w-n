@@ -66,6 +66,52 @@
         <editor-content :editor="editor" class="editor-content" />
       </div>
 
+      <!-- 配图 -->
+      <div class="image-section mb-4">
+        <div class="section-label mb-2">配图（可多选）</div>
+        <div class="flex flex-wrap items-start gap-3">
+          <el-select
+            v-model="selectedImages"
+            multiple
+            placeholder="从企业图库选择配图"
+            style="width: 420px;"
+            collapse-tags
+            collapse-tags-tooltip
+            filterable
+          >
+            <el-option
+              v-for="img in galleryImages"
+              :key="img.id"
+              :label="img.name"
+              :value="img.url"
+            >
+              <div class="flex items-center">
+                <img :src="img.url" class="w-8 h-8 object-cover mr-2 rounded" alt="" />
+                <span>{{ img.name }}</span>
+              </div>
+            </el-option>
+          </el-select>
+          <span class="text-sm text-gray-500 pt-1">已选 {{ selectedImages.length }} 张</span>
+        </div>
+        <div v-if="!galleryImages.length" class="text-sm text-amber-600 mt-2">
+          暂无图库图片，请先在「企业图库」上传；若已上传仍为空，请刷新页面或重新打开本页。
+        </div>
+        <div v-if="selectedImages.length" class="draft-image-grid mt-3">
+          <div v-for="(url, idx) in selectedImages" :key="url + idx" class="draft-image-item">
+            <img :src="url" :alt="`配图 ${idx + 1}`" />
+            <el-button
+              class="draft-image-remove"
+              type="danger"
+              size="small"
+              circle
+              @click="removeImage(idx)"
+            >
+              <el-icon><Close /></el-icon>
+            </el-button>
+          </div>
+        </div>
+      </div>
+
       <!-- 元信息 -->
       <div class="meta-section">
         <div class="section-label mb-2">文章信息</div>
@@ -103,10 +149,11 @@ import { ElMessage } from 'element-plus'
 import { useEditor, EditorContent } from '@tiptap/vue-3'
 import StarterKit from '@tiptap/starter-kit'
 import { draftsAPI } from '../utils/api'
-import { ArrowLeft, Check, Edit, Promotion, DocumentCopy } from '@element-plus/icons-vue'
+import { ArrowLeft, Check, Edit, Promotion, DocumentCopy, Close } from '@element-plus/icons-vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
+import { parseDraftImageUrls, fetchGalleryImageOptions, mergeGalleryOptions } from '../utils/draftMedia.js'
 
 // 配置 marked
 marked.use({ gfm: true, breaks: true })
@@ -131,6 +178,8 @@ const editTitle = ref('')
 const keywords = ref([])
 const saving = ref(false)
 const loading = ref(true)
+const selectedImages = ref([])
+const galleryImages = ref([])
 
 // 编辑器
 const editor = useEditor({
@@ -142,6 +191,19 @@ const editor = useEditor({
     }
   }
 })
+
+const applyDraftImages = (data) => {
+  selectedImages.value = parseDraftImageUrls(data?.selectedImages ?? data?.selected_images)
+}
+
+const removeImage = (idx) => {
+  selectedImages.value = selectedImages.value.filter((_, i) => i !== idx)
+}
+
+const refreshGalleryOptions = async () => {
+  const base = await fetchGalleryImageOptions()
+  galleryImages.value = mergeGalleryOptions(base, selectedImages.value)
+}
 
 onMounted(async () => {
   const draftId = route.params.id || route.query.id
@@ -156,6 +218,7 @@ onMounted(async () => {
       const data = await Promise.race([dataPromise, timeoutPromise])
       draft.value = data
       editTitle.value = data.title || ''
+      applyDraftImages(data)
       loading.value = false
       
       // 解析关键词
@@ -174,6 +237,7 @@ onMounted(async () => {
           const data = JSON.parse(stored)
           draft.value = data
           editTitle.value = data.title || ''
+          applyDraftImages(data)
           loading.value = false
           if (data.form?.keywords) {
             keywords.value = Array.isArray(data.form.keywords) ? data.form.keywords : [data.form.keywords]
@@ -203,6 +267,7 @@ onMounted(async () => {
       const data = JSON.parse(stored)
       draft.value = data
       editTitle.value = data.title || ''
+      applyDraftImages(data)
       loading.value = false
       
       if (data.form?.keywords) {
@@ -217,6 +282,7 @@ onMounted(async () => {
       router.back()
     }
   }
+  await refreshGalleryOptions()
 })
 
 onBeforeUnmount(() => {
@@ -236,6 +302,7 @@ const handleSave = async () => {
         content: draft.value?.content || '',
         status: draft.value?.status || '草稿',
         folderId: draft.value?.folderId ?? null,
+        selectedImages: selectedImages.value,
       })
       draft.value = { ...draft.value, id: newDraft.id }
       ElMessage.success('保存成功（已创建新草稿）')
@@ -245,6 +312,7 @@ const handleSave = async () => {
         title: editTitle.value,
         content: draft.value.content,
         status: draft.value.status,
+        selectedImages: selectedImages.value,
       }
       const fid = draft.value?.folderId ?? draft.value?.folder_id
       if (fid != null && Number(fid) > 0) payload.folderId = Number(fid)
@@ -268,6 +336,7 @@ const handleSaveAsNew = async () => {
       content: draft.value?.content || '',
       status: '草稿',
       folderId: draft.value?.folderId ?? null,
+      selectedImages: [...selectedImages.value],
     })
     draft.value = { ...draft.value, id: newDraft.id }
     ElMessage.success('已另存为新草稿')
@@ -346,6 +415,36 @@ const handlePublish = () => {
 .editor-content :deep(.ProseMirror ol) {
   padding-left: 1.5em;
   margin: 0.8em 0;
+}
+
+.image-section {
+  padding-top: 8px;
+}
+
+.draft-image-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.draft-image-item {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.draft-image-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid #dcdfe6;
+}
+
+.draft-image-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
 }
 
 .meta-section {

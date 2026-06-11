@@ -24,6 +24,67 @@ function toCamelCase(obj) {
   return obj;
 }
 
+/** 解析 drafts.selected_images / selected_docs（TEXT 存 JSON 数组） */
+export function parseDraftTextJsonArray(raw) {
+  if (raw == null || raw === '') return [];
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    if (s.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(s);
+        return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+      } catch {
+        return [];
+      }
+    }
+    if (s.startsWith('{') && s.endsWith('}')) {
+      return s
+        .slice(1, -1)
+        .split(',')
+        .map((x) => x.trim().replace(/^"|"$/g, ''))
+        .filter(Boolean);
+    }
+    return [s];
+  }
+  return [];
+}
+
+/** 写入前将数组字段序列化为 JSON 文本 */
+export function normalizeDraftJsonTextColumns(data) {
+  for (const col of ['selected_images', 'selected_docs']) {
+    if (!Object.prototype.hasOwnProperty.call(data, col)) continue;
+    const v = data[col];
+    if (v == null || v === '') {
+      data[col] = '[]';
+    } else if (Array.isArray(v)) {
+      data[col] = JSON.stringify(v);
+    } else if (typeof v === 'object') {
+      data[col] = JSON.stringify(v);
+    }
+  }
+}
+
+/** 读取草稿行后规范化 JSON 文本列（snake_case 或 camelCase 均可） */
+export function formatDraftRow(row) {
+  if (!row) return row;
+  const r = { ...row };
+  if (r.selected_images != null) {
+    r.selected_images = parseDraftTextJsonArray(r.selected_images);
+  }
+  if (r.selected_docs != null) {
+    r.selected_docs = parseDraftTextJsonArray(r.selected_docs);
+  }
+  if (r.selectedImages != null) {
+    r.selectedImages = parseDraftTextJsonArray(r.selectedImages);
+  }
+  if (r.selectedDocs != null) {
+    r.selectedDocs = parseDraftTextJsonArray(r.selectedDocs);
+  }
+  return r;
+}
+
 export async function ensureDraftFoldersSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS draft_folders (
