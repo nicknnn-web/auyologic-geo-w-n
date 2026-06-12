@@ -34,6 +34,8 @@ export const PLATFORM_AUTH = {
   小红书: {
     titleMaxLength: 20,
     tagsSupported: true,
+    publishHint:
+      '图文帖须至少 1 张配图。创建投放任务时可从企业图库或草稿配图选择；将自动上传至创作者中心，失败时可在浏览器中手动上传。',
   },
 }
 
@@ -43,6 +45,11 @@ export function getPlatformAuthMeta(platform) {
 
 export function isQrAppAuthPlatform(platform) {
   return getPlatformAuthMeta(platform)?.mode === 'qr_app'
+}
+
+/** 仅 App 扫码授权平台返回完整文案；小红书等仅有发布配置时返回 null */
+export function getQrAppAuthMeta(platform) {
+  return isQrAppAuthPlatform(platform) ? getPlatformAuthMeta(platform) : null
 }
 
 export function getPlatformTitleMaxLength(platform) {

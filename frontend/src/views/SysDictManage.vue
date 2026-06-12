@@ -175,7 +175,13 @@
 import { ref, onMounted, onDeactivated, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import { fetchDictTypes, fetchDictEntries, suggestNextDictSortOrder, getApiBase } from '../utils/sysDict.js'
+import {
+  fetchDictTypes,
+  fetchDictEntries,
+  suggestNextDictSortOrder,
+  getApiBase,
+  notifySysDictChanged,
+} from '../utils/sysDict.js'
 import { getToken } from '../utils/auth.js'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
@@ -412,6 +418,7 @@ const handleSubmit = async () => {
         return
       }
       ElMessage.success('已保存')
+      notifySysDictChanged(form.value.dictType)
     } else {
       const res = await fetch(`${API_BASE}/api/sys-dict/entries`, {
         method: 'POST',
@@ -432,6 +439,7 @@ const handleSubmit = async () => {
         return
       }
       ElMessage.success('已创建')
+      notifySysDictChanged(form.value.dictType)
     }
     dialogVisible.value = false
     submitting.value = false
@@ -449,6 +457,8 @@ const handleSubmit = async () => {
 }
 
 const handleDelete = async (id) => {
+  const row = tableData.value.find((r) => r.id === id)
+  const dictType = row?.dictType || row?.dict_type
   try {
     const res = await fetch(`${API_BASE}/api/sys-dict/entries/${id}`, {
       method: 'DELETE',
@@ -460,6 +470,7 @@ const handleDelete = async (id) => {
       return
     }
     ElMessage.success('已删除')
+    notifySysDictChanged(dictType)
     tableRef.value?.clearSelection?.()
     selectedRows.value = []
     await reloadPagedListAfterRemoval({ page, list: tableData, loadData: loadEntriesCore })
@@ -498,6 +509,8 @@ const handleBatchDelete = async () => {
     }
     const n = Number(data.deletedCount) || 0
     ElMessage.success(n > 0 ? `已删除 ${n} 条` : '没有可删除的记录')
+    const changedTypes = [...new Set(rows.map((r) => r.dictType || r.dict_type).filter(Boolean))]
+    changedTypes.forEach((t) => notifySysDictChanged(t))
     tableRef.value?.clearSelection?.()
     selectedRows.value = []
     await reloadPagedListAfterRemoval({ page, list: tableData, loadData: loadEntriesCore })

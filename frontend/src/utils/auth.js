@@ -10,6 +10,9 @@ const USER_KEY = 'auyologic_auth_user'
 const REMEMBER_KEY = 'auyologic_remember'
 const AUTH_CHANGE_EVENT = 'auyologic-auth-change'
 
+/** 主动退出登录过程中为 true，避免 401 误弹「未登录」类提示 */
+let loggingOut = false
+
 function notifyAuthChange() {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event(AUTH_CHANGE_EVENT))
@@ -109,6 +112,26 @@ export function getCurrentUser() {
  */
 export function isLoggedIn() {
   return !!getToken()
+}
+
+export function beginLogout() {
+  loggingOut = true
+}
+
+export function endLogout() {
+  loggingOut = false
+}
+
+export function isLoggingOut() {
+  return loggingOut
+}
+
+/** 401 / 退出登录后的 API 失败不必再 toast */
+export function shouldSuppressApiError(err) {
+  if (loggingOut) return true
+  if (err?.code === 'UNAUTHORIZED') return true
+  if (!getToken()) return true
+  return false
 }
 
 /** 带 Bearer 的 fetch 请求头；json=true 时附加 Content-Type */

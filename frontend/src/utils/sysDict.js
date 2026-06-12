@@ -7,6 +7,15 @@ import { unwrapListPayload, DEFAULT_PAGE_SIZE } from './pagedApi.js'
 import { placeholderKeywordTypeOptions } from '../config/keywordTypeSemantics.js'
 import { getToken } from './auth.js'
 
+/** 字典条目变更后广播，供各业务页刷新下拉（keep-alive 场景） */
+export const SYS_DICT_CHANGE_EVENT = 'auyologic-sys-dict-change'
+
+export function notifySysDictChanged(dictType) {
+  if (typeof window === 'undefined') return
+  const detail = dictType ? { dictType: String(dictType).trim() } : {}
+  window.dispatchEvent(new CustomEvent(SYS_DICT_CHANGE_EVENT, { detail }))
+}
+
 export function getApiBase() {
   return window.VITE_API_URL || window.location.origin
 }

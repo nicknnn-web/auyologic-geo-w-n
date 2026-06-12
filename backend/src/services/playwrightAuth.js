@@ -3,17 +3,21 @@ import { normalizePublishPlatform } from '../utils/publishPlatformNormalize.js';
 
 const PLATFORM_CONFIG = {
   '小红书': {
-    baseUrl: 'https://www.xiaohongshu.com',
-    loginUrl: 'https://www.xiaohongshu.com/login',
-    // 精确匹配：URL 是 /login 或包含 /login? 才算未登录（Bug7修复）
+    baseUrl: 'https://creator.xiaohongshu.com',
+    loginUrl: 'https://creator.xiaohongshu.com/login',
     loginSuccessCheck: (url) => {
       try {
         const u = new URL(url);
-        return !u.pathname.startsWith('/login');
-      } catch { return false; }
+        if (!u.hostname.toLowerCase().includes('xiaohongshu.com')) return false;
+        const p = u.pathname.toLowerCase();
+        return p !== '/login' && !p.startsWith('/login/');
+      } catch {
+        return false;
+      }
     },
-    // 用于验证 session 的 Cookie 名称（过期时间判断）
     sessionCookieName: 'web_session',
+    creatorCenterUrl:
+      'https://creator.xiaohongshu.com/publish/publish?from=tab_switch&target=image',
   },
   '抖音': {
     baseUrl: 'https://www.douyin.com',
@@ -31,6 +35,7 @@ const PLATFORM_CONFIG = {
     loginUrl: 'https://passport.weibo.com/signin/login',
     loginSuccessCheck: (url) => url.includes('weibo.com') && !url.includes('passport.weibo'),
     sessionCookieName: 'SUB',
+    creatorCenterUrl: 'https://weibo.com/',
   },
   '知乎': {
     baseUrl: 'https://www.zhihu.com',
@@ -42,6 +47,7 @@ const PLATFORM_CONFIG = {
       } catch { return false; }
     },
     sessionCookieName: 'z_c0',
+    creatorCenterUrl: 'https://zhuanlan.zhihu.com/write',
   },
   '今日头条': {
     baseUrl: 'https://mp.toutiao.com',
@@ -58,6 +64,7 @@ const PLATFORM_CONFIG = {
       }
     },
     sessionCookieName: 'sessionid',
+    creatorCenterUrl: 'https://mp.toutiao.com/profile_v4/index',
   },
   '百度百家号': {
     baseUrl: 'https://baijiahao.baidu.com',
@@ -74,6 +81,7 @@ const PLATFORM_CONFIG = {
       }
     },
     sessionCookieName: 'BDUSS',
+    creatorCenterUrl: 'https://baijiahao.baidu.com/builder/rc/content',
   },
 };
 
@@ -125,6 +133,26 @@ function randomDelay(min, max) {
   return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
 }
 
+function isLoggedInAtUrl(config, url) {
+  const checker = config.creatorLoginSuccessCheck || config.loginSuccessCheck;
+  return checker(url);
+}
+
+/** 捕获前进入创作者中心，写入创作者域 Cookie / localStorage */
+async function visitCreatorCenterBeforeCapture(page, config, platform) {
+  const target = config.creatorCenterUrl;
+  if (!target) return;
+  console.log(`[授权][${platform}] 正在进入创作者中心以完善登录态…`);
+  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await randomDelay(2000, 3500);
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  const afterUrl = page.url();
+  if (!isLoggedInAtUrl(config, afterUrl)) {
+    throw new Error('进入创作者中心后被重定向到登录页，请确认账号已登录完成');
+  }
+  console.log(`[授权][${platform}] 创作者中心已打开：${afterUrl}`);
+}
+
 /**
  * 启动授权流程：打开浏览器并跳转到登录页
  */
@@ -148,9 +176,13 @@ export async function startAuth(accountId, platform, phoneNumber) {
   activeSessions.set(String(accountId), session);
 
   try {
-    await page.goto(config.baseUrl, { waitUntil: 'commit', timeout: 30000 });
-    await randomDelay(800, 1500);
-    await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (platformKey === '小红书') {
+      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    } else {
+      await page.goto(config.baseUrl, { waitUntil: 'commit', timeout: 30000 });
+      await randomDelay(800, 1500);
+      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
     session.status = 'browser_opened';
 
     if (platformKey === '小红书' && phoneNumber) {
@@ -261,8 +293,9 @@ export async function captureSession(accountId) {
     throw new Error('当前页面仍为登录页，请先完成登录后再点击「我已完成登录」');
   }
 
-  // 已登录：抓取 session
+  // 已登录：先进创作者中心再抓取（Cookie 更完整、发布更不易掉线）
   try {
+    await visitCreatorCenterBeforeCapture(page, config, platform);
     await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
     const storageState = await context.storageState();
     session.status = 'authorized';
@@ -296,12 +329,20 @@ export function verifySession(platform, sessionStateJson) {
 
     const cookies = sessionState?.cookies || [];
     const cookieName = config.sessionCookieName;
+    const platformKey = normalizePublishPlatform(platform);
+
+    const cookieDomainMatches = (cookieDomain) => {
+      const d = String(cookieDomain || '').replace(/^\./, '').toLowerCase();
+      if (platformKey === '小红书') {
+        return d === 'xiaohongshu.com' || d.endsWith('.xiaohongshu.com');
+      }
+      const host = new URL(config.baseUrl).hostname.replace(/^www\./, '').toLowerCase();
+      return d.includes(host) || host.includes(d);
+    };
 
     // 查找关键 session cookie
-    const sessionCookie = cookies.find(c =>
-      c.name === cookieName &&
-      (c.domain?.includes(new URL(config.baseUrl).hostname.replace('www.', '')) ||
-       c.domain?.includes(new URL(config.baseUrl).hostname))
+    const sessionCookie = cookies.find(
+      (c) => c.name === cookieName && cookieDomainMatches(c.domain)
     );
 
     if (!sessionCookie) return false;

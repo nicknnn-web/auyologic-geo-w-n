@@ -1,5 +1,6 @@
 import { onMounted, onUnmounted } from 'vue'
 import api from '../utils/api'
+import { getToken, AUTH_CHANGE_EVENT } from '../utils/auth.js'
 
 const STATUS_REQUEST_TIMEOUT_MS = 2500
 const POLL_VISIBLE_MS = 3000
@@ -10,6 +11,10 @@ const POLL_HIDDEN_MS = 12000
  */
 export function useAgentHeartbeat(agentOnlineRef) {
   const check = async () => {
+    if (!getToken()) {
+      agentOnlineRef.value = false
+      return
+    }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
       agentOnlineRef.value = false
       return
@@ -47,7 +52,19 @@ export function useAgentHeartbeat(agentOnlineRef) {
     timer = setInterval(check, ms)
   }
 
+  const onAuthChange = () => {
+    if (!getToken()) {
+      agentOnlineRef.value = false
+      if (timer) clearInterval(timer)
+      timer = null
+      return
+    }
+    void check()
+    schedulePoll()
+  }
+
   onMounted(async () => {
+    if (!getToken()) return
     await check()
     schedulePoll()
     window.addEventListener('pageshow', check)
@@ -55,6 +72,7 @@ export function useAgentHeartbeat(agentOnlineRef) {
     window.addEventListener('focus', check)
     window.addEventListener('online', onBrowserOnline)
     window.addEventListener('offline', onBrowserOffline)
+    window.addEventListener(AUTH_CHANGE_EVENT, onAuthChange)
   })
 
   onUnmounted(() => {
@@ -64,6 +82,7 @@ export function useAgentHeartbeat(agentOnlineRef) {
     window.removeEventListener('focus', check)
     window.removeEventListener('online', onBrowserOnline)
     window.removeEventListener('offline', onBrowserOffline)
+    window.removeEventListener(AUTH_CHANGE_EVENT, onAuthChange)
   })
 
   return { checkAgentStatus: check }

@@ -299,7 +299,14 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { Fold, Expand, House, Search, ChatDotRound, Collection, Picture, EditPen, DocumentAdd, Folder, OfficeBuilding, User, UserFilled, Promotion, List, Setting, Aim, Monitor, DataAnalysis, Histogram, Menu, Close, TrendCharts, Management, Comment, Connection, ArrowDown, SwitchButton } from '@element-plus/icons-vue'
-import { getCurrentUser, getCurrentUserId, clearAuth, AUTH_CHANGE_EVENT } from './utils/auth.js'
+import {
+  getCurrentUser,
+  getCurrentUserId,
+  clearAuth,
+  beginLogout,
+  endLogout,
+  AUTH_CHANGE_EVENT,
+} from './utils/auth.js'
 
 /** 与各页 defineOptions({ name }) 一致；不缓存则每次进控制台拉最新统计 */
 const keepAliveExclude = ['Dashboard', 'DraftEdit']
@@ -344,9 +351,14 @@ const handleUserCommand = async (command) => {
   } catch {
     return
   }
+  beginLogout()
   clearAuth()
-  ElMessage.success('已退出登录')
-  router.replace('/login')
+  try {
+    await router.replace('/login')
+    ElMessage.success('已退出登录')
+  } finally {
+    endLogout()
+  }
 }
 
 // 检测是否为移动端

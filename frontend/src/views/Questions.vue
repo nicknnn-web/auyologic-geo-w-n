@@ -350,11 +350,8 @@ import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, MagicStick, SortUp, SortDown, Rank, Delete, Promotion, Download } from '@element-plus/icons-vue'
-import {
-  fetchDictList,
-  normalizeKeywordTypeKey,
-  KEYWORD_TYPE_DEFAULT_OPTIONS
-} from '../utils/sysDict.js'
+import { normalizeKeywordTypeKey, KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import {
   unwrapListPayload,
   DEFAULT_PAGE_SIZE,
@@ -432,25 +429,22 @@ const selectedRows = ref([])
 const batchReviewStatus = ref('')
 const exportQuestionsLoading = ref(false)
 
-const keywordTypeOptions = ref([])
-
 const QUESTION_STATUS_FALLBACK = [
   { dataKey: 'pending', dataValue: '待审核', sortOrder: 10 },
   { dataKey: 'approved', dataValue: '已审核', sortOrder: 20 },
   { dataKey: 'rejected', dataValue: '已拒绝', sortOrder: 30 },
 ]
 
-const questionStatusOptions = ref([...QUESTION_STATUS_FALLBACK])
+const { rows: questionStatusDictRows } = useSysDictList('question_status')
 
-const loadQuestionStatusDict = async () => {
-  const list = await fetchDictList('question_status')
-  const mapped = list.map((r) => ({
+const questionStatusOptions = computed(() => {
+  const mapped = questionStatusDictRows.value.map((r) => ({
     dataKey: r.dataKey ?? r.data_key,
     dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
     sortOrder: r.sortOrder ?? r.sort_order ?? 0,
   }))
-  questionStatusOptions.value = mapped.length ? mapped : [...QUESTION_STATUS_FALLBACK]
-}
+  return mapped.length ? mapped : [...QUESTION_STATUS_FALLBACK]
+})
 
 const statusLabel = (row) => {
   const sl = row?.statusLabel ?? row?.status_label
@@ -472,6 +466,17 @@ const questionStatusCycleKeys = computed(() => {
   return [...new Set(opts.map((x) => x.k))]
 })
 
+const { rows: keywordTypeDictRows } = useSysDictList('keyword_type')
+
+const keywordTypeOptions = computed(() => {
+  const mapped = keywordTypeDictRows.value.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0,
+  }))
+  return mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+})
+
 const keywordTypeLabel = (raw) => {
   const k = normalizeKeywordTypeKey(raw)
   const row = keywordTypeOptions.value.find((x) => (x.dataKey || x.data_key) === k)
@@ -479,16 +484,6 @@ const keywordTypeLabel = (raw) => {
   const fb = KEYWORD_TYPE_DEFAULT_OPTIONS.find((x) => x.dataKey === k)
   if (fb?.dataValue) return fb.dataValue
   return raw || k || '-'
-}
-
-const loadKeywordTypeDict = async () => {
-  const list = await fetchDictList('keyword_type')
-  const mapped = list.map((r) => ({
-    dataKey: r.dataKey ?? r.data_key,
-    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
-    sortOrder: r.sortOrder ?? r.sort_order ?? 0
-  }))
-  keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
 }
 
 const loadData = async () => {
@@ -574,7 +569,7 @@ const handleExportQuestions = async () => {
 }
 
 onMounted(async () => {
-  await Promise.all([loadData(), loadKeywordTypeDict(), loadQuestionStatusDict()])
+  await loadData()
   // 检查是否有传递过来的关键词ID（只执行一次，执行后清除参数）
   if (route.query.keywordIds) {
     setTimeout(() => {

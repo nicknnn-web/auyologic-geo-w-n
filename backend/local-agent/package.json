@@ -10,7 +10,7 @@
     "build": "pkg index.js --target node18-win-x64 --output dist/auyologic-agent.exe"
   },
   "dependencies": {
-    "playwright": "^1.40.0"
+    "playwright": "^1.58.2"
   },
   "devDependencies": {
     "pkg": "^5.8.1"

@@ -337,64 +337,368 @@ export async function runPublishAndCollectLog(taskInfo) {
     if (currentPublishTaskId === tid) currentPublishTaskId = null;
   }
 }
+const XHS_IMAGE_PUBLISH_URL =
+  'https://creator.xiaohongshu.com/publish/publish?source=&published=true&from=tab_switch&target=image';
+const XHS_IMAGE_MANUAL_WAIT_MS = 120_000;
+
+function _isXhsSessionExpired(url) {
+  const u = String(url || '');
+  return u.includes('/login') || u.includes('/signin');
+}
+
+async function _downloadImageUrlToTempFile(imageUrl, taskId, prefix = 'pub-img') {
+  const url = String(imageUrl || '').trim();
+  if (!url) return null;
+  const extMatch = /\.(jpe?g|png|gif|webp)(\?|$)/i.exec(url);
+  const ext = extMatch ? extMatch[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg';
+  const filePath = path.join(os.tmpdir(), `${prefix}-${taskId}-${Date.now()}.${ext}`);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 64) throw new Error('图片过小或为空');
+    fs.writeFileSync(filePath, buf);
+    appendLog(taskId, `图片已下载到临时文件（${Math.round(buf.length / 1024)} KB）`);
+    return filePath;
+  } catch (err) {
+    appendLog(taskId, `⚠️ 图片下载失败：${err.message}`);
+    return null;
+  }
+}
+
+async function _xhsResolveLocalImagePaths(taskId, { imagePaths, coverImageUrl }) {
+  const tempFiles = [];
+  const paths = [];
+  for (const p of imagePaths || []) {
+    if (p && fs.existsSync(p)) paths.push(p);
+  }
+  if (!paths.length && coverImageUrl) {
+    const local = await _downloadImageUrlToTempFile(coverImageUrl, taskId, 'xhs-img');
+    if (local) {
+      paths.push(local);
+      tempFiles.push(local);
+    }
+  }
+  return { paths, tempFiles };
+}
+
+async function _xhsWaitImagesReady(page, taskId, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await _ensurePublishNotCancelled(taskId);
+    const ready = await page
+      .evaluate(() => {
+        const title = document.querySelector('input.d-text[placeholder*="填写标题"]');
+        const editor = document.querySelector('div.tiptap.ProseMirror[contenteditable="true"]');
+        if (!title || !editor) return false;
+        const imgs = document.querySelectorAll(
+          'img[src^="blob:"], img[src^="data:image"], [class*="upload"] img[src], [class*="image"] img[src], [class*="preview"] img[src]'
+        );
+        for (const img of imgs) {
+          const w = img.naturalWidth || img.width || 0;
+          const h = img.naturalHeight || img.height || 0;
+          if (w > 40 && h > 40) return true;
+        }
+        return false;
+      })
+      .catch(() => false);
+    if (ready) return true;
+    await randomDelay(1500, 2500);
+  }
+  return false;
+}
+
+async function _xhsWaitManualImageUpload(page, taskId) {
+  appendLog(
+    taskId,
+    `请在浏览器中手动上传至少 1 张图片（最多等待 ${XHS_IMAGE_MANUAL_WAIT_MS / 1000} 秒）…`
+  );
+  try {
+    await page.locator('button.upload-button:has-text("上传图片")').first().click({ timeout: 8000 });
+  } catch {
+    /* 用户可自行点击 */
+  }
+  const deadline = Date.now() + XHS_IMAGE_MANUAL_WAIT_MS;
+  while (Date.now() < deadline) {
+    await _ensurePublishNotCancelled(taskId);
+    if (await _xhsWaitImagesReady(page, taskId, 4000)) return true;
+    await randomDelay(2000, 3000);
+  }
+  return false;
+}
+
+async function _xhsUploadImages(page, taskId, localPaths) {
+  appendLog(taskId, '等待图文发布页上传区域…');
+  const fileInput = page.locator('input.upload-input[type="file"]').first();
+  try {
+    await fileInput.waitFor({ state: 'attached', timeout: 25000 });
+  } catch {
+    appendLog(taskId, '⚠️ 未找到 upload-input，尝试点击「上传图片」…');
+    const btn = page.locator('button.upload-button:has-text("上传图片")').first();
+    await btn.click({ timeout: 10000 }).catch(() => {});
+    await fileInput.waitFor({ state: 'attached', timeout: 15000 });
+  }
+
+  if (!localPaths?.length) {
+    appendLog(taskId, '⚠️ 任务未指定配图，等待手动上传…');
+    return _xhsWaitManualImageUpload(page, taskId);
+  }
+
+  appendLog(taskId, `【1/3】正在上传 ${localPaths.length} 张配图…`);
+  await fileInput.setInputFiles(localPaths);
+  appendLog(taskId, '已通过 input.upload-input 注入图片');
+  await randomDelay(2000, 3500);
+  const ok = await _xhsWaitImagesReady(page, taskId);
+  if (ok) {
+    appendLog(taskId, '配图上传完成，编辑器已就绪');
+    return true;
+  }
+  appendLog(taskId, '⚠️ 配图可能未上传完成，等待手动处理…');
+  return _xhsWaitManualImageUpload(page, taskId);
+}
+
+function _xhsBodyKeyDelayMs() {
+  return 18 + Math.random() * 20;
+}
+
+async function _xhsTypeInLocator(locator, text, taskId) {
+  const full = String(text).slice(0, 50000);
+  const chunkSize = 64;
+  const keyDelay = _xhsBodyKeyDelayMs();
+  for (let i = 0; i < full.length; i += chunkSize) {
+    if (taskId) await _ensurePublishNotCancelled(taskId);
+    const chunk = full.slice(i, i + chunkSize);
+    await locator.pressSequentially(chunk, { delay: keyDelay });
+  }
+  return true;
+}
+
+async function _xhsFillTitle(page, taskId, title) {
+  if (!title) return;
+  const safeTitle = String(title).trim().slice(0, 20);
+  appendLog(taskId, `【2/3】正在填写标题：${safeTitle}`);
+  const titleInput = page.locator('input.d-text[placeholder*="填写标题"]').first();
+  await titleInput.waitFor({ state: 'visible', timeout: 30000 });
+  await titleInput.scrollIntoViewIfNeeded();
+  await randomDelay(400, 800);
+  await titleInput.click();
+  await afterHumanClick();
+  await page.keyboard.press('Control+a');
+  await randomDelay(150, 300);
+  await page.keyboard.press('Backspace');
+  await randomDelay(200, 400);
+  await titleInput.pressSequentially(safeTitle, { delay: 30 + Math.random() * 25 });
+  await afterHumanClick();
+  appendLog(taskId, '标题填写完成');
+}
+
+async function _xhsFillContent(page, taskId, content) {
+  const plain = String(content || '').trim();
+  if (!plain) return;
+  appendLog(taskId, `正在模拟键盘输入正文（共 ${plain.length} 字）…`);
+  const editor = page.locator('div.tiptap.ProseMirror[contenteditable="true"]').first();
+  await editor.waitFor({ state: 'visible', timeout: 30000 });
+  await editor.scrollIntoViewIfNeeded();
+  await randomDelay(400, 800);
+  await editor.click({ position: { x: 24, y: 24 } });
+  await afterHumanClick();
+  await page.keyboard.press('Control+a');
+  await randomDelay(150, 300);
+  await page.keyboard.press('Backspace');
+  await randomDelay(200, 400);
+  await _xhsTypeInLocator(editor, plain, taskId);
+  await afterHumanClick();
+  appendLog(taskId, '正文填写完成');
+}
+
+async function _xhsAddTags(page, taskId, tags) {
+  appendLog(taskId, `正在添加话题：${tags}`);
+  const tagList = String(tags)
+    .split(/[,，\s#]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const editor = page.locator('div.tiptap.ProseMirror[contenteditable="true"]').first();
+  for (const tag of tagList) {
+    await _ensurePublishNotCancelled(taskId);
+    await editor.click().catch(() => {});
+    await randomDelay(300, 500);
+    await page.keyboard.type(`#${tag}`, { delay: 40 + Math.random() * 30 });
+    await randomDelay(800, 1200);
+    await page.keyboard.press('Enter');
+    await randomDelay(500, 900);
+  }
+  appendLog(taskId, '话题添加完成');
+}
+
+/** 小红书发布按钮在 <xhs-publish-btn> 的 closed Shadow DOM 内 */
+function _xhsPublishButtonLocators(page) {
+  const host = page.locator('xhs-publish-btn');
+  return [
+    page.getByRole('button', { name: '发布', exact: true }),
+    host.getByRole('button', { name: '发布', exact: true }),
+    host.locator('button.ce-btn.bg-red').filter({ hasText: /^发布$/ }),
+    page.locator('xhs-publish-btn >> button.ce-btn.bg-red').filter({ hasText: /^发布$/ }),
+  ];
+}
+
+/** closed shadow 无法穿透时：在宿主底部栏按布局坐标点击右侧「发布」钮 */
+async function _xhsClickPublishOnHost(page, taskId) {
+  const host = page.locator('xhs-publish-btn');
+  await host.waitFor({ state: 'visible', timeout: 15000 });
+  const box = await host.boundingBox();
+  if (!box || box.width < 100 || box.height < 20) {
+    throw new Error('xhs-publish-btn 宿主不可见或尺寸异常');
+  }
+  const x = box.width / 2 + 72;
+  const y = box.height / 2;
+  appendLog(
+    taskId,
+    `shadow 穿透失败，改用坐标点击（宿主 ${Math.round(box.width)}×${Math.round(box.height)}，x=${Math.round(x)} y=${Math.round(y)}）`
+  );
+  await host.scrollIntoViewIfNeeded();
+  await randomDelay(400, 800);
+  await host.click({ position: { x, y }, timeout: 10000 });
+}
+
+async function _xhsWaitPublishButtonReady(page, taskId, timeoutMs = 25000) {
+  const host = page.locator('xhs-publish-btn');
+  await host.waitFor({ state: 'attached', timeout: timeoutMs });
+  try {
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('xhs-publish-btn');
+        if (!el) return false;
+        return el.getAttribute('submit-disabled') !== 'true';
+      },
+      { timeout: timeoutMs }
+    );
+  } catch {
+    appendLog(taskId, '⚠️ xhs-publish-btn submit-disabled 未就绪，继续尝试点击…');
+  }
+}
+
+async function _xhsSubmitPublish(page, taskId, publishTracker) {
+  appendLog(taskId, '【3/3】点击发布（xhs-publish-btn / shadow DOM）…');
+  await randomDelay(800, 1500);
+  await _xhsWaitPublishButtonReady(page, taskId);
+
+  let clicked = false;
+  let usedCoordinateClick = false;
+  let lastErr = null;
+  for (const publishBtn of _xhsPublishButtonLocators(page)) {
+    try {
+      await publishBtn.waitFor({ state: 'visible', timeout: 8000 });
+      await publishBtn.scrollIntoViewIfNeeded();
+      await randomDelay(500, 1000);
+      await publishBtn.click({ timeout: 10000 });
+      clicked = true;
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!clicked) {
+    try {
+      await _xhsClickPublishOnHost(page, taskId);
+      clicked = true;
+      usedCoordinateClick = true;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!clicked) {
+    throw lastErr || new Error('未找到可点击的「发布」按钮（xhs-publish-btn shadow）');
+  }
+  _markPublishClicked(publishTracker);
+  appendLog(
+    taskId,
+    usedCoordinateClick ? '已坐标点击「发布」（xhs-publish-btn 宿主）' : '已点击「发布」按钮（xhs-publish-btn）'
+  );
+
+  let publishedUrl = '';
+  try {
+    await Promise.race([
+      page.waitForURL(
+        (url) => url.includes('/note/') || url.includes('/explore/') || url.includes('published=true'),
+        { timeout: 45000 }
+      ),
+      page.waitForSelector('text=发布成功, text=已发布', { timeout: 45000 }),
+    ]);
+    publishedUrl = page.url();
+    if (!publishedUrl.includes('/note/')) {
+      const noteLink = await page.$('a[href*="/note/"], a[href*="/explore/"]');
+      if (noteLink) {
+        publishedUrl = (await noteLink.getAttribute('href')) || publishedUrl;
+        if (publishedUrl && !publishedUrl.startsWith('http')) {
+          publishedUrl = `https://www.xiaohongshu.com${publishedUrl}`;
+        }
+      }
+    }
+  } catch {
+    appendLog(taskId, '⚠️ 等待发布结果超时，请在创作者中心查看是否成功');
+    publishedUrl = page.url();
+  }
+  return publishedUrl;
+}
+
 async function runPublishXHS(taskInfo) {
-  const { taskId, sessionState, content, title, tags, imagePaths } = taskInfo;
+  const { taskId, sessionState, content, title, tags, imagePaths, coverImageUrl } = taskInfo;
   appendLog(taskId, '正在启动浏览器…');
 
-  // ✅ 公共：复用 _createBrowserSession
   const { browser, page } = await _createBrowserSession(taskId, sessionState);
   let succeeded = false;
   const publishTracker = { clicked: false };
+  const { paths: imageLocalPaths, tempFiles } = await _xhsResolveLocalImagePaths(taskId, {
+    imagePaths,
+    coverImageUrl,
+  });
 
   try {
-    appendLog(taskId, '正在打开小红书创作者中心…');
-    await page.goto('https://creator.xiaohongshu.com/publish/', {
+    appendLog(taskId, '正在打开小红书图文发布页…');
+    await page.goto(XHS_IMAGE_PUBLISH_URL, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      timeout: 45000,
     });
-    await randomDelay(1500, 2500);
+    await randomDelay(2000, 3500);
 
-    // 检查是否被跳转到登录页（session 失效）
-    const currentUrl = page.url();
-    if (currentUrl.includes('/login') || currentUrl.includes('/signin')) {
+    if (_isXhsSessionExpired(page.url())) {
       throw new Error('SESSION_EXPIRED:小红书登录状态已失效，请在账号管理页重新授权');
     }
 
-    appendLog(taskId, '已进入创作者中心，准备发布图文…');
-
-    // 点击「图文」发布选项（XHS 创作者中心有图文/视频切换）
-    await _clickImageTextTab(page, taskId);
-
-    // 上传图片（如果有）
-    if (imagePaths && imagePaths.length > 0) {
-      await _uploadImages(page, taskId, imagePaths);
-    } else {
-      appendLog(taskId, '⚠️ 未提供图片，小红书图文帖建议至少上传1张图');
+    appendLog(taskId, '已进入图文发布页');
+    const imagesOk = await _xhsUploadImages(page, taskId, imageLocalPaths);
+    if (!imagesOk) {
+      throw new Error(
+        '小红书图文帖须至少 1 张配图：请在投放任务中选择配图并确保图片 URL 可访问，或在打开的浏览器中手动上传后重试'
+      );
     }
 
-    // 填写标题（XHS 限制 20 字）
-    const safeTitle = (title || '').slice(0, 20);
-    await _fillTitle(page, taskId, safeTitle);
+    const safeTitle = (title || '未命名笔记').slice(0, 20);
+    await _xhsFillTitle(page, taskId, safeTitle);
+    await _xhsFillContent(page, taskId, content || '');
 
-    // 填写正文
-    await _fillContent(page, taskId, content || '');
-
-    // 添加话题标签
-    if (tags) {
-      await _addTags(page, taskId, tags);
+    if (tags && String(tags).trim()) {
+      await _xhsAddTags(page, taskId, tags);
     }
 
-    // 点击发布，返回 { publishedUrl }
-    const publishedUrl = await _submitPublish(page, taskId, publishTracker);
-    appendLog(taskId, `✅ 小红书发布成功！链接：${publishedUrl || '未获取到链接'}`);
+    const publishedUrl = await _xhsSubmitPublish(page, taskId, publishTracker);
+    appendLog(taskId, `✅ 小红书发布成功！链接：${publishedUrl || '请在创作者中心查看'}`);
     succeeded = true;
-    return { publishedUrl: publishedUrl || '' };
+    return { publishedUrl: publishedUrl || 'https://creator.xiaohongshu.com' };
   } catch (err) {
     if (!(err instanceof PublishAbortedError)) {
       appendLog(taskId, `❌ 小红书发布失败：${err.message}`);
     }
     throw err;
   } finally {
+    for (const f of tempFiles) {
+      try {
+        fs.unlinkSync(f);
+      } catch {
+        /* ignore */
+      }
+    }
     await _finalizeBrowserAfterPublish(taskId, browser, succeeded, publishTracker.clicked);
   }
 }
@@ -1674,23 +1978,7 @@ async function _baijiahaoIsInBaijiahaoTitleBox(elementHandle) {
 const BAIJIAHAO_COVER_MANUAL_WAIT_MS = 120_000;
 
 async function _baijiahaoDownloadCoverToTempFile(imageUrl, taskId) {
-  const url = String(imageUrl || '').trim();
-  if (!url) return null;
-  const extMatch = /\.(jpe?g|png|gif|webp)(\?|$)/i.exec(url);
-  const ext = extMatch ? extMatch[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg';
-  const filePath = path.join(os.tmpdir(), `bjh-cover-${taskId}-${Date.now()}.${ext}`);
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 64) throw new Error('图片过小或为空');
-    fs.writeFileSync(filePath, buf);
-    appendLog(taskId, `封面图已下载到临时文件（${Math.round(buf.length / 1024)} KB）`);
-    return filePath;
-  } catch (err) {
-    appendLog(taskId, `⚠️ 封面图下载失败：${err.message}`);
-    return null;
-  }
+  return _downloadImageUrlToTempFile(imageUrl, taskId, 'bjh-cover');
 }
 
 async function _baijiahaoIsCoverSet(page) {
@@ -1932,20 +2220,9 @@ const BAIJIAHAO_NEWS_BODY_SELECTORS = [
   'body.view',
 ];
 
-function _baijiahaoPlainToEditorHtml(text) {
-  const escape = (s) =>
-    String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  const paras = String(text)
-    .split(/\n{2,}/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (paras.length > 0) {
-    return paras.map((p) => `<p>${escape(p).replace(/\n/g, '<br>')}</p>`).join('');
-  }
-  return `<p>${escape(text)}</p>`;
+/** 百家号正文键盘输入：略快于标题，但仍逐字可见，避免瞬间填满像卡顿 */
+function _baijiahaoBodyKeyDelayMs() {
+  return 20 + Math.random() * 22;
 }
 
 /** 等待 UEditor iframe 加载并完成 _setup（contenteditable 由脚本延迟挂上） */
@@ -2018,72 +2295,40 @@ async function _baijiahaoFindNewsBodyEditor(page) {
   return null;
 }
 
-/** 通过父页面 UE_V2 API 写入（最稳） */
-async function _baijiahaoFillViaUeditorApi(page, plain) {
-  const html = _baijiahaoPlainToEditorHtml(plain.slice(0, 50000));
-  return page
-    .evaluate((contentHtml) => {
-      try {
-        const buckets = [window.UE_V2?.instants, window.UE?.instants].filter(Boolean);
-        for (const instants of buckets) {
-          const editor =
-            instants.ueditorInstant0 ||
-            instants['ueditorInstant0'] ||
-            Object.values(instants)[0];
-          if (!editor) continue;
-          if (typeof editor.setContent === 'function') {
-            editor.setContent(contentHtml, false);
-            if (typeof editor.fireEvent === 'function') {
-              editor.fireEvent('contentchange');
-            }
-            return true;
-          }
-        }
-        return false;
-      } catch {
-        return false;
-      }
-    }, html)
-    .catch(() => false);
+/** 在 UEditor / contenteditable 内模拟键盘逐字输入（分段以便取消与进度日志） */
+async function _baijiahaoTypeBodyByKeyboard(locator, text, taskId) {
+  const full = String(text).slice(0, 50000);
+  const chunkSize = 64;
+  const keyDelay = _baijiahaoBodyKeyDelayMs();
+
+  for (let i = 0; i < full.length; i += chunkSize) {
+    if (taskId) await _ensurePublishNotCancelled(taskId);
+    const chunk = full.slice(i, i + chunkSize);
+    await locator.pressSequentially(chunk, { delay: keyDelay });
+    const typed = Math.min(i + chunk.length, full.length);
+    if (taskId && full.length > 400 && typed % 400 < chunkSize) {
+      appendLog(taskId, `正文输入中…约 ${typed}/${full.length} 字`);
+    }
+  }
+
+  const len = await locator.innerText().catch(() => '');
+  return String(len).trim().length > 0;
 }
 
-async function _baijiahaoFillNewsBodyEditor(frame, locator, plain) {
-  const html = _baijiahaoPlainToEditorHtml(plain.slice(0, 50000));
-  const filledByDom = await frame
-    .evaluate((contentHtml) => {
-      const body =
-        document.querySelector('body.news-editor-pc') ||
-        document.querySelector('body.view');
-      if (!body) return false;
-      body.focus();
-      body.innerHTML = contentHtml;
-      body.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
-      body.dispatchEvent(new Event('change', { bubbles: true }));
-      try {
-        const w = window.parent;
-        const instants = w?.UE_V2?.instants || w?.UE?.instants;
-        const editor = instants?.ueditorInstant0 || Object.values(instants || {})[0];
-        if (editor?.fireEvent) editor.fireEvent('contentchange');
-      } catch {
-        /* ignore */
-      }
-      return (body.innerText || '').trim().length > 0;
-    }, html)
-    .catch(() => false);
-  if (filledByDom) return true;
-
+async function _baijiahaoFillNewsBodyEditor(frame, locator, plain, taskId) {
   await locator.scrollIntoViewIfNeeded().catch(() => {});
   await randomDelay(300, 600);
   await locator.click({ position: { x: 48, y: 48 }, timeout: 15000 });
+  await randomDelay(200, 450);
   const keyboard = frame.keyboard;
   await keyboard.press('Control+a');
   await randomDelay(150, 300);
   await keyboard.press('Backspace');
-  await randomDelay(150, 300);
+  await randomDelay(200, 400);
   try {
-    await locator.pressSequentially(plain.slice(0, 50000), { delay: 10 + Math.random() * 8 });
-    return true;
-  } catch {
+    return await _baijiahaoTypeBodyByKeyboard(locator, plain, taskId);
+  } catch (err) {
+    if (taskId) appendLog(taskId, `⚠️ 正文键盘输入失败：${err.message}`);
     return false;
   }
 }
@@ -2091,29 +2336,25 @@ async function _baijiahaoFillNewsBodyEditor(frame, locator, plain) {
 async function _baijiahaoFillContent(page, taskId, content) {
   const plain = _baijiahaoStripNonTextForNewsBody(content);
   if (!plain) return;
-  appendLog(taskId, '正在填写正文…');
+  appendLog(taskId, `正在模拟键盘输入正文（共 ${plain.length} 字）…`);
 
   const ueditorFrame = await _baijiahaoWaitForUeditorFrame(page, taskId);
   if (ueditorFrame) {
-    if (await _baijiahaoFillViaUeditorApi(page, plain)) {
-      appendLog(taskId, `正文填写完成（UEditor API · ${ueditorFrame.iframeSel}）`);
-      await afterHumanClick();
-      return;
-    }
     const filled = await _baijiahaoFillNewsBodyEditor(
       ueditorFrame.frame,
       ueditorFrame.locator,
-      plain
+      plain,
+      taskId
     );
     if (filled) {
       appendLog(
         taskId,
-        `正文填写完成（${ueditorFrame.iframeSel} → ${ueditorFrame.bodySel}）`
+        `正文填写完成（键盘输入 · ${ueditorFrame.iframeSel} → ${ueditorFrame.bodySel}）`
       );
       await afterHumanClick();
       return;
     }
-    appendLog(taskId, '⚠️ UEditor iframe 已找到但填入失败，尝试备用选择器…');
+    appendLog(taskId, '⚠️ UEditor iframe 已找到但键盘输入失败，尝试备用选择器…');
   }
 
   const selectors = [
@@ -2143,8 +2384,8 @@ async function _baijiahaoFillContent(page, taskId, content) {
     await randomDelay(200, 400);
     await page.keyboard.press('Backspace');
     await randomDelay(200, 400);
-    await editor.pressSequentially(plain.slice(0, 50000), { delay: 10 + Math.random() * 8 });
-    appendLog(taskId, `正文填写完成（${sel}）`);
+    await _baijiahaoTypeBodyByKeyboard(editor, plain, taskId);
+    appendLog(taskId, `正文填写完成（键盘输入 · ${sel}）`);
     await afterHumanClick();
     return;
   }
@@ -2425,7 +2666,7 @@ async function _baijiahaoSubmitPublish(page, taskId, publishTracker) {
 }
 
 /** 本地代理 zip 内 playwrightPublisher 构建标识（更新后请重新下载代理） */
-export const PUBLISHER_BUILD_ID = '2026-06-10-bjh-cover-v16';
+export const PUBLISHER_BUILD_ID = '2026-06-10-xhs-coord-click-v22';
 
 const PUBLISH_RUNNERS = {
   小红书: runPublishXHS,
@@ -2447,244 +2688,6 @@ async function _runPublish(taskInfo) {
   }
   const content = preparePublishContent(taskInfo.taskId, taskInfo.content);
   return runner({ ...taskInfo, platform, content });
-}
-
-/** 点击图文 tab */
-async function _clickImageTextTab(page, taskId) {
-  try {
-    // XHS 创作者页面的图文/视频切换按钮
-    const imageTextSelectors = [
-      'text=上传图文',
-      '[data-tab="image"]',
-      '.tab-item:has-text("上传图文")',
-      '.publish-tab:has-text("上传图文")',
-    ];
-    for (const sel of imageTextSelectors) {
-      const el = await page.$(sel);
-      if (el) {
-        await el.click();
-        await randomDelay(800, 1200);
-        appendLog(taskId, '已选择「图文」发布类型');
-        return;
-      }
-    }
-    appendLog(taskId, '未找到图文切换按钮，尝试直接继续（可能默认已是图文）');
-  } catch {
-    appendLog(taskId, '切换图文 tab 失败，继续尝试…');
-  }
-}
-
-/** 上传图片 */
-async function _uploadImages(page, taskId, imagePaths) {
-  appendLog(taskId, `正在上传 ${imagePaths.length} 张图片…`);
-  try {
-    // 等待文件上传按钮出现
-    const uploadSelectors = [
-      'input[type="file"][accept*="image"]',
-      'input[type="file"]',
-      '.upload-input',
-    ];
-    let fileInput = null;
-    for (const sel of uploadSelectors) {
-      fileInput = await page.$(sel);
-      if (fileInput) break;
-    }
-
-    if (!fileInput) {
-      // 有些页面的 input 是隐藏的，需要点击触发区域后再找
-      const triggerSelectors = [
-        '.upload-btn', '.add-img', '[class*="upload"]',
-        'text=上传图片', 'text=添加图片',
-      ];
-      for (const sel of triggerSelectors) {
-        const trigger = await page.$(sel);
-        if (trigger) {
-          await trigger.click();
-          await randomDelay(500, 800);
-          break;
-        }
-      }
-      fileInput = await page.$('input[type="file"]');
-    }
-
-    if (!fileInput) {
-      appendLog(taskId, '⚠️ 未找到图片上传入口，跳过图片上传');
-      return;
-    }
-
-    // 过滤出实际存在的文件
-    const existingPaths = imagePaths.filter(p => fs.existsSync(p));
-    if (existingPaths.length === 0) {
-      appendLog(taskId, '⚠️ 图片文件不存在，跳过图片上传');
-      return;
-    }
-
-    await fileInput.setInputFiles(existingPaths);
-    // 等待图片上传完成（根据图片数量动态等待）
-    await randomDelay(2000 + existingPaths.length * 1000, 3000 + existingPaths.length * 1500);
-    appendLog(taskId, `图片上传完成（${existingPaths.length} 张）`);
-  } catch (err) {
-    appendLog(taskId, `⚠️ 图片上传异常：${err.message}，继续发布…`);
-  }
-}
-
-/** 填写标题 */
-async function _fillTitle(page, taskId, title) {
-  if (!title) return;
-  appendLog(taskId, `正在填写标题：${title}`);
-  try {
-    const titleSelectors = [
-      'input[placeholder*="标题"]',
-      'input[placeholder*="添加标题"]',
-      '.title-input input',
-      '[class*="title"] input',
-    ];
-    for (const sel of titleSelectors) {
-      const input = await page.$(sel);
-      if (input) {
-        await input.click();
-        await randomDelay(200, 400);
-        await input.fill('');
-        for (const ch of title) {
-          await input.type(ch, { delay: 40 + Math.random() * 40 });
-        }
-        appendLog(taskId, '标题填写完成');
-        return;
-      }
-    }
-    appendLog(taskId, '⚠️ 未找到标题输入框');
-  } catch (err) {
-    appendLog(taskId, `⚠️ 填写标题失败：${err.message}`);
-  }
-}
-
-/** 填写正文 */
-async function _fillContent(page, taskId, content) {
-  if (!content) return;
-  appendLog(taskId, '正在填写正文…');
-  try {
-    const contentSelectors = [
-      '[contenteditable="true"][placeholder*="正文"]',
-      '[contenteditable="true"]',
-      'textarea[placeholder*="正文"]',
-      '.ql-editor',
-      '[class*="editor"]',
-    ];
-    for (const sel of contentSelectors) {
-      const editor = await page.$(sel);
-      if (editor) {
-        await editor.click();
-        await randomDelay(300, 500);
-        // 清空已有内容
-        await page.keyboard.press('Control+a');
-        await randomDelay(100, 200);
-        // 分段输入，避免过长字符串一次性填入
-        const chunks = content.match(/.{1,100}/gs) || [content];
-        for (const chunk of chunks) {
-          await editor.type(chunk, { delay: 20 + Math.random() * 20 });
-        }
-        appendLog(taskId, '正文填写完成');
-        return;
-      }
-    }
-    appendLog(taskId, '⚠️ 未找到正文编辑框');
-  } catch (err) {
-    appendLog(taskId, `⚠️ 填写正文失败：${err.message}`);
-  }
-}
-
-/** 添加话题标签 */
-async function _addTags(page, taskId, tags) {
-  appendLog(taskId, `正在添加话题标签：${tags}`);
-  try {
-    const tagList = tags.split(/[,，\s]+/).filter(Boolean).slice(0, 5);
-    for (const tag of tagList) {
-      const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
-      const tagInputSelectors = [
-        'input[placeholder*="话题"]',
-        'input[placeholder*="标签"]',
-        '[class*="topic"] input',
-        '[class*="tag"] input',
-      ];
-      for (const sel of tagInputSelectors) {
-        const input = await page.$(sel);
-        if (input) {
-          await input.click();
-          await randomDelay(200, 400);
-          await input.type(cleanTag, { delay: 60 });
-          await randomDelay(800, 1200);
-          // 等待下拉候选出现后按 Enter 选择
-          await page.keyboard.press('Enter');
-          await randomDelay(400, 600);
-          break;
-        }
-      }
-    }
-    appendLog(taskId, '话题标签添加完成');
-  } catch (err) {
-    appendLog(taskId, `⚠️ 添加话题标签失败：${err.message}，继续发布…`);
-  }
-}
-
-/** 点击发布按钮并等待结果，返回帖子 URL */
-async function _submitPublish(page, taskId, publishTracker) {
-  appendLog(taskId, '正在点击发布按钮…');
-
-  const publishSelectors = [
-    'button:has-text("发布")',
-    'button:has-text("提交")',
-    '.publish-btn',
-    '[class*="publish-btn"]',
-    'button[type="submit"]:has-text("发布")',
-  ];
-
-  let publishBtn = null;
-  for (const sel of publishSelectors) {
-    publishBtn = await page.$(sel);
-    if (publishBtn) break;
-  }
-
-  if (!publishBtn) throw new Error('未找到发布按钮，请检查页面是否正确加载');
-
-  await publishBtn.click();
-  _markPublishClicked(publishTracker);
-  appendLog(taskId, '已点击发布，等待结果…');
-
-  // 等待发布结果：成功跳转或出现成功提示
-  let publishedUrl = '';
-  try {
-    await Promise.race([
-      // 成功：页面跳转到帖子详情
-      page.waitForURL(url =>
-        url.includes('/explore/') || url.includes('/user/profile/') || url.includes('/note/'),
-        { timeout: 30000 }
-      ),
-      // 成功：出现成功提示弹窗
-      page.waitForSelector(
-        'text=发布成功, text=已发布, .publish-success, [class*="success-tip"]',
-        { timeout: 30000 }
-      ),
-    ]);
-
-    publishedUrl = page.url();
-
-    // 如果跳到了首页而不是帖子页，尝试从提示中找帖子链接
-    if (!publishedUrl.includes('/note/') && !publishedUrl.includes('/explore/')) {
-      const noteLink = await page.$('a[href*="/note/"]');
-      if (noteLink) {
-        publishedUrl = await noteLink.getAttribute('href');
-        if (publishedUrl && !publishedUrl.startsWith('http')) {
-          publishedUrl = 'https://www.xiaohongshu.com' + publishedUrl;
-        }
-      }
-    }
-  } catch {
-    // 超时也不一定失败，可能已经发布成功但页面未跳转
-    appendLog(taskId, '⚠️ 等待发布结果超时，尝试检查当前页面状态…');
-    publishedUrl = page.url();
-  }
-
-  return publishedUrl;
 }
 
 /** 清理已完成任务的内存状态（防止无限增长） */

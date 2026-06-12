@@ -28,12 +28,21 @@ function normalizePublishPlatform(platform) {
 
 const PLATFORM_CONFIG = {
   '小红书': {
-    baseUrl: 'https://www.xiaohongshu.com',
-    loginUrl: 'https://www.xiaohongshu.com/login',
+    baseUrl: 'https://creator.xiaohongshu.com',
+    loginUrl: 'https://creator.xiaohongshu.com/login',
     loginSuccessCheck: (url) => {
-      try { return !new URL(url).pathname.startsWith('/login'); } catch { return false; }
+      try {
+        const u = new URL(url);
+        if (!u.hostname.toLowerCase().includes('xiaohongshu.com')) return false;
+        const p = u.pathname.toLowerCase();
+        return p !== '/login' && !p.startsWith('/login/');
+      } catch {
+        return false;
+      }
     },
     sessionCookieName: 'web_session',
+    creatorCenterUrl:
+      'https://creator.xiaohongshu.com/publish/publish?from=tab_switch&target=image',
   },
   '抖音': {
     baseUrl: 'https://www.douyin.com',
@@ -48,6 +57,7 @@ const PLATFORM_CONFIG = {
     loginUrl: 'https://passport.weibo.com/sso/signin',
     loginSuccessCheck: (url) => url.includes('weibo.com') && !url.includes('passport.weibo'),
     sessionCookieName: 'SUB',
+    creatorCenterUrl: 'https://weibo.com/',
   },
   '知乎': {
     baseUrl: 'https://www.zhihu.com',
@@ -56,6 +66,7 @@ const PLATFORM_CONFIG = {
       try { return !new URL(url).pathname.startsWith('/signin'); } catch { return false; }
     },
     sessionCookieName: 'z_c0',
+    creatorCenterUrl: 'https://zhuanlan.zhihu.com/write',
   },
   /** 须用今日头条 App 扫二维码登录，不支持网页手机号直登 */
   '今日头条': {
@@ -73,6 +84,7 @@ const PLATFORM_CONFIG = {
       }
     },
     sessionCookieName: 'sessionid',
+    creatorCenterUrl: 'https://mp.toutiao.com/profile_v4/index',
   },
   '百度百家号': {
     baseUrl: 'https://baijiahao.baidu.com',
@@ -89,6 +101,7 @@ const PLATFORM_CONFIG = {
       }
     },
     sessionCookieName: 'BDUSS',
+    creatorCenterUrl: 'https://baijiahao.baidu.com/builder/rc/content',
   },
 };
 
@@ -129,6 +142,25 @@ function randomDelay(min, max) {
   return new Promise(r => setTimeout(r, min + Math.random() * (max - min)));
 }
 
+function isLoggedInAtUrl(config, url) {
+  const checker = config.creatorLoginSuccessCheck || config.loginSuccessCheck;
+  return checker(url);
+}
+
+async function visitCreatorCenterBeforeCapture(page, config, platform) {
+  const target = config.creatorCenterUrl;
+  if (!target) return;
+  console.log(`[授权][${platform}] 正在进入创作者中心以完善登录态…`);
+  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
+  await randomDelay(2000, 3500);
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+  const afterUrl = page.url();
+  if (!isLoggedInAtUrl(config, afterUrl)) {
+    throw new Error('进入创作者中心后被重定向到登录页，请确认账号已登录完成');
+  }
+  console.log(`[授权][${platform}] 创作者中心已打开：${afterUrl}`);
+}
+
 /**
  * 启动浏览器并跳转到登录页
  * @param {string|number} accountId
@@ -163,9 +195,13 @@ async function startAuth(accountId, platform, phoneNumber, onStatusChange) {
   };
 
   try {
-    await page.goto(config.baseUrl, { waitUntil: 'commit', timeout: 30000 });
-    await randomDelay(800, 1500);
-    await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (platformKey === '小红书') {
+      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+    } else {
+      await page.goto(config.baseUrl, { waitUntil: 'commit', timeout: 30000 });
+      await randomDelay(800, 1500);
+      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    }
     setStatus('browser_opened');
 
     if (platformKey === '小红书' && phoneNumber) {
@@ -335,13 +371,14 @@ async function captureSession(accountId) {
   const session = activeSessions.get(String(accountId));
   if (!session) throw new Error('没有活跃的授权会话');
 
-  const { context, page, config } = session;
+  const { context, page, config, platform } = session;
   const currentUrl = page.url();
 
   if (!config.loginSuccessCheck(currentUrl)) {
     throw new Error('当前页面仍为登录页，请先完成登录');
   }
 
+  await visitCreatorCenterBeforeCapture(page, config, platform);
   await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
   const storageState = await context.storageState();
   session.status = 'authorized';

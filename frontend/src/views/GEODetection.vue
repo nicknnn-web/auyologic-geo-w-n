@@ -284,11 +284,8 @@ import { ref, computed, onMounted, h } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowRight, ArrowLeft, Close, Check, ChatDotRound, Monitor, Collection, Cpu, RefreshLeft, Download, EditPen, SuccessFilled, WarnTriangleFilled, Histogram, Lock, Document, Loading } from '@element-plus/icons-vue'
-import {
-  fetchDictList,
-  normalizeKeywordTypeKey,
-  KEYWORD_TYPE_DEFAULT_OPTIONS
-} from '../utils/sysDict.js'
+import { normalizeKeywordTypeKey, KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import { fetchAllPages } from '../utils/pagedApi.js'
 import { GEO_DETECTION_SYSTEM_PROMPT, buildGeoDetectionPrompt } from '../prompts/index.js'
 import { formatZhCnMdHm, formatZhCnYmd } from '../utils/dateTime.js'
@@ -872,7 +869,17 @@ const calculateScore = (detection, keywordType, keyword = '') => {
 const router = useRouter()
 const route = useRoute()
 
-const keywordTypeOptions = ref([])
+const { rows: keywordTypeDictRows } = useSysDictList('keyword_type')
+
+const keywordTypeOptions = computed(() => {
+  const mapped = keywordTypeDictRows.value.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0,
+  }))
+  return mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+})
+
 const KEYWORD_TYPE_FALLBACK_LABEL = {
   '01': '品牌',
   '02': '产品',
@@ -889,15 +896,6 @@ const keywordTypeLabel = (raw) => {
 const categoryCssClass = (cat) => {
   const k = normalizeKeywordTypeKey(cat)
   return ['01', '02', '03', '04'].includes(k) ? k : '03'
-}
-const loadKeywordTypeDict = async () => {
-  const list = await fetchDictList('keyword_type')
-  const mapped = list.map((r) => ({
-    dataKey: r.dataKey ?? r.data_key,
-    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
-    sortOrder: r.sortOrder ?? r.sort_order ?? 0
-  }))
-  keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
 }
 
 const steps = [{ label: '选择问题' }, { label: '选择平台' }, { label: '确认检测' }, { label: '查看结果' }]
@@ -1564,7 +1562,6 @@ const getCategoryColor = (cat) => {
 }
 
 onMounted(async () => {
-  await loadKeywordTypeDict()
   // 加载历史记录
   await loadHistory()
 

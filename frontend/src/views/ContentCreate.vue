@@ -74,6 +74,9 @@
               {{ opt.label }}
             </el-checkbox>
           </el-checkbox-group>
+          <div v-if="includesXhsPlatform" class="text-xs text-amber-700 mt-1 leading-relaxed">
+            已选小红书：生成时将限制标题 ≤20 字、全文（含标题）≤1000 字，并禁止 #——^*&lt;&gt; 等符号
+          </div>
         </el-form-item>
       </div>
 
@@ -365,11 +368,30 @@ import { ElMessage } from 'element-plus'
 
 import { knowledgeAPI, historyAPI, draftFolderAPI, callAiGenerate } from '../utils/api'
 import { fetchAllPages } from '../utils/pagedApi.js'
-import { fetchDictList } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
 import { Folder, FolderAdd, CopyDocument, Refresh, Clock, DocumentCopy } from '@element-plus/icons-vue'
 import { formatZhCnDateTime, nowZhCnDateTime } from '../utils/dateTime.js'
 import { fetchGalleryImageOptions } from '../utils/draftMedia.js'
+import { normalizePublishPlatform } from '../utils/publishPlatformNormalize.js'
+
+/** 勾选小红书时注入生成 prompt 的硬性限制 */
+const XHS_PROMPT_CONSTRAINTS = `## 小红书发布硬性限制（必须严格遵守）
+- 标题不超过 20 个字（含标点符号）
+- 标题与正文合计不超过 1000 个字（含标点符号）
+- 正文禁止使用以下字符：#、——、^、*、<、>
+- 不要使用 Markdown 语法、话题标签（#xxx）、表情以外的特殊符号
+- 请按以下格式输出（不要输出其它说明）：
+  标题：（20字以内）
+  正文：
+  （正文内容）`
+
+function selectedPlatformsIncludeXhs(platforms, dictRows) {
+  return (platforms || []).some((p) => {
+    const canonical = normalizePublishPlatform(resolveToDataValue(dictRows, p) || p)
+    return canonical === '小红书'
+  })
+}
 
 // ========== API 配置 ==========
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
@@ -569,20 +591,15 @@ const selectedText = ref('')
 const contentTextarea = ref(null)
 const activeScene = ref(null)
 
-const audienceDictRows = ref([])
-const platformDictRows = ref([])
+const { rows: audienceDictRows } = useSysDictList('content_target_audience')
+const { rows: platformDictRows } = useSysDictList('publish_platform')
 
 const audienceSelectOpts = computed(() => toDataValueSelectOptions(audienceDictRows.value))
 const platformSelectOpts = computed(() => toDataValueSelectOptions(platformDictRows.value))
 
-const loadContentDicts = async () => {
-  const [a, p] = await Promise.all([
-    fetchDictList('content_target_audience'),
-    fetchDictList('publish_platform'),
-  ])
-  audienceDictRows.value = a
-  platformDictRows.value = p
-}
+const includesXhsPlatform = computed(() =>
+  selectedPlatformsIncludeXhs(form.value.platforms, platformDictRows.value)
+)
 
 // ========== 快速场景快捷入口（平台选项来自字典，仅控制勾选数量，不写死具体平台名）==========
 const quickScenes = [
@@ -854,8 +871,6 @@ const selectedCommand = computed(() => {
 
 onMounted(async () => {
   const userId = getCurrentUserId()
-
-  await loadContentDicts()
 
   // 从后端 API 加载关键词（分页接口，多页合并）
   try {
@@ -1199,6 +1214,10 @@ const buildGeoPrompt = () => {
     platformStyle = `\n\n## 发布平台\n请兼顾以下平台的表达习惯与篇幅节奏：${platformLabelsForPrompt.join('、')}\n`
   }
 
+  const xhsConstraint = selectedPlatformsIncludeXhs(form.value.platforms, platformDictRows.value)
+    ? `\n\n${XHS_PROMPT_CONSTRAINTS}`
+    : ''
+
   // ===== 6. 补充说明（额外要求）=====
   const extraConstraint = extra ? `\n\n## 📋 额外要求\n${extra}` : ''
 
@@ -1270,7 +1289,7 @@ ${randomStyle}
 - 偶尔用一下反问、设问增加互动感`
 
   // ===== 组合完整 prompt =====
-  const geoPrompt = `${coreDriver}${templateStyle}${contextContent}${audienceConstraint}${extraConstraint}${imageContext}${platformStyle}${creativityConstraint}${geoEnhancement}
+  const geoPrompt = `${coreDriver}${templateStyle}${contextContent}${audienceConstraint}${extraConstraint}${imageContext}${platformStyle}${xhsConstraint}${creativityConstraint}${geoEnhancement}
 
 请直接输出文章内容，不要输出思考过程。`
 
@@ -1300,8 +1319,8 @@ const parseGeneratedContent = (rawContent) => {
   let content = rawContent
 
   // 尝试提取标题（通常是第一行或者用 # 标记的）
-  const titleMatch = rawContent.match(/^#\s*(.+)$/m) ||
-                     rawContent.match(/^标题[：:]\s*(.+)$/m) ||
+  const titleMatch = rawContent.match(/^标题[：:]\s*(.+)$/m) ||
+                     rawContent.match(/^#\s*(.+)$/m) ||
                      rawContent.match(/^【(.+?)】$/m)
 
   if (titleMatch) {

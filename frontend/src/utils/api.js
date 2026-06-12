@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { unwrapListPayload } from './pagedApi.js'
-import { getToken, clearAuth, authJsonHeaders } from './auth.js'
+import { getToken, clearAuth, authJsonHeaders, isLoggingOut } from './auth.js'
 
 // API 服务层 - 直接连接后端（Zeabur 环境下）test
 const BASE_URL = window.VITE_API_URL || window.location.origin
@@ -27,10 +27,15 @@ api.interceptors.response.use(
   response => response.data,
   error => {
     if (error.response?.status === 401) {
-      clearAuth()
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.href = '/login'
+      if (!isLoggingOut()) {
+        clearAuth()
+        if (!window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login'
+        }
       }
+      const authErr = new Error(error.response?.data?.error || '未登录，请先登录')
+      authErr.code = 'UNAUTHORIZED'
+      throw authErr
     }
     const msg = error.response?.data?.error || error.message || '请求失败'
     console.error('API Error:', msg)

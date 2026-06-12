@@ -283,11 +283,8 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { OfficeBuilding, Aim, View, Edit, CircleCheck, ArrowRight, MagicStick, Search, Check, Close, Loading } from '@element-plus/icons-vue'
 import { buildCoreKeywordsPrompt } from '../prompts/index.js'
-import {
-  fetchDictList,
-  normalizeKeywordTypeKey,
-  KEYWORD_TYPE_DEFAULT_OPTIONS,
-} from '../utils/sysDict.js'
+import { normalizeKeywordTypeKey, KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
@@ -310,24 +307,19 @@ const kwSearching = ref(false)
 const kwSearchingText = ref('')
 const kwDialogVisible = ref(false)
 const kwGroups = ref([])
+const { rows: keywordTypeDictRows } = useSysDictList('keyword_type')
+
 /** 与关键词管理、拓展问题一致：来自 sys_dict keyword_type */
-const keywordTypeRows = ref([...KEYWORD_TYPE_DEFAULT_OPTIONS])
+const keywordTypeRows = computed(() => {
+  const mapped = keywordTypeDictRows.value.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0,
+  }))
+  return mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+})
 
 const getUserId = () => getCurrentUserId()
-
-const loadKeywordTypeDict = async () => {
-  try {
-    const list = await fetchDictList('keyword_type')
-    const mapped = list.map((r) => ({
-      dataKey: r.dataKey ?? r.data_key,
-      dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
-      sortOrder: r.sortOrder ?? r.sort_order ?? 0,
-    }))
-    keywordTypeRows.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
-  } catch {
-    keywordTypeRows.value = [...KEYWORD_TYPE_DEFAULT_OPTIONS]
-  }
-}
 
 const loadData = async () => {
   try {
@@ -351,7 +343,6 @@ const loadData = async () => {
 
 onMounted(async () => {
   await loadData()
-  await loadKeywordTypeDict()
 })
 
 const triggerAutoSave = () => {

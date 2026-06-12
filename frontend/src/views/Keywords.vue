@@ -110,14 +110,11 @@
 
 <script setup>
 import { getToken, getCurrentUserId } from '../utils/auth.js'
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import {
-  fetchDictList,
-  normalizeKeywordTypeKey,
-  KEYWORD_TYPE_DEFAULT_OPTIONS
-} from '../utils/sysDict.js'
+import { normalizeKeywordTypeKey, KEYWORD_TYPE_DEFAULT_OPTIONS } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import { unwrapListPayload, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import { formatZhCnDateTime } from '../utils/dateTime.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
@@ -150,7 +147,16 @@ const filterType = ref('')
 const isEdit = ref(false)
 const form = ref({ keyword: '', type: '' })
 
-const keywordTypeOptions = ref([])
+const { rows: keywordTypeDictRows } = useSysDictList('keyword_type')
+
+const keywordTypeOptions = computed(() => {
+  const mapped = keywordTypeDictRows.value.map((r) => ({
+    dataKey: r.dataKey ?? r.data_key,
+    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
+    sortOrder: r.sortOrder ?? r.sort_order ?? 0,
+  }))
+  return mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
+})
 
 const keywordTypeLabel = (raw) => {
   const k = normalizeKeywordTypeKey(raw)
@@ -159,16 +165,6 @@ const keywordTypeLabel = (raw) => {
   const fb = KEYWORD_TYPE_DEFAULT_OPTIONS.find((x) => x.dataKey === k)
   if (fb?.dataValue) return fb.dataValue
   return raw || k || '-'
-}
-
-const loadKeywordTypeDict = async () => {
-  const list = await fetchDictList('keyword_type')
-  const mapped = list.map((r) => ({
-    dataKey: r.dataKey ?? r.data_key,
-    dataValue: r.dataValue ?? r.data_value ?? r.dataKey,
-    sortOrder: r.sortOrder ?? r.sort_order ?? 0
-  }))
-  keywordTypeOptions.value = mapped.length ? mapped : [...KEYWORD_TYPE_DEFAULT_OPTIONS]
 }
 
 // 加载数据（服务端分页 + 类型筛选）
@@ -203,8 +199,8 @@ const loadData = async () => {
   }
 }
 
-onMounted(async () => {
-  await Promise.all([loadData(), loadKeywordTypeDict()])
+onMounted(() => {
+  loadData()
 })
 
 const getTypeColor = (type) => {

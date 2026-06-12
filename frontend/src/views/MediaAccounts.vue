@@ -165,13 +165,13 @@
           <el-input v-model="accountForm.phone_number" placeholder="登录用手机号（可选，授权时自动填入）" maxlength="11" />
         </el-form-item>
         <el-alert
-          v-else-if="getPlatformAuthMeta(accountForm.platform)"
+          v-else-if="isQrAppAuthPlatform(accountForm.platform)"
           type="warning"
           :closable="false"
           show-icon
           class="mb-2"
           :title="`${accountForm.platform} 说明`"
-          :description="getPlatformAuthMeta(accountForm.platform).publishHint"
+          :description="getQrAppAuthMeta(accountForm.platform)?.publishHint"
         />
       </el-form>
       <template #footer>
@@ -200,18 +200,18 @@
           description="请先启动本地代理程序（local-agent/），代理在线后再点击「打开授权浏览器」。"
         />
         <el-alert
-          v-else-if="authPlatformMeta"
+          v-else-if="authQrPlatformMeta"
           type="warning"
           :closable="false"
           class="mb-4"
           show-icon
-          :title="authPlatformMeta.step1Title || `${authPlatformMeta.label} · App 扫码授权`"
+          :title="authQrPlatformMeta.step1Title || `${authQrPlatformMeta.label} · App 扫码授权`"
         >
           <template #default>
-            <p class="text-sm leading-relaxed mb-2">{{ authPlatformMeta.authHint }}</p>
-            <p class="text-sm leading-relaxed text-amber-800">{{ authPlatformMeta.publishHint }}</p>
-            <p v-if="authPlatformMeta.step1Desc" class="text-sm leading-relaxed text-gray-600 mt-2">
-              {{ authPlatformMeta.step1Desc }}
+            <p class="text-sm leading-relaxed mb-2">{{ authQrPlatformMeta.authHint }}</p>
+            <p class="text-sm leading-relaxed text-amber-800">{{ authQrPlatformMeta.publishHint }}</p>
+            <p v-if="authQrPlatformMeta.step1Desc" class="text-sm leading-relaxed text-gray-600 mt-2">
+              {{ authQrPlatformMeta.step1Desc }}
             </p>
           </template>
         </el-alert>
@@ -229,7 +229,7 @@
               {{ authAccount.platform }}
             </el-tag>
           </el-form-item>
-          <el-form-item v-if="!authPlatformMeta?.hidePhoneInput" label="手机号">
+          <el-form-item v-if="!authQrPlatformMeta?.hidePhoneInput" label="手机号">
             <el-input
               v-model="authPhoneNumber"
               placeholder="登录用手机号（可选）"
@@ -244,13 +244,13 @@
       <!-- Step 1：浏览器已打开，等待用户操作 -->
       <div v-if="authStep === 1">
         <el-alert
-          v-if="authPlatformMeta"
+          v-if="authQrPlatformMeta"
           type="warning"
           :closable="false"
           class="mb-4"
           show-icon
-          :title="authPlatformMeta.step1Title"
-          :description="authPlatformMeta.step1Desc"
+          :title="authQrPlatformMeta.step1Title"
+          :description="authQrPlatformMeta.step1Desc"
         />
         <el-alert
           v-else
@@ -264,7 +264,7 @@
         />
 
         <!-- 收到短信验证码时显示输入框 -->
-        <div v-if="authSessionStatus === 'waiting_sms_code' && !authPlatformMeta" class="mb-4">
+        <div v-if="authSessionStatus === 'waiting_sms_code' && !authQrPlatformMeta" class="mb-4">
           <el-form label-width="90px">
             <el-form-item label="验证码">
               <el-input
@@ -308,7 +308,7 @@
         <template v-if="authStep === 0">
           <el-button @click="authDialogVisible = false">取消</el-button>
           <el-button type="primary" :loading="authStarting" :disabled="!agentOnline" @click="handleAuthStart">
-            {{ authPlatformMeta ? '打开登录页（App 扫码）' : '打开授权浏览器' }}
+            {{ authQrPlatformMeta ? '打开登录页（App 扫码）' : '打开授权浏览器' }}
           </el-button>
         </template>
 
@@ -337,25 +337,25 @@ import api, { mediaAccountsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
+import { isLoggedIn, shouldSuppressApiError } from '../utils/auth.js'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
-import { fetchDictList } from '../utils/sysDict.js'
 import { toDataValueSelectOptions } from '../utils/dictFieldMap.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
-import { getPlatformAuthMeta, isQrAppAuthPlatform } from '../utils/platformAuthMeta.js'
+import {
+  getPlatformAuthMeta,
+  isQrAppAuthPlatform,
+  getQrAppAuthMeta,
+} from '../utils/platformAuthMeta.js'
 import { downloadLocalAgent } from '../utils/downloadLocalAgent.js'
 
 const API = '/api/platform-accounts'
 
-const platformDictRows = ref([])
+const { rows: platformDictRows } = useSysDictList('publish_platform')
 
 const platformSelectOpts = computed(() => toDataValueSelectOptions(platformDictRows.value))
 
-
-const authPlatformMeta = computed(() => getPlatformAuthMeta(authAccount.value?.platform || ''))
-
-const loadPlatformDict = async () => {
-  platformDictRows.value = await fetchDictList('publish_platform')
-}
+const authQrPlatformMeta = computed(() => getQrAppAuthMeta(authAccount.value?.platform || ''))
 
 // ---- 代理在线状态 + 下载 ----
 const agentOnline = ref(false)
@@ -372,6 +372,7 @@ const listLoading = ref(false)
 const verifyingId = ref(null)
 
 const loadAccounts = async () => {
+  if (!isLoggedIn()) return
   listLoading.value = true
   try {
     const { list, total: t } = await mediaAccountsAPI.list({
@@ -381,6 +382,7 @@ const loadAccounts = async () => {
     accounts.value = list
     total.value = t
   } catch (err) {
+    if (shouldSuppressApiError(err)) return
     ElMessage.error('加载账号列表失败：' + err.message)
     accounts.value = []
     total.value = 0
@@ -389,8 +391,7 @@ const loadAccounts = async () => {
   }
 }
 
-onMounted(async () => {
-  await loadPlatformDict()
+onMounted(() => {
   loadAccounts()
 })
 
@@ -496,11 +497,9 @@ const handleAuthStart = async () => {
     authStep.value = 1
     startPolling()
     ElMessage.success(
-      authPlatformMeta.value?.step1Title
-        ? `登录页已打开，${authPlatformMeta.value.step1Title}`
-        : authPlatformMeta.value
-          ? '登录页已打开，请按说明完成授权'
-          : '浏览器已打开，请完成登录'
+      authQrPlatformMeta.value?.step1Title
+        ? `登录页已打开，${authQrPlatformMeta.value.step1Title}`
+        : '浏览器已打开，请完成登录'
     )
   } catch (err) {
     ElMessage.error(err.message || '启动授权失败')
@@ -629,8 +628,8 @@ const getAuthLabel = (status) => {
 }
 
 const getAuthProgressText = (status) => {
-  if (authPlatformMeta.value && (status === 'waiting_qr_scan' || status === 'browser_opened')) {
-    return authPlatformMeta.value.step1Desc || '请在弹出浏览器中完成 App 扫码登录…'
+  if (authQrPlatformMeta.value && (status === 'waiting_qr_scan' || status === 'browser_opened')) {
+    return authQrPlatformMeta.value.step1Desc || '请在弹出浏览器中完成 App 扫码登录…'
   }
   const map = {
     waiting_agent: '等待本地代理接收任务…',

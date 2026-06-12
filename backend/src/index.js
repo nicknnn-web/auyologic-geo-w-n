@@ -1175,6 +1175,36 @@ app.post('/api/knowledge/:id/extract-text', async (req, res) => {
   }
 });
 
+const PUBLISH_RECORDS_BATCH_DELETE_MAX = 500;
+/** 发布记录：批量删除（须注册在通用 `/api/publish-records/:id` 之前） */
+app.post('/api/publish-records/batch-delete', async (req, res) => {
+  try {
+    const raw = req.body?.ids;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: '请提供非空 ids 数组' });
+    }
+    const ids = [
+      ...new Set(
+        raw
+          .map((x) => parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ];
+    if (ids.length === 0) return res.status(400).json({ error: 'ids 中无有效正整数' });
+    if (ids.length > PUBLISH_RECORDS_BATCH_DELETE_MAX) {
+      return res.status(400).json({ error: `单次最多删除 ${PUBLISH_RECORDS_BATCH_DELETE_MAX} 条` });
+    }
+    const r = await pool.query(
+      'DELETE FROM publish_records WHERE id = ANY($1::int[]) AND user_id = $2 RETURNING id',
+      [ids, req.userId]
+    );
+    res.json({ ok: true, deletedCount: r.rowCount });
+  } catch (err) {
+    console.error('publish-records batch-delete:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 tables.forEach(table => {
   const routePath = `/api/${table}`;
   const hyphenPath = `/api/${table.replace(/_/g, '-')}`;
@@ -1954,6 +1984,36 @@ app.post('/api/publish-tasks', async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+const PUBLISH_TASKS_BATCH_DELETE_MAX = 500;
+/** 投放任务：批量删除（须注册在 `/api/publish-tasks/:id` 之前） */
+app.post('/api/publish-tasks/batch-delete', async (req, res) => {
+  try {
+    const raw = req.body?.ids;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: '请提供非空 ids 数组' });
+    }
+    const ids = [
+      ...new Set(
+        raw
+          .map((x) => parseInt(String(x), 10))
+          .filter((n) => Number.isFinite(n) && n > 0)
+      ),
+    ];
+    if (ids.length === 0) return res.status(400).json({ error: 'ids 中无有效正整数' });
+    if (ids.length > PUBLISH_TASKS_BATCH_DELETE_MAX) {
+      return res.status(400).json({ error: `单次最多删除 ${PUBLISH_TASKS_BATCH_DELETE_MAX} 条` });
+    }
+    const r = await pool.query(
+      'DELETE FROM publish_tasks WHERE id = ANY($1::int[]) AND user_id = $2 RETURNING id',
+      [ids, req.userId]
+    );
+    res.json({ ok: true, deletedCount: r.rowCount });
+  } catch (err) {
+    console.error('publish-tasks batch-delete:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/publish-tasks/:id', async (req, res) => {

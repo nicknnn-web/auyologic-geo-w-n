@@ -12,6 +12,15 @@
             {{ agentOnline ? '本地代理在线' : '本地代理离线' }}
           </span>
         </div>
+        <el-button
+          type="danger"
+          plain
+          :disabled="selectedRows.length === 0 || batchDeleting"
+          :loading="batchDeleting"
+          @click="handleBatchDelete"
+        >
+          批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
+        </el-button>
         <el-button type="primary" @click="openCreateDialog">
           <el-icon class="mr-1"><Plus /></el-icon>
           新建任务
@@ -35,7 +44,14 @@
       </el-button>
     </div>
 
-    <el-table v-loading="tasksLoading" :data="tasks" style="width: 100%">
+    <el-table
+      v-loading="tasksLoading"
+      :data="tasks"
+      row-key="id"
+      style="width: 100%"
+      @selection-change="handleSelectionChange"
+    >
+      <el-table-column type="selection" width="48" />
       <el-table-column label="序号" width="60" align="center">
         <template #default="{ $index }">{{ (page - 1) * pageSize + $index + 1 }}</template>
       </el-table-column>
@@ -204,7 +220,7 @@
           <div class="text-xs text-gray-400 mt-1">发布时自动添加为帖子话题，不填则跳过</div>
         </el-form-item>
 
-        <el-form-item v-if="isBaijiahaoPlatform" label="封面图（可选）">
+        <el-form-item v-if="isCoverImagePlatform" :label="coverImageFormLabel">
           <el-select
             v-model="form.cover_image_url"
             clearable
@@ -229,7 +245,7 @@
           </div>
           <div v-else class="text-xs text-gray-400 mt-1 space-y-0.5">
             <div>可选企业图库全部图片；草稿已选配图会一并列出</div>
-            <div>将自动上传至百家号；若失败，可在发布打开的浏览器中手动选择封面</div>
+            <div>{{ coverImageFormHint }}</div>
           </div>
         </el-form-item>
       </el-form>
@@ -305,7 +321,7 @@ import { fetchAllPages, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '.
 import AppPaginationBar from '../components/AppPaginationBar.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
-import { fetchDictList } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import { toDataValueSelectOptions, resolveToDataValue } from '../utils/dictFieldMap.js'
 import { normalizePublishPlatform } from '../utils/publishPlatformNormalize.js'
 import { getPlatformHexColor } from '../utils/publishPlatformUi.js'
@@ -338,14 +354,12 @@ const taskTotal = ref(0)
 const page = ref(1)
 const pageSize = ref(DEFAULT_PAGE_SIZE)
 const tasksLoading = ref(false)
+const selectedRows = ref([])
+const batchDeleting = ref(false)
 const drafts = ref([])
 const authorizedAccounts = ref([])   // 只存已授权账号（下拉用，分页拉全）
 
-const platformDictRows = ref([])
-
-const loadPlatformDict = async () => {
-  platformDictRows.value = await fetchDictList('publish_platform')
-}
+const { rows: platformDictRows } = useSysDictList('publish_platform')
 
 const publishPlatformValues = computed(() =>
   toDataValueSelectOptions(platformDictRows.value)
@@ -388,6 +402,26 @@ const formTagsVisible = computed(() => platformSupportsTags(form.value.platform)
 const isBaijiahaoPlatform = computed(
   () => canonicalPlatform(form.value.platform) === '百度百家号'
 )
+
+const isXhsPlatform = computed(() => canonicalPlatform(form.value.platform) === '小红书')
+
+const isCoverImagePlatform = computed(() => isBaijiahaoPlatform.value || isXhsPlatform.value)
+
+const coverImageFormLabel = computed(() => {
+  if (isXhsPlatform.value) return '配图（图文帖建议必选）'
+  if (isBaijiahaoPlatform.value) return '封面图（可选）'
+  return '配图'
+})
+
+const coverImageFormHint = computed(() => {
+  if (isXhsPlatform.value) {
+    return '将自动上传至小红书创作者中心；若失败，可在发布打开的浏览器中手动上传配图'
+  }
+  if (isBaijiahaoPlatform.value) {
+    return '将自动上传至百家号；若失败，可在发布打开的浏览器中手动选择封面'
+  }
+  return ''
+})
 
 const galleryCoverOptions = ref([])
 
@@ -462,7 +496,6 @@ const refreshPageData = async () => {
 }
 
 onMounted(async () => {
-  await loadPlatformDict()
   await refreshPageData()
   // 支持从草稿箱跳转时带 draftId
   if (route.query.draftId) {
@@ -554,7 +587,7 @@ const handlePlatformChange = () => {
   if (!platformSupportsTags(form.value.platform)) {
     form.value.tags = ''
   }
-  if (!isBaijiahaoPlatform.value) {
+  if (!isCoverImagePlatform.value) {
     form.value.cover_image_url = ''
   } else {
     loadCoverGalleryOptions()
@@ -581,7 +614,7 @@ const handleCreate = async () => {
         title: sliceTitleForPlatform(form.value.platform, form.value.title),
         tags: platformSupportsTags(form.value.platform) ? form.value.tags : '',
         cover_image_url:
-          isBaijiahaoPlatform.value && form.value.cover_image_url
+          isCoverImagePlatform.value && form.value.cover_image_url
             ? form.value.cover_image_url
             : '',
       })
@@ -626,13 +659,45 @@ const openLogAndPoll = (row) => {
   startStatusPoll(row.id)
 }
 
+const handleSelectionChange = (rows) => {
+  selectedRows.value = rows || []
+}
+
 const handleDelete = async (id) => {
   try {
     await api.delete(`${TASKS_API}/${id}`)
     ElMessage.success('删除成功')
+    selectedRows.value = selectedRows.value.filter((r) => r.id !== id)
     await reloadPagedListAfterRemoval({ page, list: tasks, loadData: loadTasks })
   } catch (err) {
     ElMessage.error(err.message || '删除失败')
+  }
+}
+
+const handleBatchDelete = async () => {
+  if (selectedRows.value.length === 0) return
+  const count = selectedRows.value.length
+  try {
+    await ElMessageBox.confirm(
+      `确定删除选中的 ${count} 条投放任务？此操作不可恢复。`,
+      '批量删除',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  const ids = selectedRows.value.map((r) => r.id).filter((x) => x != null)
+  batchDeleting.value = true
+  try {
+    const data = await api.post(`${TASKS_API}/batch-delete`, { ids })
+    const n = Number(data?.deletedCount) || 0
+    ElMessage.success(n > 0 ? `已删除 ${n} 条任务` : '没有可删除的任务')
+    selectedRows.value = []
+    await reloadPagedListAfterRemoval({ page, list: tasks, loadData: loadTasks })
+  } catch (err) {
+    ElMessage.error(err.message || '批量删除失败')
+  } finally {
+    batchDeleting.value = false
   }
 }
 

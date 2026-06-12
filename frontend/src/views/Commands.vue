@@ -114,7 +114,8 @@ import { getToken, getCurrentUserId } from '../utils/auth.js'
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { commandsAPI } from '../utils/api'
-import { fetchDictList, sortDictRows } from '../utils/sysDict.js'
+import { sortDictRows } from '../utils/sysDict.js'
+import { useSysDictList } from '../composables/useSysDictList.js'
 import {
   labelByDataKey,
   dataKeyByValue,
@@ -128,7 +129,8 @@ import { formatZhCnDateTime } from '../utils/dateTime.js'
 
 const API_BASE_URL = window.VITE_API_URL || window.location.origin
 
-const commandTypeRows = ref([])
+const { rows: commandTypeDictRows, reload: reloadCommandTypes } = useSysDictList('content_command_type')
+const commandTypeRows = computed(() => sortDictRows(commandTypeDictRows.value))
 const tableData = ref([])
 const total = ref(0)
 const page = ref(1)
@@ -157,11 +159,6 @@ const sortedData = computed(() => {
 })
 
 const commandTypeSelectOptions = computed(() => toDataKeySelectOptions(commandTypeRows.value))
-
-const loadCommandTypes = async () => {
-  const list = await fetchDictList('content_command_type')
-  commandTypeRows.value = sortDictRows(list)
-}
 
 /** 存库为 data_key；兼容历史 data_value 存库 */
 const displayContentTypeLabel = (stored) => {
@@ -206,8 +203,7 @@ const loadData = async () => {
 }
 
 // 页面加载时获取数据
-onMounted(async () => {
-  await loadCommandTypes()
+onMounted(() => {
   loadData()
 })
 
@@ -240,7 +236,7 @@ const handleBatchDelete = async () => {
 
 // 初始化默认指令（返回 Promise，确保全部创建完成）
 const initDefaultCommands = async () => {
-  await loadCommandTypes()
+  await reloadCommandTypes()
   const keys = toDataKeySelectOptions(commandTypeRows.value)
     .map((o) => o.value)
     .filter(Boolean)
