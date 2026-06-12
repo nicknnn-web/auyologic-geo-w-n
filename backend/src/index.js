@@ -10,6 +10,8 @@ import { normalizeImagePathForApi, downloadKnowledgeFileBuffer } from './service
 import { extractKnowledgeTextFromBuffer } from './services/knowledgeDocumentExtract.js';
 import { authMiddleware } from './middleware/auth.js';
 import authRouter from './routes/auth.js';
+import agentSessionRouter from './routes/agentSession.js';
+import { isUserAgentOnline } from './services/agentSessionService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -383,6 +385,9 @@ app.use('/api/auth', authRouter);
 
 // 全局鉴权中间件：所有 /api/* 路由（login/register 已在上面提前注册，不会走到这里）
 app.use('/api', authMiddleware);
+
+// 代理会话：入库心跳 / SSE 状态 / 连接令牌
+app.use('/api', agentSessionRouter);
 
 // 获取用户ID（从鉴权中间件注入的 req.userId 读取）
 const getUserId = (req) => req.userId;
@@ -1641,24 +1646,10 @@ app.post('/api/platform-accounts/:id/auth-verify', async (req, res) => {
 
 // ========== 本地代理专用接口 ==========
 
-// 代理心跳（用于前端检测代理是否在线；须与 local-agent 心跳间隔协调）
-const AGENT_HEARTBEAT_TTL_MS = 12_000;
-let agentLastSeen = null;
-
-app.post('/api/agent/heartbeat', (req, res) => {
-  agentLastSeen = Date.now();
-  res.json({ ok: true });
-});
-
-app.get('/api/agent/status', (req, res) => {
-  const online = agentLastSeen !== null && (Date.now() - agentLastSeen < AGENT_HEARTBEAT_TTL_MS);
-  res.json({ online, lastSeen: agentLastSeen });
-});
-
-/** 投放走本地代理时：须有心跳。ALLOW_PUBLISH_WITHOUT_AGENT=true 时跳过（服务器内 Playwright） */
-function isLocalAgentOnline() {
+/** 投放走本地代理时：须该任务所属用户有未过期会话。ALLOW_PUBLISH_WITHOUT_AGENT=true 时跳过 */
+async function isLocalAgentOnlineForUser(userId) {
   if (process.env.ALLOW_PUBLISH_WITHOUT_AGENT === 'true') return true;
-  return agentLastSeen !== null && (Date.now() - agentLastSeen < AGENT_HEARTBEAT_TTL_MS);
+  return isUserAgentOnline(pool, userId);
 }
 
 // 代理轮询：领取一条待发布的投放任务（原子更新为 running）
@@ -2087,7 +2078,8 @@ app.post('/api/publish-tasks/:id/execute', async (req, res) => {
       return res.json({ success: true, message: '发布任务已启动，正在后台执行' });
     }
 
-    if (!isLocalAgentOnline()) {
+    const taskUserId = task.user_id || req.userId;
+    if (!(await isLocalAgentOnlineForUser(taskUserId))) {
       return res.status(503).json({
         error: '本地代理未在线，请先启动本地代理后再执行发布',
         agentOffline: true,

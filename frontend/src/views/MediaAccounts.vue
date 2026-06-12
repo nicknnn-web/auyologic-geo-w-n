@@ -17,6 +17,7 @@
             {{ agentOnline ? '本地代理在线' : '本地代理离线' }}
           </span>
         </div>
+        <el-button plain @click="agentTokenDialogVisible = true">代理连接令牌</el-button>
         <el-button type="primary" @click="openAddDialog">
           <el-icon class="mr-1"><Plus /></el-icon>
           添加账号
@@ -326,6 +327,8 @@
         </template>
       </template>
     </el-dialog>
+
+    <AgentTokenDialog v-model="agentTokenDialogVisible" />
   </div>
 </template>
 
@@ -336,6 +339,7 @@ import { Plus, Key, Phone, Loading, CircleCheck, Warning, Download } from '@elem
 import api, { mediaAccountsAPI } from '../utils/api'
 import { DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
+import AgentTokenDialog from '../components/AgentTokenDialog.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 import { isLoggedIn, shouldSuppressApiError } from '../utils/auth.js'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
@@ -359,6 +363,7 @@ const authQrPlatformMeta = computed(() => getQrAppAuthMeta(authAccount.value?.pl
 
 // ---- 代理在线状态 + 下载 ----
 const agentOnline = ref(false)
+const agentTokenDialogVisible = ref(false)
 const { checkAgentStatus } = useAgentHeartbeat(agentOnline)
 
 const handleDownloadAgent = () => downloadLocalAgent()

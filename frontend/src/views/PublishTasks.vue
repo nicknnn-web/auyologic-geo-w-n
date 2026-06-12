@@ -21,6 +21,7 @@
         >
           批量删除{{ selectedRows.length > 0 ? ` (${selectedRows.length})` : '' }}
         </el-button>
+        <el-button plain @click="agentTokenDialogVisible = true">代理连接令牌</el-button>
         <el-button type="primary" @click="openCreateDialog">
           <el-icon class="mr-1"><Plus /></el-icon>
           新建任务
@@ -307,6 +308,8 @@
         <el-button v-else @click="logDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <AgentTokenDialog v-model="agentTokenDialogVisible" />
   </div>
 </template>
 
@@ -319,6 +322,7 @@ import {Plus, CircleCheck, Loading, Download, Warning} from '@element-plus/icons
 import api, { publishTasksAPI } from '../utils/api'
 import { fetchAllPages, DEFAULT_PAGE_SIZE, reloadPagedListAfterRemoval } from '../utils/pagedApi.js'
 import AppPaginationBar from '../components/AppPaginationBar.vue'
+import AgentTokenDialog from '../components/AgentTokenDialog.vue'
 import { useAgentHeartbeat } from '../composables/useAgentHeartbeat'
 import { formatZhCnMdHm } from '../utils/dateTime.js'
 import { useSysDictList } from '../composables/useSysDictList.js'
@@ -346,6 +350,7 @@ const TASKS_API = '/api/publish-tasks'
 const ACCOUNTS_API = '/api/platform-accounts'
 
 const agentOnline = ref(false)
+const agentTokenDialogVisible = ref(false)
 const { checkAgentStatus } = useAgentHeartbeat(agentOnline)
 const handleDownloadAgent = () => downloadLocalAgent()
 // ---- 数据 ----

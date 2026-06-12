@@ -12,6 +12,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const {
@@ -34,24 +36,113 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+let rl = null;
+
+function getReadline() {
+  if (!rl) {
+    rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  }
+  return rl;
+}
+
 async function prompt(question) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise(resolve => {
-    rl.question(question, ans => { rl.close(); resolve(ans.trim()); });
+  return new Promise((resolve) => {
+    getReadline().question(question, (ans) => resolve(String(ans || '').trim()));
+  });
+}
+
+async function closeReadline() {
+  if (!rl) return;
+  await new Promise((resolve) => {
+    try {
+      rl.close();
+    } catch {
+      /* ignore */
+    }
+    rl = null;
+    setTimeout(resolve, 60);
   });
 }
 
 async function apiFetch(baseUrl, path, options = {}) {
   const url = baseUrl.replace(/\/$/, '') + path;
+  const { headers: optHeaders, ...rest } = options;
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options,
+    ...rest,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(optHeaders || {}),
+    },
   });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`HTTP ${res.status}: ${text}`);
   }
   return res.json();
+}
+
+function agentAuthHeaders(agentToken) {
+  return { Authorization: `Bearer ${agentToken}` };
+}
+
+/**
+ * 根据所连接的服务器地址区分 local / cloud（与 start-agent.bat 的 Y/N 一致）
+ * Y → localhost / 127.0.0.1；N → 线上域名
+ */
+function inferRunModeFromServerUrl(baseUrl) {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return 'local';
+    if (
+      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(host) ||
+      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$/.test(host)
+    ) {
+      return 'local';
+    }
+    return 'cloud';
+  } catch {
+    return 'cloud';
+  }
+}
+
+function buildRegisterPayload(baseUrl, runMode) {
+  return {
+    runMode,
+    startTs: Date.now(),
+    nonce: crypto.randomBytes(4).toString('hex'),
+    serverUrl: baseUrl,
+    clientLabel: os.hostname(),
+  };
+}
+
+async function registerAgentSession(baseUrl, agentToken, runMode) {
+  const body = buildRegisterPayload(baseUrl, runMode);
+  const data = await apiFetch(baseUrl, '/api/agent/register', {
+    method: 'POST',
+    headers: agentAuthHeaders(agentToken),
+    body: JSON.stringify(body),
+  });
+  if (!data.sessionKey) throw new Error('注册代理会话失败：未返回 sessionKey');
+  return { sessionKey: data.sessionKey, runMode: body.runMode };
+}
+
+async function sendAgentOffline(baseUrl, agentToken, sessionKey) {
+  if (!sessionKey || !agentToken) return;
+  const url = baseUrl.replace(/\/$/, '') + '/api/agent/offline';
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...agentAuthHeaders(agentToken),
+      },
+      body: JSON.stringify({ sessionKey }),
+      keepalive: true,
+    });
+  } catch {
+    /* 尽力通知下线 */
+  }
 }
 
 // ---- 配置 ----
@@ -67,6 +158,106 @@ async function loadConfig() {
 
 async function saveConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+}
+
+function normalizeServerUrl(url) {
+  return String(url || '').replace(/\/$/, '');
+}
+
+/** 仅读取已为该服务器保存且验证过的令牌（不用其它环境的 legacy 令牌） */
+function getStoredTokenForServer(config, baseUrl) {
+  const url = normalizeServerUrl(baseUrl);
+  const map = config?.agentTokens;
+  if (map && typeof map === 'object' && map[url]) {
+    const t = String(map[url]).trim();
+    if (t.startsWith('agy_')) return t;
+  }
+  const envToken = String(process.env.AUYOLOGIC_AGENT_TOKEN || '').trim();
+  if (envToken.startsWith('agy_')) return envToken;
+  return '';
+}
+
+function saveAgentTokenToConfig(config, baseUrl, token) {
+  const url = normalizeServerUrl(baseUrl);
+  const agentTokens = { ...(config?.agentTokens || {}), [url]: token };
+  return { ...(config || {}), serverUrl: url, agentToken: token, agentTokens };
+}
+
+function clearAgentTokenForServer(config, baseUrl) {
+  const url = normalizeServerUrl(baseUrl);
+  const agentTokens = { ...(config?.agentTokens || {}) };
+  delete agentTokens[url];
+  const next = { ...(config || {}), agentTokens };
+  if (normalizeServerUrl(next.serverUrl) === url) {
+    delete next.agentToken;
+  }
+  return next;
+}
+
+async function exitAgent(code = 0) {
+  await closeReadline();
+  setTimeout(() => process.exit(code), 150);
+}
+
+async function promptAgentToken(baseUrl, { firstTime = false } = {}) {
+  const url = normalizeServerUrl(baseUrl);
+  const isLocal = inferRunModeFromServerUrl(url) === 'local';
+  console.log('');
+  if (firstTime) {
+    console.log('── 配置代理连接令牌（首次连接此服务器）──');
+  } else {
+    console.log('── 重新输入代理连接令牌 ──');
+  }
+  console.log('请在浏览器打开与下方地址一致的网页，进入「代理连接令牌」生成并复制：');
+  console.log(`  ${url}`);
+  if (isLocal) {
+    console.log('  提示：本地开发请先登录 localhost 前端页面再生成');
+  } else {
+    console.log('  提示：线上环境请在生产域名登录后生成，勿使用本地令牌');
+  }
+  const token = await prompt('请粘贴令牌（agy_ 开头）: ');
+  return String(token || '').trim();
+}
+
+/** 注册成功后才写入配置；无已存令牌时先提示输入，不出现「已作废」 */
+async function obtainAgentSession(config, baseUrl, runMode) {
+  let agentToken = getStoredTokenForServer(config, baseUrl);
+  const hadStoredToken = !!agentToken;
+  let prompted = false;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (!agentToken) {
+      agentToken = await promptAgentToken(baseUrl, { firstTime: !prompted && !hadStoredToken });
+      prompted = true;
+      if (!agentToken) {
+        console.error('未输入代理令牌，退出');
+        return null;
+      }
+    }
+
+    try {
+      const reg = await registerAgentSession(baseUrl, agentToken, runMode);
+      const nextConfig = saveAgentTokenToConfig(config, baseUrl, agentToken);
+      await saveConfig(nextConfig);
+      return { sessionKey: reg.sessionKey, runMode: reg.runMode, agentToken, config: nextConfig };
+    } catch (err) {
+      const is401 = /401/.test(String(err.message));
+      if (!is401) throw err;
+
+      if (hadStoredToken && !prompted) {
+        console.error('\n已保存的令牌已失效，请重新输入。');
+      } else {
+        console.error('\n令牌验证未通过，请确认在与当前服务器对应的网页中生成后重新粘贴。');
+      }
+      agentToken = null;
+      config = clearAgentTokenForServer(config, baseUrl);
+      await saveConfig(config);
+      prompted = true;
+    }
+  }
+
+  console.error('多次令牌验证失败，退出');
+  return null;
 }
 
 // ---- 授权流程 ----
@@ -372,7 +563,7 @@ async function handlePublishTask(BASE_URL, task) {
 
 async function main() {
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   Auyologic 本地代理  v1.1.3         ║');
+  console.log('║   Auyologic 本地代理  v1.2.6         ║');
   console.log('╚══════════════════════════════════════╝\n');
 
   // 服务器地址：优先命令行参数 → 配置文件 → 交互输入
@@ -387,13 +578,14 @@ async function main() {
   if (!serverUrl) {
     console.log('首次运行，请输入服务器地址');
     serverUrl = await prompt('服务器地址（如 https://auyologic.zeabur.app）: ');
-    if (!serverUrl) { console.error('未输入服务器地址，退出'); process.exit(1); }
+    if (!serverUrl) { console.error('未输入服务器地址，退出'); await exitAgent(1); return; }
     serverUrl = serverUrl.replace(/\/$/, '');
-    await saveConfig({ serverUrl });
+    config = { ...(config || {}), serverUrl };
+    await saveConfig(config);
     console.log(`✅ 配置已保存至 ${CONFIG_PATH}\n`);
   }
 
-  const BASE_URL = serverUrl.replace(/\/$/, '');
+  const BASE_URL = normalizeServerUrl(serverUrl);
 
   // 测试连接
   try {
@@ -402,25 +594,72 @@ async function main() {
   } catch (err) {
     console.error(`❌ 无法连接到服务器 ${BASE_URL}:`, err.message);
     console.error('请检查服务器地址是否正确，或服务器是否正常运行');
-    process.exit(1);
+    await exitAgent(1);
+    return;
   }
 
-  // 发送心跳（每 5 秒一次，与后端 AGENT_HEARTBEAT_TTL_MS 配合）
+  const runMode = inferRunModeFromServerUrl(BASE_URL);
+  console.log(
+    `\n连接环境: ${runMode === 'local' ? '本地开发' : '线上生产'} (${runMode}) — ${BASE_URL}`
+  );
+
+  let sessionKey = null;
+  let offlineSent = false;
+  let agentToken = '';
+
+  try {
+    const sessionResult = await obtainAgentSession(config, BASE_URL, runMode);
+    if (!sessionResult) {
+      await exitAgent(1);
+      return;
+    }
+    sessionKey = sessionResult.sessionKey;
+    agentToken = sessionResult.agentToken;
+    config = sessionResult.config;
+    console.log(`✅ 代理会话已注册 [${sessionResult.runMode}] ${sessionKey}`);
+  } catch (err) {
+    console.error(`❌ 注册代理会话失败: ${err.message}`);
+    await exitAgent(1);
+    return;
+  }
+
   const HEARTBEAT_INTERVAL_MS = 5000;
   const heartbeat = async () => {
-    try { await apiFetch(BASE_URL, '/api/agent/heartbeat', { method: 'POST' }); } catch {}
+    if (!sessionKey) return;
+    try {
+      await apiFetch(BASE_URL, '/api/agent/heartbeat', {
+        method: 'POST',
+        headers: agentAuthHeaders(agentToken),
+        body: JSON.stringify({ sessionKey }),
+      });
+    } catch {
+      /* 网络抖动 */
+    }
   };
   await heartbeat();
   const heartbeatTimer = setInterval(heartbeat, HEARTBEAT_INTERVAL_MS);
+  let pollTimer = null;
+
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown || offlineSent) return;
+    shuttingDown = true;
+    offlineSent = true;
+    clearInterval(heartbeatTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    console.log(`\n\n👋 代理已停止（${signal || 'exit'}），正在通知服务器下线…`);
+    await sendAgentOffline(BASE_URL, agentToken, sessionKey);
+    await exitAgent(0);
+  };
 
   console.log('\n🚀 代理已启动（授权 + 本地投放）');
-  console.log('（按 Ctrl+C 退出）\n');
+  console.log('（按 Ctrl+C 退出，关闭窗口将尽力通知下线）\n');
 
   // 是否正在处理任务（防止并发）
   let busy = false;
 
   // 轮询：优先授权任务，其次投放队列（每 3 秒）
-  const pollTimer = setInterval(async () => {
+  pollTimer = setInterval(async () => {
     if (busy) return;
     try {
       const data = await apiFetch(BASE_URL, '/api/agent/pending-task');
@@ -441,16 +680,14 @@ async function main() {
     }
   }, 3000);
 
-  // 优雅退出
-  process.on('SIGINT', () => {
-    console.log('\n\n👋 代理已停止');
-    clearInterval(heartbeatTimer);
-    clearInterval(pollTimer);
-    process.exit(0);
-  });
+  process.on('SIGINT', () => { void shutdown('SIGINT'); });
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+  if (process.platform === 'win32') {
+    process.on('SIGBREAK', () => { void shutdown('SIGBREAK'); });
+  }
 }
 
-main().catch(err => {
+main().catch(async (err) => {
   console.error('启动失败:', err.message);
-  process.exit(1);
+  await exitAgent(1);
 });

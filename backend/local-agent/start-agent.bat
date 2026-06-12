@@ -1,84 +1,64 @@
 @echo off
-chcp 65001 >nul
+chcp 65001 >nul 2>nul
 setlocal enabledelayedexpansion
 
-title Auyologic 本地授权代理
+title Auyologic Local Agent
 
-echo ╔══════════════════════════════════════╗
-echo ║   Auyologic 本地授权代理  v1.0.0       ║
-echo ╚══════════════════════════════════════╝
-echo.
-
-:: 切换到脚本目录
 cd /d "%~dp0"
 
-:: 授权成功后保持浏览器打开（便于对比 Playwright 环境）；恢复自动关窗请改为 0
 set AUTH_KEEP_BROWSER_OPEN=1
 
-:: ================================
-:: 1. 检测 Node.js
-:: ================================
+echo.
+echo ========================================
+echo   Auyologic Local Agent  v1.2.6
+echo ========================================
+echo.
+
+:: -------- Node.js --------
 set "NODE_CMD="
 
 if exist "%~dp0node.exe" (
     set "NODE_CMD=%~dp0node.exe"
-    echo [Node] 使用内置便携版 Node.js
+    echo [Node] bundled node.exe
     goto check_npm
 )
 
 where node >nul 2>nul
-if %errorlevel%==0 (
+if !errorlevel!==0 (
     set "NODE_CMD=node"
-    echo [Node] 使用系统 Node.js
+    echo [Node] system node
     goto check_npm
 )
 
-:: ================================
-:: 2. 自动下载 Node
-:: ================================
-echo [Node] 未检测到 Node.js，正在下载便携版...
-echo        首次运行需要约 30MB，请稍候...
-echo.
-
+echo [Node] downloading portable Node.js...
 set "NODE_VER=v20.17.0"
 set "NODE_ZIP=node-%NODE_VER%-win-x64.zip"
 set "NODE_URL=https://nodejs.org/dist/%NODE_VER%/%NODE_ZIP%"
 
-powershell -Command ^
-"[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; ^
-(New-Object Net.WebClient).DownloadFile('%NODE_URL%', '%~dp0%NODE_ZIP%')"
+powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; (New-Object Net.WebClient).DownloadFile('%NODE_URL%', '%~dp0%NODE_ZIP%')"
 
 if not exist "%~dp0%NODE_ZIP%" (
-    echo [错误] Node 下载失败，请检查网络
+    echo [ERROR] Node download failed. Check network.
     pause
     exit /b 1
 )
 
-echo [解压] 正在处理 Node.js...
+echo [Node] extracting...
+set "NODE_EXTRACT_DIR=node-%NODE_VER%-win-x64"
 
-powershell -Command "Expand-Archive -Path '%~dp0%NODE_ZIP%' -DestinationPath '%~dp0_node_tmp' -Force"
+powershell -NoProfile -Command "Expand-Archive -Path '%~dp0%NODE_ZIP%' -DestinationPath '%~dp0_node_tmp' -Force"
 
-set "TMP=node-%NODE_VER%-win-x64"
-
-copy /y "%~dp0_node_tmp\%TMP%\node.exe" "%~dp0node.exe" >nul
-
-xcopy /e /y /q "%~dp0_node_tmp\%TMP%\node_modules" "%~dp0node_modules_npm\" >nul 2>nul
-
-copy /y "%~dp0_node_tmp\%TMP%\npm.cmd" "%~dp0npm.cmd" >nul 2>nul
-
+copy /y "%~dp0_node_tmp\%NODE_EXTRACT_DIR%\node.exe" "%~dp0node.exe" >nul
+xcopy /e /y /q "%~dp0_node_tmp\%NODE_EXTRACT_DIR%\node_modules" "%~dp0node_modules_npm\" >nul 2>nul
+copy /y "%~dp0_node_tmp\%NODE_EXTRACT_DIR%\npm.cmd" "%~dp0npm.cmd" >nul 2>nul
 rmdir /s /q "%~dp0_node_tmp" >nul 2>nul
 del /q "%~dp0%NODE_ZIP%" >nul 2>nul
 
 set "NODE_CMD=%~dp0node.exe"
-
-echo [完成] Node.js 就绪
+echo [Node] ready
 echo.
 
-:: ================================
-:: 3. npm 检测
-:: ================================
 :check_npm
-
 set "NPM_CMD="
 
 if exist "%~dp0npm.cmd" (
@@ -87,86 +67,70 @@ if exist "%~dp0npm.cmd" (
 )
 
 where npm >nul 2>nul
-if %errorlevel%==0 (
+if !errorlevel!==0 (
     set "NPM_CMD=npm"
     goto install_deps
 )
 
 set "NPM_CMD=%NODE_CMD% %~dp0node_modules_npm\npm\bin\npm-cli.js"
 
-:: ================================
-:: 4. 安装依赖
-:: ================================
 :install_deps
-
 if not exist "%~dp0node_modules\playwright" (
-    echo [安装] 首次启动，安装依赖中（可能需要几分钟）...
-    echo.
-
-    %NPM_CMD% install
-
-    if %errorlevel% neq 0 (
-        echo [错误] 依赖安装失败
+    echo [npm] installing dependencies...
+    call %NPM_CMD% install
+    if !errorlevel! neq 0 (
+        echo [ERROR] npm install failed
         pause
         exit /b 1
     )
-
-    echo [完成] 依赖安装成功
+    echo [npm] done
     echo.
 )
 
-:: ================================
-:: 4b. Playwright 浏览器（自动 npx playwright install chromium）
-:: ================================
-echo [Playwright] 检查浏览器（已安装则跳过；首次约 150MB）...
-echo        也可双击 install-playwright.bat 单独安装
-echo.
+echo [Playwright] checking Chromium...
 set PLAYWRIGHT_BROWSERS_PATH=0
-%NODE_CMD% scripts\install-playwright.mjs
-if %errorlevel% neq 0 (
-    echo.
-    echo [警告] 浏览器安装失败，可双击 install-playwright.bat 重试
-    echo.
+"%NODE_CMD%" scripts\install-playwright.mjs
+if !errorlevel! neq 0 (
+    echo [WARN] Playwright install failed. Run install-playwright.bat
     pause
 )
 echo.
 
-:: ================================
-:: 5. 选择环境
-:: ================================
+:: -------- Environment --------
 echo.
-echo ╔══════════════════════════════════════╗
-echo ║            请选择运行环境               ║
-echo ╚══════════════════════════════════════╝
+echo ========================================
+echo   选择连接地址
+echo ========================================
+echo   Y = 本地开发环境（用户请勿选择）   http://localhost:3003
+echo   N = 线上生产环境  Zeabur
 echo.
-echo   [Y] 开发环境 (localhost)
-echo   [N] 生产环境 (线上)
-echo.
-echo 直接按 Y 或 N 键选择（无需回车）
+echo 请输入 Y or N
 echo.
 
-choice /c YN /n /m "请选择环境: "
+choice /c YN /n /m "Select: "
 
 if errorlevel 2 (
-    set "SERVER_URL=https://auyologic-geo-w.zeabur.app/"
-    set "ENV_NAME=生产环境"
+    set "SERVER_URL=https://auyologic-geo-w.zeabur.app"
+    set "ENV_NAME=production"
 ) else (
-    set "SERVER_URL=http://localhost:3003/"
-    set "ENV_NAME=开发环境"
+    set "SERVER_URL=http://localhost:3003"
+    set "ENV_NAME=local dev"
 )
 
 echo.
-echo [环境] %ENV_NAME%
-echo [地址] %SERVER_URL%
+echo [ENV] %ENV_NAME%
+echo [URL] %SERVER_URL%
+echo.
+echo [START] launching agent...
 echo.
 
-:: ================================
-:: 6. 启动
-:: ================================
-echo [启动] 正在启动代理...
-echo.
-
-%NODE_CMD% "%~dp0index.js" "%SERVER_URL%"
+"%NODE_CMD%" "%~dp0index.js" "%SERVER_URL%"
+set "AGENT_EXIT=%ERRORLEVEL%"
 
 echo.
+if not "%AGENT_EXIT%"=="0" (
+    echo [EXIT] Agent exited with code %AGENT_EXIT%
+    echo.
+)
 pause
+endlocal

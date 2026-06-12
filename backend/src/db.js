@@ -243,6 +243,34 @@ export async function initDB() {
     await client.query(`ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
     await client.query(`ALTER TABLE publish_records ALTER COLUMN user_id TYPE VARCHAR(255) USING user_id::TEXT`).catch(() => {});
 
+    // 本地/云端代理连接令牌（按用户）
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS agent_tokens (
+        user_id VARCHAR(255) PRIMARY KEY,
+        token_hash VARCHAR(64) NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // 代理在线会话：session_key = {local|cloud}_{user_id}_{start_ts}_{nonce}
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS agent_sessions (
+        session_key VARCHAR(128) PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        run_mode VARCHAR(16) NOT NULL,
+        start_ts BIGINT NOT NULL,
+        server_url TEXT,
+        client_label VARCHAR(200),
+        last_heartbeat TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_agent_sessions_user_hb
+      ON agent_sessions (user_id, last_heartbeat DESC)
+    `).catch(() => {});
+
     // GEO可见度检测记录
     await client.query(`
       CREATE TABLE IF NOT EXISTS geo_detection (

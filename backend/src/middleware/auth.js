@@ -9,7 +9,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'auyologic-geo-secret-2026';
 export function isPublicApiPath(path) {
   const p = String(path || '').split('?')[0];
   if (p === '/health') return true;
-  if (p.startsWith('/agent/') && p !== '/agent/download') return true;
+  if (p.startsWith('/agent/')) {
+    if (p === '/agent/download') return false;
+    // 浏览器登录态：状态查询 / 令牌管理
+    if (p === '/agent/status' || p === '/agent/status/stream' || p === '/agent/token') return false;
+    // register / heartbeat / offline 与其它 agent 回调：走代理令牌（路由内校验）
+    return true;
+  }
   return false;
 }
 
