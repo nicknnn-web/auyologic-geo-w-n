@@ -462,7 +462,7 @@ router.post('/ai-provider-connections/:id/test', async (req, res) => {
       defaultModel: defaultModelForRow(row),
     });
     try {
-      await client.chat([{ role: 'user', content: 'hi' }], { maxTokens: 8, temperature: 0 });
+      await client.chat([{ role: 'user', content: 'hi' }], { maxTokens: 8, temperature: 1 });
       await pool.query(
         `UPDATE ai_provider_connection SET last_test_status = $1, last_test_message = $2, last_test_at = NOW(), updated_at = NOW() WHERE id = $3`,
         ['ok', '连接成功', id]

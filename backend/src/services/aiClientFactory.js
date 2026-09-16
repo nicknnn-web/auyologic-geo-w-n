@@ -35,7 +35,7 @@ export const PROVIDERS = {
     label: 'Kimi',
     baseURL: process.env.KIMI_BASE_URL || 'https://api.moonshot.cn/v1',
     apiKeyEnv: 'KIMI_API_KEY',
-    defaultModel: 'moonshot-v1-8k',
+    defaultModel: 'kimi-k2.7-code',
   },
   glm: {
     label: '智谱GLM',
@@ -506,6 +506,17 @@ export function usesDeepSeekProvider(providerKey) {
   return String(providerKey || '').trim() === 'deepseek';
 }
 
+/**
+ * Kimi 新模型（kimi-k* 等）仅允许 temperature=1；其它厂商保持调用方传入值。
+ */
+export function resolveChatTemperature(providerKey, model, temperature) {
+  const pk = String(providerKey || '').trim().toLowerCase();
+  if (pk === 'kimi') return 1;
+  const m = String(model || '').trim().toLowerCase();
+  if (m.startsWith('kimi-')) return 1;
+  return temperature;
+}
+
 /** 在 messages 前插入 system（若尚无 system） */
 export function mergeSystemMessage(messages, systemContent) {
   const list = Array.isArray(messages) ? [...messages] : [];
@@ -590,7 +601,7 @@ export function createOpenAiCompatibleClient({
         model,
         messages: finalMessages,
         maxTokens,
-        temperature,
+        temperature: resolveChatTemperature(pk, model, temperature),
         providerKey: pk,
         deepSeekThinking,
         reasoningEffort,
